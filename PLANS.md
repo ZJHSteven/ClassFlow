@@ -4,12 +4,12 @@
 - 在 `ClassFlow` 仓库中实现第一阶段完整方案：Rust 后端、React + Cloudflare Worker 前端、以及与 `smartclass-downloader` 的联动改造。
 
 ## 执行步骤
-1. 初始化主仓库基础文件，建立 `PLANS.md`、`PROGRESS.md`、`.gitignore` 等执行基线。
-2. 搭建 Rust 后端工作区与核心模块，先打通配置、数据模型、API、SQLite 持久层、任务执行骨架。
-3. 为后端补全单元测试、集成测试与 mock 端到端测试。
-4. 搭建 React + Cloudflare Worker 前端，完成任务台、课程库、代理 API 与测试。
-5. 克隆并改造 `smartclass-downloader`，增加“推送到 ClassFlow 后端”模式，并补上脚本测试。
-6. 整理部署文档、systemd 示例、cloudflared 示例，并完成最终验收测试。
+1. 已完成：初始化主仓库基础文件，建立 `PLANS.md`、`PROGRESS.md`、`.gitignore` 等执行基线。
+2. 已完成：搭建 Rust 后端工作区与核心模块，打通配置、数据模型、API、SQLite 持久层、任务执行骨架。
+3. 已完成：为后端补全单元测试、集成测试与 mock 流程测试。
+4. 已完成：搭建 React + Cloudflare Worker 前端，完成任务台、课程库、代理 API，并通过 `lint / test / build`。
+5. 进行中：克隆并改造 `smartclass-downloader`，增加“推送到 ClassFlow 后端”模式，并补上脚本测试。
+6. 待执行：整理部署文档、systemd 示例、cloudflared 示例，并完成最终验收测试。
 
 ## 当前决策
 - 后端使用 `axum + tokio + sqlx(sqlite) + reqwest`。

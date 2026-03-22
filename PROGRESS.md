@@ -6,8 +6,12 @@
 - 已完成：Rust 后端第一轮 `cargo check` 与单元测试已通过，核心骨架可编译。
 - 已完成：Rust 后端接口级测试已通过，验证了鉴权、任务执行、课程聚合、失败重试。
 - 已完成：已用兼容 Node 18 的 `create-vite@5.4.0` 生成 `apps/web` React + TypeScript 前端模板。
-- 正在做：把 `apps/web` 从纯 Vite 模板改造成 Cloudflare Worker + 静态资源 + `/api/*` 代理结构。
-- 下一步：完成前端与 Worker 后，克隆并改造 `smartclass-downloader`。
+- 已完成：已在用户目录安装 Node.js `v24.14.0`，并让 `node/npm/npx/corepack` 默认指向新版环境。
+- 已完成：前端测试夹具已改成按 URL 分发假数据，消除了轮询与详情请求导致的顺序式 mock 串线问题。
+- 已完成：前端旧编译残留 `worker/*.js` 已清理，`npm test` 已通过。
+- 已完成：前端 `npm run lint`、`npm test`、`npm run build` 已全部通过，Worker 代理与 React 页面已形成可交付基础版本。
+- 正在做：准备克隆并改造 `smartclass-downloader`，增加“推送到 ClassFlow 后端”模式，并为脚本补测试。
+- 下一步：完成 `smartclass-downloader` 改造后，整理部署文档、systemd 示例与 cloudflared 配置示例。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -18,3 +22,4 @@
 - 坑1：本机暂未确认安装 `ffmpeg/ffprobe`，真实流水线在抽音频步骤前会失败。
 - 坑2：Cloudflare 官方 `create-cloudflare` 在当前 Node 18.19.1 环境中直接崩溃，需要改为手工搭建兼容的 Worker + Vite 结构，或后续升级 Node 版本后再切回官方脚手架。
 - 坑3：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
+- 坑4：旧的 `tsc -p tsconfig.worker.json` 曾把 `worker/*.js` 直接输出到源码目录，Vitest 会把这些残留文件当成重复测试执行；现已改成 `noEmit`，但拉起测试前仍要避免目录里残留旧产物。
