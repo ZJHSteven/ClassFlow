@@ -10,8 +10,9 @@
 - 已完成：前端测试夹具已改成按 URL 分发假数据，消除了轮询与详情请求导致的顺序式 mock 串线问题。
 - 已完成：前端旧编译残留 `worker/*.js` 已清理，`npm test` 已通过。
 - 已完成：前端 `npm run lint`、`npm test`、`npm run build` 已全部通过，Worker 代理与 React 页面已形成可交付基础版本。
-- 正在做：准备克隆并改造 `smartclass-downloader`，增加“推送到 ClassFlow 后端”模式，并为脚本补测试。
-- 下一步：完成 `smartclass-downloader` 改造后，整理部署文档、systemd 示例与 cloudflared 配置示例。
+- 已完成：`smartclass-downloader` 已完成 `Gopeed / ClassFlow` 双模式投递改造；新增后端地址、Bearer Token、默认学期配置，并通过 `node --check` 与 `node --test`。
+- 正在做：整理部署文档、systemd 示例与 cloudflared 配置示例，并准备做最终验收测试。
+- 下一步：补齐 `docs`、systemd/Timer、cloudflared ingress 示例，并串起后端与前端的最终交付说明。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -23,3 +24,4 @@
 - 坑2：Cloudflare 官方 `create-cloudflare` 在当前 Node 18.19.1 环境中直接崩溃，需要改为手工搭建兼容的 Worker + Vite 结构，或后续升级 Node 版本后再切回官方脚手架。
 - 坑3：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
 - 坑4：旧的 `tsc -p tsconfig.worker.json` 曾把 `worker/*.js` 直接输出到源码目录，Vitest 会把这些残留文件当成重复测试执行；现已改成 `noEmit`，但拉起测试前仍要避免目录里残留旧产物。
+- 坑5：Tampermonkey 若只写 `@connect 127.0.0.1`，切到 Cloudflare Tunnel 域名后会直接跨域失败；双模式版本必须放宽到可访问后端实际域名。

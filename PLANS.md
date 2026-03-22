@@ -8,8 +8,8 @@
 2. 已完成：搭建 Rust 后端工作区与核心模块，打通配置、数据模型、API、SQLite 持久层、任务执行骨架。
 3. 已完成：为后端补全单元测试、集成测试与 mock 流程测试。
 4. 已完成：搭建 React + Cloudflare Worker 前端，完成任务台、课程库、代理 API，并通过 `lint / test / build`。
-5. 进行中：克隆并改造 `smartclass-downloader`，增加“推送到 ClassFlow 后端”模式，并补上脚本测试。
-6. 待执行：整理部署文档、systemd 示例、cloudflared 示例，并完成最终验收测试。
+5. 已完成：改造 `smartclass-downloader`，增加 `Gopeed / ClassFlow` 双模式投递，并补上 `node:test` 脚本测试。
+6. 进行中：整理部署文档、systemd 示例、cloudflared 示例，并完成最终验收测试。
 
 ## 当前决策
 - 后端使用 `axum + tokio + sqlx(sqlite) + reqwest`。
