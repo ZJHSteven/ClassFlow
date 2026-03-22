@@ -4,8 +4,10 @@
 - 现状：主仓库已完成执行文档初始化，并已生成 `apps/backend` Rust 工程骨架。
 - 已完成：方案已定稿；已确认本机具备 Rust 与 Node.js；确认 `create-cloudflare` 在 Node 18.19.1 上会因 `File is not defined` 失败；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支；已清理 `cargo new` 误生成的子仓库元数据。
 - 已完成：Rust 后端第一轮 `cargo check` 与单元测试已通过，核心骨架可编译。
-- 正在做：补 Rust 后端接口级测试与 mock 端到端链路，验证鉴权、任务执行、课程聚合、失败重试。
-- 下一步：后端测试压实后，开始搭建前端与 Worker 代理。
+- 已完成：Rust 后端接口级测试已通过，验证了鉴权、任务执行、课程聚合、失败重试。
+- 已完成：已用兼容 Node 18 的 `create-vite@5.4.0` 生成 `apps/web` React + TypeScript 前端模板。
+- 正在做：把 `apps/web` 从纯 Vite 模板改造成 Cloudflare Worker + 静态资源 + `/api/*` 代理结构。
+- 下一步：完成前端与 Worker 后，克隆并改造 `smartclass-downloader`。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
