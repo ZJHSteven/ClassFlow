@@ -13,11 +13,22 @@ use serde_json::json;
 
 use crate::models::{CourseSummaryResponse, NormalizedTranscript, TaskRecord, TaskStatus};
 
-pub fn build_course_key(semester: &str, date: &str, course_name: &str, teacher_name: &str) -> String {
+pub fn build_course_key(
+    semester: &str,
+    date: &str,
+    course_name: &str,
+    teacher_name: &str,
+) -> String {
     format!("{semester}|{date}|{course_name}|{teacher_name}")
 }
 
-pub fn build_segment_key(course_key: &str, new_id: &str, start_time: &str, end_time: &str, mp4_url: &str) -> String {
+pub fn build_segment_key(
+    course_key: &str,
+    new_id: &str,
+    start_time: &str,
+    end_time: &str,
+    mp4_url: &str,
+) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
@@ -128,7 +139,12 @@ pub fn build_merged_markdown(tasks: &[TaskRecord]) -> String {
 
     let segment_lines = successful_tasks
         .iter()
-        .map(|task| format!("- {} - {}（任务 {}）", task.start_time, task.end_time, task.id))
+        .map(|task| {
+            format!(
+                "- {} - {}（任务 {}）",
+                task.start_time, task.end_time, task.id
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -170,7 +186,10 @@ pub fn build_merged_markdown(tasks: &[TaskRecord]) -> String {
     )
 }
 
-pub fn build_manifest_json(tasks: &[TaskRecord], summary: &CourseSummaryResponse) -> serde_json::Value {
+pub fn build_manifest_json(
+    tasks: &[TaskRecord],
+    summary: &CourseSummaryResponse,
+) -> serde_json::Value {
     json!({
         "course_key": summary.course_key,
         "semester": summary.semester,
@@ -206,7 +225,12 @@ mod tests {
 
     use super::*;
 
-    fn demo_task(start: &str, end: &str, status: TaskStatus, transcript_text: Option<&str>) -> TaskRecord {
+    fn demo_task(
+        start: &str,
+        end: &str,
+        status: TaskStatus,
+        transcript_text: Option<&str>,
+    ) -> TaskRecord {
         TaskRecord {
             id: format!("task-{start}"),
             batch_id: "batch-1".into(),

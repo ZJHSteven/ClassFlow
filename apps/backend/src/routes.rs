@@ -31,7 +31,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/tasks/{task_id}/retry", post(retry_task))
         .route("/courses", get(list_courses))
         .route("/courses/{course_key}", get(get_course_detail))
-        .route("/courses/{course_key}/artifacts/{artifact_name}", get(get_course_artifact))
+        .route(
+            "/courses/{course_key}/artifacts/{artifact_name}",
+            get(get_course_artifact),
+        )
         .route("/intake/batches", post(create_batch))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -96,7 +99,10 @@ async fn retry_task(
 ) -> AppResult<impl IntoResponse> {
     state.repo.retry_task(&task_id).await?;
     state.queue.enqueue(task_id.clone())?;
-    Ok((StatusCode::ACCEPTED, Json(json!({"task_id": task_id, "status": "requeued"}))))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"task_id": task_id, "status": "requeued"})),
+    ))
 }
 
 async fn list_courses(
@@ -130,7 +136,7 @@ async fn get_course_artifact(
         _ => {
             return Err(AppError::BadRequest(
                 "artifact_name 目前仅支持 manifest.json 或 course.md".to_string(),
-            ))
+            ));
         }
     };
 

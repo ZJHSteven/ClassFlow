@@ -9,7 +9,7 @@
 3. 已完成：为后端补全单元测试、集成测试与 mock 流程测试。
 4. 已完成：搭建 React + Cloudflare Worker 前端，完成任务台、课程库、代理 API，并通过 `lint / test / build`。
 5. 已完成：改造 `smartclass-downloader`，增加 `Gopeed / ClassFlow` 双模式投递，并补上 `node:test` 脚本测试。
-6. 进行中：整理部署文档、systemd 示例、cloudflared 示例，并完成最终验收测试。
+6. 已完成：已补齐部署文档、systemd 示例、cloudflared 示例，并完成当前环境下可自动执行的最终验收测试。
 
 ## 当前决策
 - 后端使用 `axum + tokio + sqlx(sqlite) + reqwest`。

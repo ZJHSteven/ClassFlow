@@ -21,6 +21,16 @@ use crate::{
     },
 };
 
+pub struct TaskSuccessUpdate<'a> {
+    pub uploaded_source_url: &'a str,
+    pub transcript_text: &'a str,
+    pub transcript_json: &'a serde_json::Value,
+    pub segment_markdown_path: &'a str,
+    pub segment_json_path: &'a str,
+    pub course_manifest_path: &'a str,
+    pub merged_markdown_path: &'a str,
+}
+
 #[derive(Clone)]
 pub struct Repository {
     pool: SqlitePool,
@@ -145,7 +155,8 @@ impl Repository {
 
         for item in &request.items {
             validate_intake_item(item)?;
-            let course_key = build_course_key(&semester, &item.date, &item.course_name, &item.teacher_name);
+            let course_key =
+                build_course_key(&semester, &item.date, &item.course_name, &item.teacher_name);
             let segment_key = build_segment_key(
                 &course_key,
                 &item.new_id,
@@ -207,10 +218,15 @@ impl Repository {
     }
 
     pub async fn list_recoverable_task_ids(&self) -> AppResult<Vec<String>> {
-        let rows = sqlx::query("SELECT id FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC")
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows.into_iter().map(|row| row.get::<String, _>("id")).collect())
+        let rows = sqlx::query(
+            "SELECT id FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| row.get::<String, _>("id"))
+            .collect())
     }
 
     pub async fn get_task(&self, task_id: &str) -> AppResult<TaskRecord> {
@@ -254,10 +270,12 @@ impl Repository {
 
     pub async fn get_task_detail(&self, task_id: &str) -> AppResult<TaskDetailResponse> {
         let task = self.get_task(task_id).await?;
-        let rows = sqlx::query("SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at ASC, id ASC")
-            .bind(task_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at ASC, id ASC",
+        )
+        .bind(task_id)
+        .fetch_all(&self.pool)
+        .await?;
 
         let events = rows
             .into_iter()
@@ -288,11 +306,17 @@ impl Repository {
         .bind(task_id)
         .execute(&self.pool)
         .await?;
-        self.add_task_event(task_id, stage.as_str(), "info", "任务开始执行").await?;
+        self.add_task_event(task_id, stage.as_str(), "info", "任务开始执行")
+            .await?;
         Ok(())
     }
 
-    pub async fn update_task_stage(&self, task_id: &str, stage: TaskStage, message: &str) -> AppResult<()> {
+    pub async fn update_task_stage(
+        &self,
+        task_id: &str,
+        stage: TaskStage,
+        message: &str,
+    ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query("UPDATE tasks SET stage = ?, updated_at = ? WHERE id = ?")
             .bind(stage.as_str())
@@ -300,10 +324,16 @@ impl Repository {
             .bind(task_id)
             .execute(&self.pool)
             .await?;
-        self.add_task_event(task_id, stage.as_str(), "info", message).await
+        self.add_task_event(task_id, stage.as_str(), "info", message)
+            .await
     }
 
-    pub async fn mark_task_failed(&self, task_id: &str, stage: TaskStage, error: &str) -> AppResult<()> {
+    pub async fn mark_task_failed(
+        &self,
+        task_id: &str,
+        stage: TaskStage,
+        error: &str,
+    ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "UPDATE tasks SET status = ?, stage = ?, last_error = ?, completed_at = ?, updated_at = ? WHERE id = ?",
@@ -316,19 +346,14 @@ impl Repository {
         .bind(task_id)
         .execute(&self.pool)
         .await?;
-        self.add_task_event(task_id, stage.as_str(), "error", error).await
+        self.add_task_event(task_id, stage.as_str(), "error", error)
+            .await
     }
 
     pub async fn mark_task_succeeded(
         &self,
         task_id: &str,
-        uploaded_source_url: &str,
-        transcript_text: &str,
-        transcript_json: &serde_json::Value,
-        segment_markdown_path: &str,
-        segment_json_path: &str,
-        course_manifest_path: &str,
-        merged_markdown_path: &str,
+        update: TaskSuccessUpdate<'_>,
     ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -342,22 +367,29 @@ impl Repository {
         )
         .bind(TaskStatus::Succeeded.as_str())
         .bind(TaskStage::Done.as_str())
-        .bind(uploaded_source_url)
-        .bind(transcript_text)
-        .bind(transcript_json.to_string())
-        .bind(segment_markdown_path)
-        .bind(segment_json_path)
-        .bind(course_manifest_path)
-        .bind(merged_markdown_path)
+        .bind(update.uploaded_source_url)
+        .bind(update.transcript_text)
+        .bind(update.transcript_json.to_string())
+        .bind(update.segment_markdown_path)
+        .bind(update.segment_json_path)
+        .bind(update.course_manifest_path)
+        .bind(update.merged_markdown_path)
         .bind(&now)
         .bind(&now)
         .bind(task_id)
         .execute(&self.pool)
         .await?;
-        self.add_task_event(task_id, TaskStage::Done.as_str(), "info", "任务执行成功").await
+        self.add_task_event(task_id, TaskStage::Done.as_str(), "info", "任务执行成功")
+            .await
     }
 
-    pub async fn add_task_event(&self, task_id: &str, stage: &str, level: &str, message: &str) -> AppResult<()> {
+    pub async fn add_task_event(
+        &self,
+        task_id: &str,
+        stage: &str,
+        level: &str,
+        message: &str,
+    ) -> AppResult<()> {
         sqlx::query(
             "INSERT INTO task_events(task_id, stage, level, message, created_at) VALUES (?, ?, ?, ?, ?)",
         )
@@ -374,9 +406,7 @@ impl Repository {
     pub async fn retry_task(&self, task_id: &str) -> AppResult<()> {
         let task = self.get_task(task_id).await?;
         if task.status != TaskStatus::Failed {
-            return Err(AppError::BadRequest(
-                "只有失败任务才能重试".to_string(),
-            ));
+            return Err(AppError::BadRequest("只有失败任务才能重试".to_string()));
         }
 
         sqlx::query(
@@ -388,7 +418,13 @@ impl Repository {
         .bind(task_id)
         .execute(&self.pool)
         .await?;
-        self.add_task_event(task_id, TaskStage::Queued.as_str(), "info", "任务已重新入队").await
+        self.add_task_event(
+            task_id,
+            TaskStage::Queued.as_str(),
+            "info",
+            "任务已重新入队",
+        )
+        .await
     }
 
     pub async fn list_tasks_by_course_key(&self, course_key: &str) -> AppResult<Vec<TaskRecord>> {
@@ -404,7 +440,10 @@ impl Repository {
         Ok(tasks)
     }
 
-    pub async fn list_courses(&self, query: &CourseListQuery) -> AppResult<Vec<CourseSummaryResponse>> {
+    pub async fn list_courses(
+        &self,
+        query: &CourseListQuery,
+    ) -> AppResult<Vec<CourseSummaryResponse>> {
         let tasks = self
             .list_tasks(&TaskListQuery {
                 status: None,
@@ -415,17 +454,20 @@ impl Repository {
 
         let mut grouped = std::collections::BTreeMap::<String, Vec<TaskRecord>>::new();
         for task in tasks {
-            if let Some(semester) = &query.semester {
-                if &task.semester != semester {
-                    continue;
-                }
+            if let Some(semester) = &query.semester
+                && &task.semester != semester
+            {
+                continue;
             }
-            grouped.entry(task.course_key.clone()).or_default().push(task);
+            grouped
+                .entry(task.course_key.clone())
+                .or_default()
+                .push(task);
         }
 
         grouped
-            .into_iter()
-            .map(|(_, mut course_tasks)| {
+            .into_values()
+            .map(|mut course_tasks| {
                 sort_tasks_for_course(&mut course_tasks);
                 summarize_course(&course_tasks)
             })
@@ -555,9 +597,7 @@ fn summarize_course(tasks: &[TaskRecord]) -> AppResult<CourseSummaryResponse> {
         .iter()
         .filter(|task| task.status == TaskStatus::Succeeded)
         .count();
-    let has_failed_segment = tasks
-        .iter()
-        .any(|task| task.status == TaskStatus::Failed);
+    let has_failed_segment = tasks.iter().any(|task| task.status == TaskStatus::Failed);
     let updated_at = tasks
         .iter()
         .map(|task| task.updated_at)
@@ -573,8 +613,12 @@ fn summarize_course(tasks: &[TaskRecord]) -> AppResult<CourseSummaryResponse> {
         received_segment_count: tasks.len(),
         successful_segment_count,
         has_failed_segment,
-        merged_markdown_path: tasks.iter().find_map(|task| task.merged_markdown_path.clone()),
-        manifest_path: tasks.iter().find_map(|task| task.course_manifest_path.clone()),
+        merged_markdown_path: tasks
+            .iter()
+            .find_map(|task| task.merged_markdown_path.clone()),
+        manifest_path: tasks
+            .iter()
+            .find_map(|task| task.course_manifest_path.clone()),
         updated_at,
     })
 }

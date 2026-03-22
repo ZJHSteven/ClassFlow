@@ -17,7 +17,10 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use reqwest::{Client, multipart::{Form, Part}};
+use reqwest::{
+    Client,
+    multipart::{Form, Part},
+};
 use serde_json::{Value, json};
 use tokio::{fs, process::Command, sync::Semaphore};
 use tracing::info;
@@ -32,7 +35,11 @@ use crate::{
 #[async_trait]
 pub trait PipelineIo: Send + Sync {
     async fn download_video(&self, url: &str, target_path: &Path) -> AppResult<()>;
-    async fn extract_audio(&self, source_video_path: &Path, target_audio_path: &Path) -> AppResult<()>;
+    async fn extract_audio(
+        &self,
+        source_video_path: &Path,
+        target_audio_path: &Path,
+    ) -> AppResult<()>;
     async fn upload_audio_for_transcription(&self, audio_path: &Path) -> AppResult<String>;
     async fn transcribe_file_url(&self, file_url: &str) -> AppResult<NormalizedTranscript>;
     async fn cleanup_dir(&self, dir_path: &Path) -> AppResult<()>;
@@ -67,7 +74,11 @@ impl RealPipelineIo {
             .send()
             .await?;
 
-        ensure_success(response.status().as_u16(), response.text().await?, "获取百炼上传凭证失败")
+        ensure_success(
+            response.status().as_u16(),
+            response.text().await?,
+            "获取百炼上传凭证失败",
+        )
     }
 
     async fn submit_transcription_task(&self, file_url: &str) -> AppResult<String> {
@@ -101,9 +112,8 @@ impl RealPipelineIo {
             "提交百炼转写任务失败",
         )?;
 
-        pick_string(&data, &["output.task_id", "data.task_id"]).ok_or_else(|| {
-            AppError::External(format!("百炼提交成功但没有返回 task_id: {data}"))
-        })
+        pick_string(&data, &["output.task_id", "data.task_id"])
+            .ok_or_else(|| AppError::External(format!("百炼提交成功但没有返回 task_id: {data}")))
     }
 
     async fn poll_transcription_task(&self, task_id: &str) -> AppResult<Value> {
@@ -137,15 +147,14 @@ impl RealPipelineIo {
             match status.as_str() {
                 "SUCCEEDED" => return Ok(data),
                 "FAILED" | "CANCELED" => {
-                    return Err(AppError::External(format!(
-                        "百炼转写任务失败: {}",
-                        data
-                    )))
+                    return Err(AppError::External(format!("百炼转写任务失败: {}", data)));
                 }
-                _ => tokio::time::sleep(std::time::Duration::from_secs_f64(
-                    self.config.dashscope_poll_interval_secs,
-                ))
-                .await,
+                _ => {
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(
+                        self.config.dashscope_poll_interval_secs,
+                    ))
+                    .await
+                }
             }
         }
     }
@@ -159,20 +168,26 @@ impl RealPipelineIo {
         )
     }
 
-    async fn parse_transcript_payload(&self, task_output: Value) -> AppResult<NormalizedTranscript> {
+    async fn parse_transcript_payload(
+        &self,
+        task_output: Value,
+    ) -> AppResult<NormalizedTranscript> {
         let results = task_output
             .get("output")
             .and_then(|value| value.get("results"))
             .and_then(Value::as_array)
-            .ok_or_else(|| AppError::External(format!("百炼结果缺少 output.results: {task_output}")))?;
+            .ok_or_else(|| {
+                AppError::External(format!("百炼结果缺少 output.results: {task_output}"))
+            })?;
 
         for item in results {
-            if let Some(subtask_status) = pick_string(item, &["subtask_status"]) {
-                if subtask_status != "SUCCEEDED" && subtask_status != "SUCCESS" {
-                    return Err(AppError::External(format!(
-                        "百炼子任务失败: status={subtask_status}, payload={item}"
-                    )));
-                }
+            if let Some(subtask_status) = pick_string(item, &["subtask_status"])
+                && subtask_status != "SUCCEEDED"
+                && subtask_status != "SUCCESS"
+            {
+                return Err(AppError::External(format!(
+                    "百炼子任务失败: status={subtask_status}, payload={item}"
+                )));
             }
         }
 
@@ -297,7 +312,11 @@ impl PipelineIo for RealPipelineIo {
         Ok(())
     }
 
-    async fn extract_audio(&self, source_video_path: &Path, target_audio_path: &Path) -> AppResult<()> {
+    async fn extract_audio(
+        &self,
+        source_video_path: &Path,
+        target_audio_path: &Path,
+    ) -> AppResult<()> {
         if let Some(parent) = target_audio_path.parent() {
             fs::create_dir_all(parent).await?;
         }
@@ -355,11 +374,17 @@ impl PipelineIo for RealPipelineIo {
             policy_data,
             &["oss_access_key_id", "ossAccessKeyId", "OSSAccessKeyId"],
         )
-        .ok_or_else(|| AppError::External(format!("百炼上传凭证缺少 oss_access_key_id: {policy}")))?;
+        .ok_or_else(|| {
+            AppError::External(format!("百炼上传凭证缺少 oss_access_key_id: {policy}"))
+        })?;
 
         let security_token = pick_string(
             policy_data,
-            &["x_oss_security_token", "x-oss-security-token", "xOssSecurityToken"],
+            &[
+                "x_oss_security_token",
+                "x-oss-security-token",
+                "xOssSecurityToken",
+            ],
         );
 
         let filename = audio_path
@@ -415,11 +440,12 @@ impl PipelineIo for RealPipelineIo {
                 .map_err(|error| AppError::Internal(format!("音频 MIME 设置失败: {error}")))?,
         );
 
-        let normalized_host = if upload_host.starts_with("http://") || upload_host.starts_with("https://") {
-            upload_host
-        } else {
-            format!("https://{}", upload_host.trim_start_matches('/'))
-        };
+        let normalized_host =
+            if upload_host.starts_with("http://") || upload_host.starts_with("https://") {
+                upload_host
+            } else {
+                format!("https://{}", upload_host.trim_start_matches('/'))
+            };
 
         let response = self
             .client
@@ -467,8 +493,11 @@ fn ensure_success(status: u16, body: String, prefix: &str) -> AppResult<Value> {
         )));
     }
 
-    serde_json::from_str::<Value>(&body)
-        .map_err(|error| AppError::External(format!("{prefix}，响应不是合法 JSON: {error}，原始响应={body}")))
+    serde_json::from_str::<Value>(&body).map_err(|error| {
+        AppError::External(format!(
+            "{prefix}，响应不是合法 JSON: {error}，原始响应={body}"
+        ))
+    })
 }
 
 fn pick_string(root: &Value, paths: &[&str]) -> Option<String> {

@@ -16,9 +16,13 @@ use tracing::{error, info};
 
 use crate::{
     app::AppState,
-    course::{build_course_paths, build_manifest_json, build_merged_markdown, build_segment_markdown, build_segment_paths},
+    course::{
+        build_course_paths, build_manifest_json, build_merged_markdown, build_segment_markdown,
+        build_segment_paths,
+    },
     error::{AppError, AppResult},
     models::{TaskStage, TaskStatus},
+    repository::TaskSuccessUpdate,
 };
 
 #[derive(Clone)]
@@ -39,10 +43,7 @@ pub fn detached_queue() -> TaskQueue {
     TaskQueue { sender }
 }
 
-pub fn spawn_workers(
-    state: AppState,
-    worker_count: usize,
-) -> TaskQueue {
+pub fn spawn_workers(state: AppState, worker_count: usize) -> TaskQueue {
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
     let shared_receiver = Arc::new(tokio::sync::Mutex::new(receiver));
 
@@ -90,7 +91,11 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .mark_task_running(task_id, TaskStage::Downloading)
         .await?;
 
-    if let Err(error) = state.pipeline.download_video(&task.mp4_url, &source_video).await {
+    if let Err(error) = state
+        .pipeline
+        .download_video(&task.mp4_url, &source_video)
+        .await
+    {
         state
             .repo
             .mark_task_failed(task_id, TaskStage::Downloading, &error.to_string())
@@ -100,9 +105,17 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
 
     state
         .repo
-        .update_task_stage(task_id, TaskStage::ExtractingAudio, "开始使用 ffmpeg 抽取音频")
+        .update_task_stage(
+            task_id,
+            TaskStage::ExtractingAudio,
+            "开始使用 ffmpeg 抽取音频",
+        )
         .await?;
-    if let Err(error) = state.pipeline.extract_audio(&source_video, &extracted_audio).await {
+    if let Err(error) = state
+        .pipeline
+        .extract_audio(&source_video, &extracted_audio)
+        .await
+    {
         state
             .repo
             .mark_task_failed(task_id, TaskStage::ExtractingAudio, &error.to_string())
@@ -112,7 +125,11 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
 
     state
         .repo
-        .update_task_stage(task_id, TaskStage::UploadingAudio, "开始上传音频到百炼临时 OSS")
+        .update_task_stage(
+            task_id,
+            TaskStage::UploadingAudio,
+            "开始上传音频到百炼临时 OSS",
+        )
         .await?;
     let uploaded_source_url = match state
         .pipeline
@@ -133,7 +150,11 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .repo
         .update_task_stage(task_id, TaskStage::Transcribing, "开始轮询百炼异步转写任务")
         .await?;
-    let transcript = match state.pipeline.transcribe_file_url(&uploaded_source_url).await {
+    let transcript = match state
+        .pipeline
+        .transcribe_file_url(&uploaded_source_url)
+        .await
+    {
         Ok(result) => result,
         Err(error) => {
             state
@@ -150,7 +171,11 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
 
     state
         .repo
-        .update_task_stage(task_id, TaskStage::StoringArtifacts, "开始写入单节 Markdown 与 JSON")
+        .update_task_stage(
+            task_id,
+            TaskStage::StoringArtifacts,
+            "开始写入单节 Markdown 与 JSON",
+        )
         .await?;
 
     let segment_markdown = build_segment_markdown(&current_task, &transcript);
@@ -176,7 +201,11 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
 
     state
         .repo
-        .update_task_stage(task_id, TaskStage::MergingCourse, "开始重建课程总稿与 manifest")
+        .update_task_stage(
+            task_id,
+            TaskStage::MergingCourse,
+            "开始重建课程总稿与 manifest",
+        )
         .await?;
 
     let transcript_json = serde_json::to_value(&transcript)
@@ -185,18 +214,26 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .repo
         .mark_task_succeeded(
             task_id,
-            &uploaded_source_url,
-            &transcript.text_accu,
-            &transcript_json,
-            &segment_markdown_path,
-            &segment_json_path,
-            &manifest_path,
-            &merged_markdown_path,
+            TaskSuccessUpdate {
+                uploaded_source_url: &uploaded_source_url,
+                transcript_text: &transcript.text_accu,
+                transcript_json: &transcript_json,
+                segment_markdown_path: &segment_markdown_path,
+                segment_json_path: &segment_json_path,
+                course_manifest_path: &manifest_path,
+                merged_markdown_path: &merged_markdown_path,
+            },
         )
         .await?;
 
-    let course_tasks = state.repo.list_tasks_by_course_key(&current_task.course_key).await?;
-    let summary = state.repo.get_course_detail(&current_task.course_key).await?;
+    let course_tasks = state
+        .repo
+        .list_tasks_by_course_key(&current_task.course_key)
+        .await?;
+    let summary = state
+        .repo
+        .get_course_detail(&current_task.course_key)
+        .await?;
 
     let merged_markdown = build_merged_markdown(&course_tasks);
     state
@@ -291,9 +328,7 @@ mod tests {
     async fn should_cleanup_stale_dirs() {
         let temp = tempdir().expect("临时目录应创建成功");
         let dir = temp.path().join("old-job");
-        tokio::fs::create_dir_all(&dir)
-            .await
-            .expect("应创建旧目录");
+        tokio::fs::create_dir_all(&dir).await.expect("应创建旧目录");
 
         let removed = cleanup_stale_temp_dirs(&temp.path().to_path_buf(), 0)
             .await

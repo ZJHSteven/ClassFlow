@@ -66,14 +66,12 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
 }
 
 pub fn build_app(state: AppState) -> Router {
-    build_router(state)
-        .layer(TraceLayer::new_for_http())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+    build_router(state).layer(TraceLayer::new_for_http()).layer(
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any),
+    )
 }
 
 pub async fn build_state(config: AppConfig) -> AppResult<AppState> {

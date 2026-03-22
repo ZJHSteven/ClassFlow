@@ -1,0 +1,8 @@
+[Unit]
+Description=ClassFlow Temporary Directory Cleanup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/classflow
+EnvironmentFile=/etc/classflow/backend.env
+ExecStart=/opt/classflow/scripts/classflow-cleanup-temp.sh

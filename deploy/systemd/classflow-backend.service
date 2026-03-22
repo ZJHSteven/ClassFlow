@@ -1,0 +1,24 @@
+[Unit]
+Description=ClassFlow Rust Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=classflow
+Group=classflow
+WorkingDirectory=/opt/classflow/apps/backend
+EnvironmentFile=/etc/classflow/backend.env
+ExecStart=/opt/classflow/target/release/backend
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ReadWritePaths=/opt/classflow/data /opt/classflow/tmp
+
+[Install]
+WantedBy=multi-user.target

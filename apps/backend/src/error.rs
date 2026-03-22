@@ -67,7 +67,9 @@ impl IntoResponse for AppError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::BadRequest(_) | Self::Config(_) => StatusCode::BAD_REQUEST,
             Self::External(_) => StatusCode::BAD_GATEWAY,
-            Self::Database(_) | Self::Io(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Database(_) | Self::Io(_) | Self::Internal(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
 
         let body = ErrorBody {

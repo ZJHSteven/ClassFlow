@@ -54,7 +54,11 @@ impl PipelineIo for MockPipeline {
         Ok(())
     }
 
-    async fn extract_audio(&self, _source_video_path: &std::path::Path, target_audio_path: &std::path::Path) -> AppResult<()> {
+    async fn extract_audio(
+        &self,
+        _source_video_path: &std::path::Path,
+        target_audio_path: &std::path::Path,
+    ) -> AppResult<()> {
         if let Some(parent) = target_audio_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -62,7 +66,10 @@ impl PipelineIo for MockPipeline {
         Ok(())
     }
 
-    async fn upload_audio_for_transcription(&self, _audio_path: &std::path::Path) -> AppResult<String> {
+    async fn upload_audio_for_transcription(
+        &self,
+        _audio_path: &std::path::Path,
+    ) -> AppResult<String> {
         Ok("oss://mock/audio.wav".to_string())
     }
 
@@ -111,8 +118,10 @@ async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile
         artifact_store_mode: ArtifactStoreMode::Local,
         dashscope_api_key: String::new(),
         dashscope_model: "fun-asr".to_string(),
-        dashscope_submit_url: "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription".to_string(),
-        dashscope_task_url_template: "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}".to_string(),
+        dashscope_submit_url:
+            "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription".to_string(),
+        dashscope_task_url_template: "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+            .to_string(),
         dashscope_upload_policy_url: "https://dashscope.aliyuncs.com/api/v1/uploads".to_string(),
         dashscope_poll_interval_secs: 1.0,
         dashscope_poll_timeout_secs: 60.0,

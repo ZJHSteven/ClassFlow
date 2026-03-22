@@ -72,7 +72,10 @@ impl AppConfig {
             bearer_token: env_or("CLASSFLOW_BEARER_TOKEN", "classflow-dev-token"),
             default_semester: env_or("CLASSFLOW_DEFAULT_SEMESTER", "2025-2026-2"),
             temp_root: PathBuf::from(env_or("CLASSFLOW_TEMP_ROOT", "./tmp")),
-            local_artifact_root: PathBuf::from(env_or("CLASSFLOW_LOCAL_ARTIFACT_ROOT", "./data/artifacts")),
+            local_artifact_root: PathBuf::from(env_or(
+                "CLASSFLOW_LOCAL_ARTIFACT_ROOT",
+                "./data/artifacts",
+            )),
             task_worker_count: env_or_parse("CLASSFLOW_TASK_WORKER_COUNT", 4)?,
             download_concurrency: env_or_parse("CLASSFLOW_DOWNLOAD_CONCURRENCY", 2)?,
             dashscope_concurrency: env_or_parse("CLASSFLOW_DASHSCOPE_CONCURRENCY", 8)?,
@@ -94,8 +97,14 @@ impl AppConfig {
                 "CLASSFLOW_DASHSCOPE_UPLOAD_POLICY_URL",
                 "https://dashscope.aliyuncs.com/api/v1/uploads",
             ),
-            dashscope_poll_interval_secs: env_or_parse("CLASSFLOW_DASHSCOPE_POLL_INTERVAL_SECS", 1.0)?,
-            dashscope_poll_timeout_secs: env_or_parse("CLASSFLOW_DASHSCOPE_POLL_TIMEOUT_SECS", 900.0)?,
+            dashscope_poll_interval_secs: env_or_parse(
+                "CLASSFLOW_DASHSCOPE_POLL_INTERVAL_SECS",
+                1.0,
+            )?,
+            dashscope_poll_timeout_secs: env_or_parse(
+                "CLASSFLOW_DASHSCOPE_POLL_TIMEOUT_SECS",
+                900.0,
+            )?,
             r2_bucket: env::var("CLASSFLOW_R2_BUCKET").unwrap_or_default(),
             r2_endpoint: env::var("CLASSFLOW_R2_ENDPOINT").unwrap_or_default(),
             r2_access_key_id: env::var("CLASSFLOW_R2_ACCESS_KEY_ID").unwrap_or_default(),

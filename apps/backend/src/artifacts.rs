@@ -63,9 +63,9 @@ impl ArtifactStore for LocalArtifactStore {
 
     async fn get_bytes(&self, path: &str) -> AppResult<StoredObject> {
         let full_path = self.root.join(path);
-        let bytes = fs::read(&full_path)
-            .await
-            .map_err(|error| AppError::NotFound(format!("未找到产物 {}: {}", full_path.display(), error)))?;
+        let bytes = fs::read(&full_path).await.map_err(|error| {
+            AppError::NotFound(format!("未找到产物 {}: {}", full_path.display(), error))
+        })?;
 
         let content_type = if path.ends_with(".md") {
             "text/markdown; charset=utf-8"

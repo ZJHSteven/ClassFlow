@@ -1,0 +1,10 @@
+[Unit]
+Description=Run ClassFlow temporary cleanup periodically
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=classflow-cleanup.service
+
+[Install]
+WantedBy=timers.target
