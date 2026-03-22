@@ -3,6 +3,7 @@
 ## 当前结论（必须最新）
 - 现状：主仓库已完成执行文档初始化，并已生成 `apps/backend` Rust 工程骨架。
 - 已完成：方案已定稿；已确认本机具备 Rust 与 Node.js；确认 `create-cloudflare` 在 Node 18.19.1 上会因 `File is not defined` 失败；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支。
+- 已完成：方案已定稿；已确认本机具备 Rust 与 Node.js；确认 `create-cloudflare` 在 Node 18.19.1 上会因 `File is not defined` 失败；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支；已清理 `cargo new` 误生成的子仓库元数据。
 - 正在做：修正 Rust 后端第一轮 `cargo check` 暴露的编译问题，并继续补齐后台 worker 与对象存储实现。
 - 下一步：让后端完成可编译状态后，补全单元/集成测试，再搭建前端与 Worker 代理。
 
