@@ -34,6 +34,11 @@ impl TaskQueue {
     }
 }
 
+pub fn detached_queue() -> TaskQueue {
+    let (sender, _receiver) = mpsc::unbounded_channel::<String>();
+    TaskQueue { sender }
+}
+
 pub fn spawn_workers(
     state: AppState,
     worker_count: usize,

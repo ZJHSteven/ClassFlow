@@ -44,6 +44,12 @@ pub struct LocalArtifactStore {
     root: PathBuf,
 }
 
+impl LocalArtifactStore {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+}
+
 #[async_trait]
 impl ArtifactStore for LocalArtifactStore {
     async fn put_bytes(&self, path: &str, _content_type: &str, bytes: Vec<u8>) -> AppResult<()> {

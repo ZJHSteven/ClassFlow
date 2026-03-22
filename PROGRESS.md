@@ -2,10 +2,10 @@
 
 ## 当前结论（必须最新）
 - 现状：主仓库已完成执行文档初始化，并已生成 `apps/backend` Rust 工程骨架。
-- 已完成：方案已定稿；已确认本机具备 Rust 与 Node.js；确认 `create-cloudflare` 在 Node 18.19.1 上会因 `File is not defined` 失败；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支。
 - 已完成：方案已定稿；已确认本机具备 Rust 与 Node.js；确认 `create-cloudflare` 在 Node 18.19.1 上会因 `File is not defined` 失败；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支；已清理 `cargo new` 误生成的子仓库元数据。
-- 正在做：修正 Rust 后端第一轮 `cargo check` 暴露的编译问题，并继续补齐后台 worker 与对象存储实现。
-- 下一步：让后端完成可编译状态后，补全单元/集成测试，再搭建前端与 Worker 代理。
+- 已完成：Rust 后端第一轮 `cargo check` 与单元测试已通过，核心骨架可编译。
+- 正在做：补 Rust 后端接口级测试与 mock 端到端链路，验证鉴权、任务执行、课程聚合、失败重试。
+- 下一步：后端测试压实后，开始搭建前端与 Worker 代理。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
