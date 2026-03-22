@@ -1,10 +1,10 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
-- 现状：`ClassFlow` 是空仓库，正在初始化第一阶段实现骨架。
-- 已完成：方案已定稿；已确认本机具备 Rust 与 Node.js，但当前未检测到 `ffmpeg/ffprobe`。
-- 正在做：建立主仓库执行文档与基础目录，随后开始后端实现。
-- 下一步：初始化 Rust 后端工程、SQLite 模型与 API 骨架。
+- 现状：主仓库已完成执行文档初始化，并已生成 `apps/backend` Rust 工程骨架。
+- 已完成：方案已定稿；已确认本机具备 Rust 与 Node.js；确认 `create-cloudflare` 在 Node 18.19.1 上会因 `File is not defined` 失败；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支。
+- 正在做：修正 Rust 后端第一轮 `cargo check` 暴露的编译问题，并继续补齐后台 worker 与对象存储实现。
+- 下一步：让后端完成可编译状态后，补全单元/集成测试，再搭建前端与 Worker 代理。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -13,4 +13,5 @@
 
 ## 常见坑 / 复现方法
 - 坑1：本机暂未确认安装 `ffmpeg/ffprobe`，真实流水线在抽音频步骤前会失败。
-- 坑2：`smartclass-downloader` 与 `CapsWriter-Offline` 目前未在本地存在，需要后续克隆或按 GitHub MCP 参考实现。
+- 坑2：Cloudflare 官方 `create-cloudflare` 在当前 Node 18.19.1 环境中直接崩溃，需要改为手工搭建兼容的 Worker + Vite 结构，或后续升级 Node 版本后再切回官方脚手架。
+- 坑3：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
