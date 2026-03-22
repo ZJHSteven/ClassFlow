@@ -1,0 +1,29 @@
+# Rust 构建产物
+/target/
+**/target/
+
+# Node / 前端构建产物
+/node_modules/
+**/node_modules/
+/dist/
+**/dist/
+/.wrangler/
+**/.wrangler/
+
+# 数据与缓存
+*.db
+*.db-shm
+*.db-wal
+*.log
+/.env
+/.env.*
+!/env.example
+/tmp/
+**/tmp/
+/coverage/
+**/coverage/
+
+# 编辑器与系统文件
+.DS_Store
+.idea/
+.vscode/
