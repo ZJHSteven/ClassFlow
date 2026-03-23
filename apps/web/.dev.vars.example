@@ -6,3 +6,4 @@
 
 BACKEND_BASE_URL=https://classflow-backend.example.com
 BACKEND_TOKEN=replace-with-backend-bearer-token
+ARTIFACT_PROXY_TOKEN=replace-with-worker-artifact-token

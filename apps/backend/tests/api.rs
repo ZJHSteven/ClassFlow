@@ -130,6 +130,8 @@ async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile
         r2_access_key_id: String::new(),
         r2_secret_access_key: String::new(),
         r2_region: "auto".to_string(),
+        artifact_proxy_base_url: String::new(),
+        artifact_proxy_token: String::new(),
     };
 
     let repo = Repository::connect(&config.db_url)

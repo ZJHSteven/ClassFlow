@@ -16,6 +16,7 @@ use crate::error::{AppError, AppResult};
 pub enum ArtifactStoreMode {
     Local,
     R2,
+    Worker,
 }
 
 impl FromStr for ArtifactStoreMode {
@@ -25,6 +26,7 @@ impl FromStr for ArtifactStoreMode {
         match value.trim().to_lowercase().as_str() {
             "local" => Ok(Self::Local),
             "r2" => Ok(Self::R2),
+            "worker" => Ok(Self::Worker),
             other => Err(AppError::Config(format!(
                 "不支持的 CLASSFLOW_ARTIFACT_STORE_MODE: {other}"
             ))),
@@ -58,6 +60,8 @@ pub struct AppConfig {
     pub r2_access_key_id: String,
     pub r2_secret_access_key: String,
     pub r2_region: String,
+    pub artifact_proxy_base_url: String,
+    pub artifact_proxy_token: String,
 }
 
 impl AppConfig {
@@ -80,7 +84,7 @@ impl AppConfig {
             download_concurrency: env_or_parse("CLASSFLOW_DOWNLOAD_CONCURRENCY", 2)?,
             dashscope_concurrency: env_or_parse("CLASSFLOW_DASHSCOPE_CONCURRENCY", 8)?,
             r2_concurrency: env_or_parse("CLASSFLOW_R2_CONCURRENCY", 4)?,
-            cleanup_hours: env_or_parse("CLASSFLOW_TMP_CLEANUP_HOURS", 24)?,
+            cleanup_hours: env_or_parse("CLASSFLOW_TMP_CLEANUP_HOURS", 168)?,
             artifact_store_mode: env_or("CLASSFLOW_ARTIFACT_STORE_MODE", "local")
                 .parse::<ArtifactStoreMode>()?,
             dashscope_api_key: env::var("DASHSCOPE_API_KEY").unwrap_or_default(),
@@ -110,6 +114,10 @@ impl AppConfig {
             r2_access_key_id: env::var("CLASSFLOW_R2_ACCESS_KEY_ID").unwrap_or_default(),
             r2_secret_access_key: env::var("CLASSFLOW_R2_SECRET_ACCESS_KEY").unwrap_or_default(),
             r2_region: env_or("CLASSFLOW_R2_REGION", "auto"),
+            artifact_proxy_base_url: env::var("CLASSFLOW_ARTIFACT_PROXY_BASE_URL")
+                .unwrap_or_default(),
+            artifact_proxy_token: env::var("CLASSFLOW_ARTIFACT_PROXY_TOKEN")
+                .unwrap_or_default(),
         })
     }
 }

@@ -1,9 +1,41 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleWorkerRequest, proxyApiRequest, type WorkerEnv } from './proxy'
 
+class MemoryR2Object {
+  constructor(
+    private readonly bytes: Uint8Array,
+    public readonly httpMetadata?: { contentType?: string },
+  ) {}
+
+  async arrayBuffer() {
+    return this.bytes.buffer.slice(
+      this.bytes.byteOffset,
+      this.bytes.byteOffset + this.bytes.byteLength,
+    )
+  }
+}
+
+class MemoryR2Bucket {
+  private readonly objects = new Map<string, MemoryR2Object>()
+
+  async get(key: string) {
+    return this.objects.get(key) ?? null
+  }
+
+  async put(key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
+    this.objects.set(key, new MemoryR2Object(new Uint8Array(value), options?.httpMetadata))
+  }
+
+  async delete(key: string) {
+    this.objects.delete(key)
+  }
+}
+
 const defaultEnv: WorkerEnv = {
   BACKEND_BASE_URL: 'https://backend.example.com',
   BACKEND_TOKEN: 'secret-token',
+  ARTIFACT_PROXY_TOKEN: 'artifact-token',
+  ARTIFACTS: new MemoryR2Bucket(),
   ASSETS: {
     fetch: vi.fn(async () => new Response('asset', { status: 200 })),
   },
@@ -37,5 +69,40 @@ describe('worker proxy', () => {
     expect(response.status).toBe(502)
     const body = await response.json()
     expect(body.error).toContain('BACKEND_TOKEN')
+  })
+
+  it('应该允许后端通过 Worker 私有接口写入并读取 R2 产物', async () => {
+    const putResponse = await handleWorkerRequest(
+      new Request('https://worker.example.com/__classflow/artifacts/segments/demo.md', {
+        method: 'PUT',
+        headers: {
+          Authorization: 'Bearer artifact-token',
+          'Content-Type': 'text/markdown; charset=utf-8',
+        },
+        body: '# demo',
+      }),
+      defaultEnv,
+    )
+    expect(putResponse.status).toBe(204)
+
+    const getResponse = await handleWorkerRequest(
+      new Request('https://worker.example.com/__classflow/artifacts/segments/demo.md', {
+        headers: {
+          Authorization: 'Bearer artifact-token',
+        },
+      }),
+      defaultEnv,
+    )
+    expect(getResponse.status).toBe(200)
+    expect(getResponse.headers.get('content-type')).toContain('text/markdown')
+    expect(await getResponse.text()).toBe('# demo')
+  })
+
+  it('应该拒绝未携带正确私有 token 的产物请求', async () => {
+    const response = await handleWorkerRequest(
+      new Request('https://worker.example.com/__classflow/artifacts/segments/demo.md'),
+      defaultEnv,
+    )
+    expect(response.status).toBe(401)
   })
 })

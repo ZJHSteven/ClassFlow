@@ -5,3 +5,7 @@ compatibility_date = "2026-03-22"
 [assets]
 directory = "./dist"
 binding = "ASSETS"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "classflow-artifacts"
