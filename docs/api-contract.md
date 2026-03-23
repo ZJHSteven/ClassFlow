@@ -7,6 +7,10 @@
 - `/api/v1/health` 不需要鉴权。
 - 其余 `/api/v1/*` 路由统一要求：
   - Header: `Authorization: Bearer <CLASSFLOW_BEARER_TOKEN>`
+- 如果请求先进入 Cloudflare Worker，再由 Worker 转发到后端：
+  - 浏览器或 userscript 可以不自己携带 `Authorization`
+  - Worker 会自动补上 `Authorization: Bearer <BACKEND_TOKEN>`
+  - `BACKEND_TOKEN` 必须与 `CLASSFLOW_BEARER_TOKEN` 完全一致
 
 ## 1. 提交批量任务
 

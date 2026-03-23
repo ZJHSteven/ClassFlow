@@ -51,6 +51,13 @@ npx wrangler whoami
      - `CLASSFLOW_R2_ACCESS_KEY_ID`
      - `CLASSFLOW_R2_SECRET_ACCESS_KEY`
 
+说明：
+
+- `CLASSFLOW_BEARER_TOKEN` 是后端真正校验的共享鉴权值。
+- Worker 的 `BACKEND_TOKEN` 必须与 `CLASSFLOW_BEARER_TOKEN` 完全一致。
+- 如果 userscript 直连后端 Tunnel 域名，那么脚本里的 `Bearer Token` 也必须填这同一个值。
+- 如果 userscript 访问的是 Worker 域名，则推荐让脚本侧 `Bearer Token` 留空，由 Worker 代为补上。
+
 ## 4. 构建并运行后端
 
 ```bash
@@ -133,6 +140,13 @@ npx wrangler secret put BACKEND_BASE_URL
 npx wrangler secret put BACKEND_TOKEN
 ```
 
+填写规则：
+
+- `BACKEND_BASE_URL`
+  - 填 Tunnel 暴露出来的后端地址，例如 `https://classflow-backend.example.com`
+- `BACKEND_TOKEN`
+  - 必须与后端环境变量 `CLASSFLOW_BEARER_TOKEN` 完全一致
+
 然后发布：
 
 ```bash
@@ -151,6 +165,12 @@ npx wrangler deploy
   - 直接走 `ASSETS` 静态资源绑定
 
 这样浏览器不会直接接触校园机后端密钥，也不会暴露 Tunnel 实际地址。
+
+补充建议：
+
+- React 前端天然就是访问 Worker，所以浏览器侧不需要知道后端真实 token。
+- userscript 也推荐把“ClassFlow 后端地址”填成 Worker 域名，例如 `https://classflow-web.<your-subdomain>.workers.dev` 或你绑定的前端域名。
+- 当 userscript 走 Worker 时，脚本里的 `Bearer Token` 可以留空；只有脚本直连后端 Tunnel 域名时，才需要手工填写 `CLASSFLOW_BEARER_TOKEN`。
 
 ## 9. R2 目录约定
 
@@ -175,7 +195,8 @@ npx wrangler deploy
    - `npm run build`
 4. userscript 已配置：
    - `ClassFlow 后端地址`
-   - `Bearer Token`
+   - 如果填的是 Worker 域名：`Bearer Token` 可留空
+   - 如果填的是后端 Tunnel 域名：`Bearer Token` 必须填 `CLASSFLOW_BEARER_TOKEN`
    - `默认学期`
 5. 在智慧课堂页面切到 `ClassFlow` 模式，点击“提交当天全部”。
 6. 打开前端 `任务台` 与 `课程库`，观察任务推进和总稿生成。

@@ -20,8 +20,8 @@
 - 已完成：Cloudflare Worker 已重新发布到 `https://classflow-web.zhangjiahe0830.workers.dev`，并已改为转发到 `https://classflow-backend.zjhstudio.com`。
 - 已完成：前端“任务台 / 课程库”已取消 `5s / 8s` 定时轮询，改为“首次加载 + 手动刷新 + 窗口回到前台时同步一次”，从而避免界面闪烁与 Worker 持续计费。
 - 已确认：`https://classflow.zjhstudio.com` 当前会被 Cloudflare Access 重定向到登录页；如果要公开访问，需要你在 Cloudflare Zero Trust 里调整 Access 策略。
-- 正在做：整理最终交付说明，并记录正式域名已切换但前端自定义域名仍受 Access 保护。
-- 下一步：补齐正式 R2 凭据，并根据你的访问策略决定是否保留 `classflow.zjhstudio.com` 的 Cloudflare Access 登录保护。
+- 正在做：统一后端 / Worker / userscript 的 token 配置口径，并把 userscript 调整为“走 Worker 时无需手填 token”。
+- 下一步：把新的共享 token 旋转到后端运行环境与 Worker secret，并重新执行部署联调验证。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -29,6 +29,7 @@
 - 决策C：使用 SQLite 保存任务与课程聚合状态。（原因：部署最轻、恢复简单、适合校园机常驻服务。）
 - 决策D：后端公网入口已切换到 `classflow-backend.zjhstudio.com`；Worker secret 已不再依赖 Quick Tunnel。（原因：正式 Tunnel 域名现已可访问，固定域名比临时隧道更稳定。）
 - 决策E：前端默认关闭定时轮询，只保留显式刷新和焦点回到页面时的同步。（原因：减少视觉闪烁、避免 Worker 按请求计费被无意义消耗。）
+- 决策F：userscript 优先访问 Worker，而不是直连后端 Tunnel。（原因：这样脚本端可不暴露后端 Bearer Token，配置更简单，也更不容易填错。）
 
 ## 常见坑 / 复现方法
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
@@ -36,3 +37,4 @@
 - 坑3：Tampermonkey 若只写 `@connect 127.0.0.1`，切到 Cloudflare Tunnel 域名后会直接跨域失败；双模式版本必须放宽到可访问后端实际域名。
 - 坑4：这台校园机发起 Quick Tunnel 时默认 `quic` 会超时，外部表现为 `530`；需要显式切到 `http2`。
 - 坑5：`classflow.zjhstudio.com` 当前受 Cloudflare Access 保护，未登录会直接 `302` 到 Access 登录页；这不是前端挂了，而是访问策略生效。
+- 坑6：如果 userscript 指向的是 Worker 域名，却仍强制要求手填后端 token，实际上会把本来可以隐藏的密钥再次暴露给脚本侧；推荐脚本走 Worker 时允许 token 留空。

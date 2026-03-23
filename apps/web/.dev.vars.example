@@ -1,5 +1,8 @@
 # Cloudflare Worker 本地开发 / 生产部署都需要的环境变量
 # 本地可复制为 `.dev.vars`
+# 注意：
+# 1. `BACKEND_BASE_URL` 指向后端 Tunnel 域名
+# 2. `BACKEND_TOKEN` 必须与后端 `CLASSFLOW_BEARER_TOKEN` 完全一致
 
 BACKEND_BASE_URL=https://classflow-backend.example.com
 BACKEND_TOKEN=replace-with-backend-bearer-token

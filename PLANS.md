@@ -12,6 +12,7 @@
 6. 已完成：已补齐部署文档、systemd 示例、cloudflared 示例，并完成当前环境下可自动执行的最终验收测试。
 7. 已完成：已在真实环境中启动 `systemd --user` 后端服务、跑通 DashScope 真转写冒烟、发布 `workers.dev` 前端，并验证公网 API 与课程产物读取。
 8. 已完成：已移除前端定时轮询，改为“手动刷新 + 页面重新聚焦同步”；并把 Worker 后端地址切换到 `classflow-backend.zjhstudio.com`。
+9. 进行中：统一整理后端 / Worker / userscript 的鉴权说明，并把 userscript 调整为“走 Worker 时可不手填 token”。
 
 ## 当前决策
 - 后端使用 `axum + tokio + sqlx(sqlite) + reqwest`。
