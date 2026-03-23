@@ -19,9 +19,11 @@
 - 已完成：使用本机生成的测试 MP4 跑通了真实流水线：`下载 -> ffmpeg 抽音频 -> DashScope 上传/轮询 -> 文本落盘 -> 课程总稿合并 -> 临时目录清理`。
 - 已完成：Cloudflare Worker 已重新发布到 `https://classflow-web.zhangjiahe0830.workers.dev`，并已改为转发到 `https://classflow-backend.zjhstudio.com`。
 - 已完成：前端“任务台 / 课程库”已取消 `5s / 8s` 定时轮询，改为“首次加载 + 手动刷新 + 窗口回到前台时同步一次”，从而避免界面闪烁与 Worker 持续计费。
+- 已完成：已把后端运行环境与 Worker secret 的共享 Bearer Token 统一旋转到新值，并验证“后端直连无 token 为 401、带新 token 为 200；Worker 无需前端手带 token 即可访问受保护接口”。
+- 已完成：`smartclass-downloader` 已调整为“指向 Worker 域名时可留空 Bearer Token”，并通过 `node --check` 与 `node --test`。
 - 已确认：`https://classflow.zjhstudio.com` 当前会被 Cloudflare Access 重定向到登录页；如果要公开访问，需要你在 Cloudflare Zero Trust 里调整 Access 策略。
-- 正在做：统一后端 / Worker / userscript 的 token 配置口径，并把 userscript 调整为“走 Worker 时无需手填 token”。
-- 下一步：把新的共享 token 旋转到后端运行环境与 Worker secret，并重新执行部署联调验证。
+- 正在做：整理这次 token 旋转后的最终使用说明，给出 userscript 应填的最新地址与回退方案。
+- 下一步：补齐正式 R2 凭据，并根据你的访问策略决定是否保留 `classflow.zjhstudio.com` 的 Cloudflare Access 登录保护。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
