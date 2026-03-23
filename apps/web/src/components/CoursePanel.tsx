@@ -10,7 +10,7 @@
  */
 
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
-import { getCourseDetail, getCourseMarkdown, listCourses } from '../api'
+import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, listCourses } from '../api'
 import type { CourseDetail, CourseSummary } from '../types'
 
 /**
@@ -31,6 +31,7 @@ export function CoursePanel() {
   const [selectedCourseKey, setSelectedCourseKey] = useState<string>('')
   const [selectedCourseDetail, setSelectedCourseDetail] = useState<CourseDetail | null>(null)
   const [markdownPreview, setMarkdownPreview] = useState<string>('')
+  const [previewMessage, setPreviewMessage] = useState<string>('')
   const [semesterFilter, setSemesterFilter] = useState<string>('')
   const [dateFilter, setDateFilter] = useState<string>('')
   const [courseFilter, setCourseFilter] = useState<string>('')
@@ -49,18 +50,37 @@ export function CoursePanel() {
   /**
    * 刷新单个课程详情与总稿。
    *
-   * 课程详情页需要同时取详情 JSON 和 Markdown 正文，
-   * 所以这里并行拉取两条请求，减少等待时间。
+   * 这里先取详情，再决定是否请求 Markdown。
+   *
+   * 背景：
+   *
+   * 1. 有些课程还在处理中，详情里的 `merged_markdown_path` 会是空。
+   * 2. 如果不加判断直接请求 `course.md`，前端就会得到一个“并不意外”的 404。
+   * 3. 先看详情字段，可以把“总稿未生成”与“真正请求失败”分开处理。
    */
   const loadCourseDetail = useCallback(async (courseKey: string) => {
     const requestId = detailRequestIdRef.current + 1
     detailRequestIdRef.current = requestId
 
     try {
-      const [detail, markdown] = await Promise.all([
-        getCourseDetail(courseKey),
-        getCourseMarkdown(courseKey),
-      ])
+      const detail = await getCourseDetail(courseKey)
+
+      if (detailRequestIdRef.current !== requestId) {
+        return
+      }
+
+      let nextMarkdownPreview = ''
+      let nextPreviewMessage = ''
+
+      if (detail.merged_markdown_path) {
+        try {
+          nextMarkdownPreview = await getCourseMarkdown(courseKey)
+        } catch (error) {
+          nextPreviewMessage = error instanceof Error ? error.message : '课程总稿加载失败'
+        }
+      } else {
+        nextPreviewMessage = '课程总稿尚未生成。当前课程可能仍在下载、上传、转写或合并中。'
+      }
 
       if (detailRequestIdRef.current !== requestId) {
         return
@@ -68,11 +88,16 @@ export function CoursePanel() {
 
       startTransition(() => {
         setSelectedCourseDetail(detail)
-        setMarkdownPreview(markdown)
+        setMarkdownPreview(nextMarkdownPreview)
+        setPreviewMessage(nextPreviewMessage)
       })
     } catch (error) {
       if (detailRequestIdRef.current === requestId) {
-        setErrorMessage(error instanceof Error ? error.message : '课程详情加载失败')
+        startTransition(() => {
+          setSelectedCourseDetail(null)
+          setMarkdownPreview('')
+          setPreviewMessage(error instanceof Error ? error.message : '课程详情加载失败')
+        })
       }
     }
   }, [])
@@ -120,6 +145,7 @@ export function CoursePanel() {
           startTransition(() => {
             setSelectedCourseDetail(null)
             setMarkdownPreview('')
+            setPreviewMessage('')
           })
         }
       }
@@ -167,11 +193,19 @@ export function CoursePanel() {
     if (!selectedCourseKey) {
       setSelectedCourseDetail(null)
       setMarkdownPreview('')
+      setPreviewMessage('')
       return
     }
 
     void loadCourseDetail(selectedCourseKey)
   }, [loadCourseDetail, selectedCourseKey])
+
+  const courseMarkdownDownloadUrl = selectedCourseDetail?.merged_markdown_path
+    ? getCourseArtifactUrl(selectedCourseDetail.course_key, 'course.md')
+    : ''
+  const manifestDownloadUrl = selectedCourseDetail?.manifest_path
+    ? getCourseArtifactUrl(selectedCourseDetail.course_key, 'manifest.json')
+    : ''
 
   return (
     <section className="panel">
@@ -225,11 +259,20 @@ export function CoursePanel() {
                   <th>日期</th>
                   <th>片段</th>
                   <th>失败</th>
+                  <th>总稿</th>
                 </tr>
               </thead>
               <tbody>
                 {courses.map((course) => (
-                  <tr key={course.course_key} onClick={() => setSelectedCourseKey(course.course_key)}>
+                  <tr
+                    key={course.course_key}
+                    className={
+                      course.course_key === selectedCourseKey
+                        ? 'tableRow tableRow--interactive is-selected'
+                        : 'tableRow tableRow--interactive'
+                    }
+                    onClick={() => setSelectedCourseKey(course.course_key)}
+                  >
                     <td>
                       <strong>{course.course_name}</strong>
                       <div>{course.teacher_name}</div>
@@ -242,6 +285,7 @@ export function CoursePanel() {
                       {course.successful_segment_count} / {course.received_segment_count}
                     </td>
                     <td>{course.has_failed_segment ? '是' : '否'}</td>
+                    <td>{course.merged_markdown_path ? '已生成' : '未生成'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -256,8 +300,30 @@ export function CoursePanel() {
           <div className="card__header">
             <div>
               <h3>课程总稿预览</h3>
-              <p>预览 Worker 代理从后端取回的 Markdown 成品。</p>
+              <p>预览 Worker 代理从后端取回的 Markdown 成品，并直接下载课程产物。</p>
             </div>
+            {selectedCourseDetail ? (
+              <div className="card__actions card__actions--inline">
+                {courseMarkdownDownloadUrl ? (
+                  <a
+                    className="buttonSecondary buttonSecondary--link"
+                    href={courseMarkdownDownloadUrl}
+                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}.md`}
+                  >
+                    下载总稿
+                  </a>
+                ) : null}
+                {manifestDownloadUrl ? (
+                  <a
+                    className="buttonSecondary buttonSecondary--link"
+                    href={manifestDownloadUrl}
+                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}-manifest.json`}
+                  >
+                    下载清单
+                  </a>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           {selectedCourseDetail ? (
@@ -274,7 +340,8 @@ export function CoursePanel() {
                 </div>
                 <div>失败片段：{selectedCourseDetail.has_failed_segment ? '有' : '无'}</div>
               </div>
-              <pre className="markdownPreview">{markdownPreview || '课程总稿尚未生成。'}</pre>
+              {previewMessage ? <div className="detailNotice">{previewMessage}</div> : null}
+              <pre className="markdownPreview">{markdownPreview || '当前没有可预览的课程总稿。'}</pre>
             </>
           ) : (
             <div className="emptyState">从左侧选择一个课程查看总稿。</div>

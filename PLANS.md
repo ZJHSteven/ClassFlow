@@ -13,6 +13,7 @@
 7. 已完成：已在真实环境中启动 `systemd --user` 后端服务、跑通 DashScope 真转写冒烟、发布 `workers.dev` 前端，并验证公网 API 与课程产物读取。
 8. 已完成：已移除前端定时轮询，改为“手动刷新 + 页面重新聚焦同步”；并把 Worker 后端地址切换到 `classflow-backend.zjhstudio.com`。
 9. 已完成：统一整理后端 / Worker / userscript 的鉴权说明，完成 userscript“走 Worker 时可不手填 token”的改造，并完成共享 token 旋转与重新部署验证。
+10. 进行中：在不重启当前 release 后端的前提下，先完成前端安全改动：总稿 404 误导修复、下载按钮补齐、交互反馈增强；后端下载/上传并发与进度采集改造留待后续启用。
 
 ## 当前决策
 - 后端使用 `axum + tokio + sqlx(sqlite) + reqwest`。

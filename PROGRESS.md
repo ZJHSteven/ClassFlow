@@ -22,8 +22,8 @@
 - 已完成：已把后端运行环境与 Worker secret 的共享 Bearer Token 统一旋转到新值，并验证“后端直连无 token 为 401、带新 token 为 200；Worker 无需前端手带 token 即可访问受保护接口”。
 - 已完成：`smartclass-downloader` 已调整为“指向 Worker 域名时可留空 Bearer Token”，并通过 `node --check` 与 `node --test`。
 - 已确认：`https://classflow.zjhstudio.com` 当前会被 Cloudflare Access 重定向到登录页；如果要公开访问，需要你在 Cloudflare Zero Trust 里调整 Access 策略。
-- 正在做：整理这次 token 旋转后的最终使用说明，给出 userscript 应填的最新地址与回退方案。
-- 下一步：补齐正式 R2 凭据，并根据你的访问策略决定是否保留 `classflow.zjhstudio.com` 的 Cloudflare Access 登录保护。
+- 正在做：在不重启当前 release 后端的前提下，先推进前端安全改动：修复课程总稿 404 误导、补下载按钮、增强 hover / 选中 / 点击反馈。
+- 下一步：梳理并落地后端后续改造方案，包括下载/上传并发拆分、失败重试、分稿下载接口、进度/速率采集，以及真正启用前的发布窗口安排。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -32,6 +32,7 @@
 - 决策D：后端公网入口已切换到 `classflow-backend.zjhstudio.com`；Worker secret 已不再依赖 Quick Tunnel。（原因：正式 Tunnel 域名现已可访问，固定域名比临时隧道更稳定。）
 - 决策E：前端默认关闭定时轮询，只保留显式刷新和焦点回到页面时的同步。（原因：减少视觉闪烁、避免 Worker 按请求计费被无意义消耗。）
 - 决策F：userscript 优先访问 Worker，而不是直连后端 Tunnel。（原因：这样脚本端可不暴露后端 Bearer Token，配置更简单，也更不容易填错。）
+- 决策G：在 `classflow.zjhstudio.com` 仍受 Cloudflare Access 保护期间，公共脚本与自动请求默认仍以 `workers.dev` 或明确可访问域名为准；自定义域名主要作为你登录后的浏览器入口使用。（原因：未登录访问该域名当前仍会 302 到 Access 登录页。）
 
 ## 常见坑 / 复现方法
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
@@ -40,3 +41,4 @@
 - 坑4：这台校园机发起 Quick Tunnel 时默认 `quic` 会超时，外部表现为 `530`；需要显式切到 `http2`。
 - 坑5：`classflow.zjhstudio.com` 当前受 Cloudflare Access 保护，未登录会直接 `302` 到 Access 登录页；这不是前端挂了，而是访问策略生效。
 - 坑6：如果 userscript 指向的是 Worker 域名，却仍强制要求手填后端 token，实际上会把本来可以隐藏的密钥再次暴露给脚本侧；推荐脚本走 Worker 时允许 token 留空。
+- 坑7：课程列表里可能存在“已收片段但尚无总稿”的课程；这时后端返回 `merged_markdown_path = null` 是正常状态，前端若继续盲拉 `course.md` 就会出现 404 误导。

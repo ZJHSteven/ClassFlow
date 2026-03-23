@@ -10,6 +10,8 @@
 
 import type { CourseDetail, CourseSummary, TaskDetail, TaskSummary } from './types'
 
+export type CourseArtifactName = 'course.md' | 'manifest.json'
+
 async function readJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
   if (!response.ok) {
@@ -87,9 +89,16 @@ export function getCourseDetail(courseKey: string): Promise<CourseDetail> {
 }
 
 export async function getCourseMarkdown(courseKey: string): Promise<string> {
-  const response = await fetch(`/api/v1/courses/${encodeURIComponent(courseKey)}/artifacts/course.md`)
+  const response = await fetch(getCourseArtifactUrl(courseKey, 'course.md'))
   if (!response.ok) {
     throw new Error(`课程总稿读取失败，HTTP ${response.status}`)
   }
   return response.text()
+}
+
+/**
+ * 统一生成课程产物地址，供“预览请求”和“下载按钮”共用。
+ */
+export function getCourseArtifactUrl(courseKey: string, artifactName: CourseArtifactName): string {
+  return `/api/v1/courses/${encodeURIComponent(courseKey)}/artifacts/${artifactName}`
 }

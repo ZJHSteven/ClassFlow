@@ -269,7 +269,15 @@ export function TaskPanel() {
               </thead>
               <tbody>
                 {tasks.map((task) => (
-                  <tr key={task.id} onClick={() => setSelectedTaskId(task.id)}>
+                  <tr
+                    key={task.id}
+                    className={
+                      task.id === selectedTaskId
+                        ? 'tableRow tableRow--interactive is-selected'
+                        : 'tableRow tableRow--interactive'
+                    }
+                    onClick={() => setSelectedTaskId(task.id)}
+                  >
                     <td>
                       <strong>{task.course_name}</strong>
                       <div>{task.teacher_name}</div>
@@ -301,7 +309,7 @@ export function TaskPanel() {
               <p>查看当前任务完整阶段日志，并对失败任务执行重试。</p>
             </div>
             {selectedTaskDetail?.task.status === 'failed' ? (
-              <button type="button" onClick={() => void handleRetry()}>
+              <button type="button" className="buttonSecondary" onClick={() => void handleRetry()}>
                 重试任务
               </button>
             ) : null}

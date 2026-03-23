@@ -78,6 +78,37 @@ const courseDetailPayload = {
   updated_at: '2026-03-22T00:00:00Z',
 }
 
+const courseListWithoutMarkdownPayload = [
+  {
+    course_key: '2025-2026-2|2026-03-21|生理学|李老师',
+    semester: '2025-2026-2',
+    course_name: '生理学',
+    teacher_name: '李老师',
+    date: '2026-03-21',
+    received_segment_count: 2,
+    successful_segment_count: 0,
+    has_failed_segment: false,
+    merged_markdown_path: null,
+    manifest_path: null,
+    updated_at: '2026-03-22T00:00:00Z',
+  },
+]
+
+const courseDetailWithoutMarkdownPayload = {
+  course_key: '2025-2026-2|2026-03-21|生理学|李老师',
+  semester: '2025-2026-2',
+  course_name: '生理学',
+  teacher_name: '李老师',
+  date: '2026-03-21',
+  received_segment_count: 2,
+  successful_segment_count: 0,
+  has_failed_segment: false,
+  merged_markdown_path: null,
+  manifest_path: null,
+  segments: [],
+  updated_at: '2026-03-22T00:00:00Z',
+}
+
 /**
  * 按 URL 分发假响应，避免使用“第几次 fetch 返回什么”的脆弱写法。
  *
@@ -155,5 +186,53 @@ describe('App', () => {
 
     expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 5000)
     expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 8000)
+  })
+
+  it('课程库应该提供总稿与清单下载按钮', async () => {
+    render(<App />)
+
+    fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: '下载总稿' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: '下载清单' })).toBeInTheDocument()
+    })
+  })
+
+  it('当课程总稿尚未生成时，不应该保留旧预览，而应该显示明确说明', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+
+      if (requestUrl.includes('/api/v1/tasks/') && !requestUrl.endsWith('/retry')) {
+        return new Response(JSON.stringify(taskDetailPayload), { status: 200 })
+      }
+
+      if (requestUrl.includes('/api/v1/tasks')) {
+        return new Response(JSON.stringify(taskListPayload), { status: 200 })
+      }
+
+      if (requestUrl.includes('/api/v1/courses/') && requestUrl.includes('/artifacts/course.md')) {
+        return new Response('not found', { status: 404 })
+      }
+
+      if (requestUrl.includes('/api/v1/courses/')) {
+        return new Response(JSON.stringify(courseDetailWithoutMarkdownPayload), { status: 200 })
+      }
+
+      if (requestUrl.includes('/api/v1/courses')) {
+        return new Response(JSON.stringify(courseListWithoutMarkdownPayload), { status: 200 })
+      }
+
+      throw new Error(`测试未覆盖的请求地址：${requestUrl}`)
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByText('课程总稿尚未生成。当前课程可能仍在下载、上传、转写或合并中。')).toBeInTheDocument()
+    })
+
+    expect(screen.getByText('当前没有可预览的课程总稿。')).toBeInTheDocument()
   })
 })
