@@ -200,7 +200,7 @@ describe('App', () => {
   })
 
   it('当课程总稿尚未生成时，不应该保留旧预览，而应该显示明确说明', async () => {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const noMarkdownFetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
 
       if (requestUrl.includes('/api/v1/tasks/') && !requestUrl.endsWith('/retry')) {
@@ -225,6 +225,7 @@ describe('App', () => {
 
       throw new Error(`测试未覆盖的请求地址：${requestUrl}`)
     })
+    vi.stubGlobal('fetch', noMarkdownFetchMock)
 
     render(<App />)
     fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
