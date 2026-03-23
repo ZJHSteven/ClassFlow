@@ -10,9 +10,11 @@
 4. 已完成：搭建 React + Cloudflare Worker 前端，完成任务台、课程库、代理 API，并通过 `lint / test / build`。
 5. 已完成：改造 `smartclass-downloader`，增加 `Gopeed / ClassFlow` 双模式投递，并补上 `node:test` 脚本测试。
 6. 已完成：已补齐部署文档、systemd 示例、cloudflared 示例，并完成当前环境下可自动执行的最终验收测试。
+7. 已完成：已在真实环境中启动 `systemd --user` 后端服务、跑通 DashScope 真转写冒烟、发布 `workers.dev` 前端，并验证公网 API 与课程产物读取。
 
 ## 当前决策
 - 后端使用 `axum + tokio + sqlx(sqlite) + reqwest`。
 - 前端使用 Cloudflare 官方 React Workers 脚手架方向，浏览器只访问 Worker，不直接访问后端。
 - 课程归组键固定为 `学期 + 日期 + 课程名 + 老师`。
 - 第一版只报告已收片段数，不启发式推断课程理论节数。
+- 当前暂用 `Quick Tunnel(http2)` 作为后端公网出口；待 Cloudflare DNS 权限补齐后，再切回 `classflow-backend.zjhstudio.com` 固定域名。
