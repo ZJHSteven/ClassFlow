@@ -41,6 +41,8 @@ const taskDetailPayload = {
     page_url: 'https://example.test/page',
     mp4_url: 'https://example.test/video.mp4',
     last_error: null,
+    segment_markdown_path: 'segments/task-1.md',
+    segment_json_path: 'segments/task-1.json',
     created_at: '2026-03-22T00:00:00Z',
     updated_at: '2026-03-22T00:00:00Z',
   },
@@ -133,7 +135,7 @@ describe('App', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
 
     await waitFor(() => {
-      expect(screen.getByText('课程总稿预览')).toBeInTheDocument()
+      expect(screen.getByText('课程总稿与交付物')).toBeInTheDocument()
     })
   })
 
@@ -163,8 +165,17 @@ describe('App', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: '下载总稿' })).toBeInTheDocument()
-      expect(screen.getByRole('link', { name: '下载清单' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: '下载课程总稿' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: '下载课程清单' })).toBeInTheDocument()
+    })
+  })
+
+  it('任务台应该提供任务级下载按钮', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: '下载任务快照' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: '下载事件日志' })).toBeInTheDocument()
     })
   })
 })

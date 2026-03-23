@@ -11,23 +11,36 @@
 import type { CourseDetail, CourseSummary, TaskDetail, TaskSummary } from './types'
 
 export type CourseArtifactName = 'course.md' | 'manifest.json'
+export type TaskArtifactName = 'segment.md' | 'segment.json' | 'events.json' | 'task.json'
+
+async function readErrorMessage(response: Response): Promise<string> {
+  let message = `请求失败，HTTP ${response.status}`
+  try {
+    const body = (await response.json()) as { error?: string }
+    if (body.error) {
+      message = body.error
+    }
+  } catch {
+    // 这里故意静默忽略 JSON 解析错误，因为错误消息已经有兜底文本。
+  }
+  return message
+}
 
 async function readJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init)
   if (!response.ok) {
-    let message = `请求失败，HTTP ${response.status}`
-    try {
-      const body = (await response.json()) as { error?: string }
-      if (body.error) {
-        message = body.error
-      }
-    } catch {
-      // 这里故意静默忽略 JSON 解析错误，因为错误消息已经有兜底文本。
-    }
-    throw new Error(message)
+    throw new Error(await readErrorMessage(response))
   }
 
   return (await response.json()) as T
+}
+
+async function readText(input: RequestInfo | URL, init?: RequestInit): Promise<string> {
+  const response = await fetch(input, init)
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response))
+  }
+  return response.text()
 }
 
 export interface TaskFilters {
@@ -74,6 +87,12 @@ export async function retryTask(taskId: string): Promise<void> {
   })
 }
 
+export async function deleteTask(taskId: string): Promise<void> {
+  await readJson(`/api/v1/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE',
+  })
+}
+
 export function listCourses(filters: CourseFilters): Promise<CourseSummary[]> {
   return readJson<CourseSummary[]>(
     `/api/v1/courses${buildQuery([
@@ -89,11 +108,7 @@ export function getCourseDetail(courseKey: string): Promise<CourseDetail> {
 }
 
 export async function getCourseMarkdown(courseKey: string): Promise<string> {
-  const response = await fetch(getCourseArtifactUrl(courseKey, 'course.md'))
-  if (!response.ok) {
-    throw new Error(`课程总稿读取失败，HTTP ${response.status}`)
-  }
-  return response.text()
+  return readText(getCourseArtifactUrl(courseKey, 'course.md'))
 }
 
 /**
@@ -101,4 +116,8 @@ export async function getCourseMarkdown(courseKey: string): Promise<string> {
  */
 export function getCourseArtifactUrl(courseKey: string, artifactName: CourseArtifactName): string {
   return `/api/v1/courses/${encodeURIComponent(courseKey)}/artifacts/${artifactName}`
+}
+
+export function getTaskArtifactUrl(taskId: string, artifactName: TaskArtifactName): string {
+  return `/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${artifactName}`
 }

@@ -11,6 +11,7 @@
  * 2. 后续如果再增加“系统设置”页，不需要重写现有逻辑。
  */
 
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useState } from 'react'
 import { CoursePanel } from './components/CoursePanel'
 import { TaskPanel } from './components/TaskPanel'
@@ -20,10 +21,24 @@ type ViewMode = 'tasks' | 'courses'
 
 function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('tasks')
+  const shouldReduceMotion = useReducedMotion()
+
+  const tabMotionProps = shouldReduceMotion
+    ? {}
+    : {
+        whileHover: { y: -2, scale: 1.015 },
+        whileTap: { y: 0, scale: 0.985 },
+        transition: { type: 'spring' as const, stiffness: 420, damping: 24 },
+      }
 
   return (
     <div className="shell">
-      <header className="hero">
+      <motion.header
+        className="hero"
+        initial={shouldReduceMotion ? false : { opacity: 0, y: 18 }}
+        animate={shouldReduceMotion ? undefined : { opacity: 1, y: 0 }}
+        transition={{ duration: 0.42, ease: 'easeOut' }}
+      >
         <div className="hero__eyebrow">ClassFlow / Worker Console</div>
         <div className="hero__content">
           <div>
@@ -38,27 +53,39 @@ function App() {
             <span>React 管理台</span>
           </div>
         </div>
-      </header>
+      </motion.header>
 
       <nav className="tabBar" aria-label="主视图切换">
-        <button
+        <motion.button
           type="button"
           className={viewMode === 'tasks' ? 'tabBar__button is-active' : 'tabBar__button'}
           onClick={() => setViewMode('tasks')}
+          {...tabMotionProps}
         >
           任务台
-        </button>
-        <button
+        </motion.button>
+        <motion.button
           type="button"
           className={viewMode === 'courses' ? 'tabBar__button is-active' : 'tabBar__button'}
           onClick={() => setViewMode('courses')}
+          {...tabMotionProps}
         >
           课程库
-        </button>
+        </motion.button>
       </nav>
 
       <main className="content">
-        {viewMode === 'tasks' ? <TaskPanel /> : <CoursePanel />}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={viewMode}
+            initial={shouldReduceMotion ? false : { opacity: 0, y: 14 }}
+            animate={shouldReduceMotion ? undefined : { opacity: 1, y: 0 }}
+            exit={shouldReduceMotion ? undefined : { opacity: 0, y: -10 }}
+            transition={{ duration: 0.24, ease: 'easeOut' }}
+          >
+            {viewMode === 'tasks' ? <TaskPanel /> : <CoursePanel />}
+          </motion.div>
+        </AnimatePresence>
       </main>
     </div>
   )

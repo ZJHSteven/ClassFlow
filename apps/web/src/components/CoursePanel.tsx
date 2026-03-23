@@ -1,14 +1,20 @@
 /**
  * 课程库面板。
  *
- * 这个组件负责展示“课程层面”的聚合结果：
+ * 这里把“课程级交付物”集中到右侧：
  *
- * 1. 左侧按课程维度浏览。
- * 2. 右侧展示课程总稿 Markdown 预览。
- * 3. 默认不做后台轮询，避免列表定时闪烁，也避免 Worker 代理产生无意义请求。
- * 4. 采用“首次加载 + 手动刷新 + 页面回到前台时同步”的策略。
+ * 1. 课程总稿下载。
+ * 2. 课程 manifest 下载。
+ * 3. 固定高度、内部滚动的课程总稿预览区。
+ *
+ * 设计目的很直接：
+ *
+ * 1. 不让一大段 Markdown 把整页高度拖得失控。
+ * 2. 下载按钮必须足够显眼，不能藏在小角落里。
+ * 3. 课程总稿不存在时，只在右侧详情区说明，不把 404 错误抛回左侧列表区误导用户。
  */
 
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, listCourses } from '../api'
 import type { CourseDetail, CourseSummary } from '../types'
@@ -32,16 +38,26 @@ export function CoursePanel() {
   const [selectedCourseDetail, setSelectedCourseDetail] = useState<CourseDetail | null>(null)
   const [markdownPreview, setMarkdownPreview] = useState<string>('')
   const [previewMessage, setPreviewMessage] = useState<string>('')
+  const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false)
   const [semesterFilter, setSemesterFilter] = useState<string>('')
   const [dateFilter, setDateFilter] = useState<string>('')
   const [courseFilter, setCourseFilter] = useState<string>('')
-  const [errorMessage, setErrorMessage] = useState<string>('')
+  const [listErrorMessage, setListErrorMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedCourseKeyRef = useRef<string>('')
+  const shouldReduceMotion = useReducedMotion()
+
+  const pressableProps = shouldReduceMotion
+    ? {}
+    : {
+        whileHover: { y: -2, scale: 1.01 },
+        whileTap: { y: 0, scale: 0.985 },
+        transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
+      }
 
   useEffect(() => {
     selectedCourseKeyRef.current = selectedCourseKey
@@ -50,19 +66,21 @@ export function CoursePanel() {
   /**
    * 刷新单个课程详情与总稿。
    *
-   * 这里先取详情，再决定是否请求 Markdown。
+   * 这里先取详情，再决定是否读取 `course.md`：
    *
-   * 背景：
-   *
-   * 1. 有些课程还在处理中，详情里的 `merged_markdown_path` 会是空。
-   * 2. 如果不加判断直接请求 `course.md`，前端就会得到一个“并不意外”的 404。
-   * 3. 先看详情字段，可以把“总稿未生成”与“真正请求失败”分开处理。
+   * 1. 课程还没产出总稿时，直接给出“尚未生成”的说明。
+   * 2. 只有详情明确存在 `merged_markdown_path` 时，才去请求 Markdown 正文。
    */
   const loadCourseDetail = useCallback(async (courseKey: string) => {
     const requestId = detailRequestIdRef.current + 1
     detailRequestIdRef.current = requestId
 
     try {
+      startTransition(() => {
+        setIsPreviewLoading(true)
+        setPreviewMessage('')
+      })
+
       const detail = await getCourseDetail(courseKey)
 
       if (detailRequestIdRef.current !== requestId) {
@@ -90,6 +108,7 @@ export function CoursePanel() {
         setSelectedCourseDetail(detail)
         setMarkdownPreview(nextMarkdownPreview)
         setPreviewMessage(nextPreviewMessage)
+        setIsPreviewLoading(false)
       })
     } catch (error) {
       if (detailRequestIdRef.current === requestId) {
@@ -97,13 +116,16 @@ export function CoursePanel() {
           setSelectedCourseDetail(null)
           setMarkdownPreview('')
           setPreviewMessage(error instanceof Error ? error.message : '课程详情加载失败')
+          setIsPreviewLoading(false)
         })
       }
     }
   }, [])
 
   /**
-   * 刷新课程列表；必要时顺带刷新当前课程详情。
+   * 刷新课程列表；必要时同步当前课程详情。
+   *
+   * 和任务台一样，这里也避免在“选中项变化时”重复触发详情请求。
    */
   const loadCourses = useCallback(async (options?: { blocking?: boolean; refreshDetail?: boolean }) => {
     const { blocking = false, refreshDetail = false } = options ?? {}
@@ -134,24 +156,25 @@ export function CoursePanel() {
       startTransition(() => {
         setCourses(nextCourses)
         setSelectedCourseKey(nextSelectedCourseKey)
-        setErrorMessage('')
+        setListErrorMessage('')
         setLastSyncedAt(new Date().toISOString())
       })
 
       if (refreshDetail) {
-        if (nextSelectedCourseKey) {
+        if (nextSelectedCourseKey && nextSelectedCourseKey === selectedCourseKeyRef.current) {
           await loadCourseDetail(nextSelectedCourseKey)
         } else {
           startTransition(() => {
             setSelectedCourseDetail(null)
             setMarkdownPreview('')
             setPreviewMessage('')
+            setIsPreviewLoading(false)
           })
         }
       }
     } catch (error) {
       if (listRequestIdRef.current === requestId) {
-        setErrorMessage(error instanceof Error ? error.message : '课程库加载失败')
+        setListErrorMessage(error instanceof Error ? error.message : '课程库加载失败')
       }
     } finally {
       if (listRequestIdRef.current === requestId) {
@@ -194,6 +217,7 @@ export function CoursePanel() {
       setSelectedCourseDetail(null)
       setMarkdownPreview('')
       setPreviewMessage('')
+      setIsPreviewLoading(false)
       return
     }
 
@@ -210,15 +234,21 @@ export function CoursePanel() {
   return (
     <section className="panel">
       <div className="panel__grid">
-        <div className="card card--padded">
+        <motion.div
+          className="card card--padded"
+          layout
+          initial={shouldReduceMotion ? false : { opacity: 0, x: -10 }}
+          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          transition={{ duration: 0.24, ease: 'easeOut' }}
+        >
           <div className="card__header">
             <div>
               <h2>课程库</h2>
-              <p>以“课程”而不是“单个任务”的视角审查最终交付物，并避免后台定时轮询。</p>
+              <p>左侧负责课程检索，右侧集中展示课程级交付物和总稿预览。</p>
             </div>
             <div className="card__actions">
               <div className="syncHint">最近同步：{formatSyncTime(lastSyncedAt)}</div>
-              <button
+              <motion.button
                 type="button"
                 className="buttonSecondary"
                 onClick={() =>
@@ -228,28 +258,29 @@ export function CoursePanel() {
                   })
                 }
                 disabled={isRefreshing}
+                {...pressableProps}
               >
                 {isRefreshing ? '同步中...' : '刷新课程库'}
-              </button>
+              </motion.button>
             </div>
           </div>
 
           <div className="filters filters--compact">
-            <div className="field">
+            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
               <label htmlFor="course-semester">学期</label>
               <input id="course-semester" value={semesterFilter} onChange={(event) => setSemesterFilter(event.target.value)} placeholder="2025-2026-2" />
-            </div>
-            <div className="field">
+            </motion.div>
+            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
               <label htmlFor="course-date">日期</label>
               <input id="course-date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} placeholder="2026-03-20" />
-            </div>
-            <div className="field">
+            </motion.div>
+            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
               <label htmlFor="course-name">课程名</label>
               <input id="course-name" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)} placeholder="病理学" />
-            </div>
+            </motion.div>
           </div>
 
-          {errorMessage ? <div className="emptyState">{errorMessage}</div> : null}
+          {listErrorMessage ? <div className="detailNotice detailNotice--error">{listErrorMessage}</div> : null}
 
           <div className="tableWrap">
             <table className="table">
@@ -264,14 +295,16 @@ export function CoursePanel() {
               </thead>
               <tbody>
                 {courses.map((course) => (
-                  <tr
+                  <motion.tr
                     key={course.course_key}
+                    layout
                     className={
                       course.course_key === selectedCourseKey
                         ? 'tableRow tableRow--interactive is-selected'
                         : 'tableRow tableRow--interactive'
                     }
                     onClick={() => setSelectedCourseKey(course.course_key)}
+                    {...pressableProps}
                   >
                     <td>
                       <strong>{course.course_name}</strong>
@@ -286,7 +319,7 @@ export function CoursePanel() {
                     </td>
                     <td>{course.has_failed_segment ? '是' : '否'}</td>
                     <td>{course.merged_markdown_path ? '已生成' : '未生成'}</td>
-                  </tr>
+                  </motion.tr>
                 ))}
               </tbody>
             </table>
@@ -294,36 +327,20 @@ export function CoursePanel() {
 
           {isLoading ? <div className="emptyState">正在加载课程列表...</div> : null}
           {!isLoading && courses.length === 0 ? <div className="emptyState">当前没有课程总稿可展示。</div> : null}
-        </div>
+        </motion.div>
 
-        <aside className="card card--padded detail">
+        <motion.aside
+          className="card card--padded detail"
+          layout
+          initial={shouldReduceMotion ? false : { opacity: 0, x: 10 }}
+          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          transition={{ duration: 0.24, ease: 'easeOut' }}
+        >
           <div className="card__header">
             <div>
-              <h3>课程总稿预览</h3>
-              <p>预览 Worker 代理从后端取回的 Markdown 成品，并直接下载课程产物。</p>
+              <h3>课程总稿与交付物</h3>
+              <p>右侧只负责课程级产物：课程总稿、课程清单，以及不把整页拉长的总稿预览。</p>
             </div>
-            {selectedCourseDetail ? (
-              <div className="card__actions card__actions--inline">
-                {courseMarkdownDownloadUrl ? (
-                  <a
-                    className="buttonSecondary buttonSecondary--link"
-                    href={courseMarkdownDownloadUrl}
-                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}.md`}
-                  >
-                    下载总稿
-                  </a>
-                ) : null}
-                {manifestDownloadUrl ? (
-                  <a
-                    className="buttonSecondary buttonSecondary--link"
-                    href={manifestDownloadUrl}
-                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}-manifest.json`}
-                  >
-                    下载清单
-                  </a>
-                ) : null}
-              </div>
-            ) : null}
           </div>
 
           {selectedCourseDetail ? (
@@ -340,13 +357,58 @@ export function CoursePanel() {
                 </div>
                 <div>失败片段：{selectedCourseDetail.has_failed_segment ? '有' : '无'}</div>
               </div>
-              {previewMessage ? <div className="detailNotice">{previewMessage}</div> : null}
-              <pre className="markdownPreview">{markdownPreview || '当前没有可预览的课程总稿。'}</pre>
+
+              <div className="detailActionGrid">
+                {courseMarkdownDownloadUrl ? (
+                  <motion.a
+                    className="artifactPill artifactPill--primary"
+                    href={courseMarkdownDownloadUrl}
+                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}.md`}
+                    {...pressableProps}
+                  >
+                    下载课程总稿
+                  </motion.a>
+                ) : null}
+                {manifestDownloadUrl ? (
+                  <motion.a
+                    className="artifactPill"
+                    href={manifestDownloadUrl}
+                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}-manifest.json`}
+                    {...pressableProps}
+                  >
+                    下载课程清单
+                  </motion.a>
+                ) : null}
+              </div>
+
+              {previewMessage ? <div className="detailNotice detailNotice--warning">{previewMessage}</div> : null}
+
+              <div className="previewShell">
+                <div className="previewShell__header">
+                  <strong>课程总稿预览</strong>
+                  <span>{isPreviewLoading ? '正在读取...' : markdownPreview ? '已加载' : '暂无总稿'}</span>
+                </div>
+
+                <AnimatePresence mode="wait">
+                  <motion.pre
+                    key={markdownPreview ? 'loaded' : isPreviewLoading ? 'loading' : 'empty'}
+                    className="markdownPreview"
+                    initial={shouldReduceMotion ? false : { opacity: 0, y: 8 }}
+                    animate={shouldReduceMotion ? undefined : { opacity: 1, y: 0 }}
+                    exit={shouldReduceMotion ? undefined : { opacity: 0, y: -8 }}
+                    transition={{ duration: 0.18, ease: 'easeOut' }}
+                  >
+                    {isPreviewLoading
+                      ? '正在读取课程总稿...'
+                      : markdownPreview || '当前没有可预览的课程总稿。单节原始备份和事件日志请到任务台下载。'}
+                  </motion.pre>
+                </AnimatePresence>
+              </div>
             </>
           ) : (
             <div className="emptyState">从左侧选择一个课程查看总稿。</div>
           )}
-        </aside>
+        </motion.aside>
       </div>
     </section>
   )

@@ -5,9 +5,9 @@
 ## 1. 目录与角色
 
 - `apps/backend`
-  - Rust 后端，负责任务编排、SQLite、DashScope、R2
+  - Rust 后端，负责任务编排、SQLite、DashScope，以及通过 Worker 私有接口写入最终产物
 - `apps/web`
-  - React 管理前端 + Cloudflare Worker 代理
+  - React 管理前端 + Cloudflare Worker 代理 + Worker 绑定 R2
 - `deploy/systemd`
   - 后端常驻与临时目录清理的 systemd 模板
 - `deploy/cloudflared`
@@ -45,7 +45,10 @@ npx wrangler whoami
    - `CLASSFLOW_BEARER_TOKEN`
    - `DASHSCOPE_API_KEY`
    - `CLASSFLOW_ARTIFACT_STORE_MODE`
-   - 若使用 R2，则还要填：
+   - 若使用 `worker` 模式，则还要填：
+     - `CLASSFLOW_ARTIFACT_PROXY_BASE_URL`
+     - `CLASSFLOW_ARTIFACT_PROXY_TOKEN`
+   - 若使用 `r2` 直连模式，则还要填：
      - `CLASSFLOW_R2_BUCKET`
      - `CLASSFLOW_R2_ENDPOINT`
      - `CLASSFLOW_R2_ACCESS_KEY_ID`
@@ -55,6 +58,7 @@ npx wrangler whoami
 
 - `CLASSFLOW_BEARER_TOKEN` 是后端真正校验的共享鉴权值。
 - Worker 的 `BACKEND_TOKEN` 必须与 `CLASSFLOW_BEARER_TOKEN` 完全一致。
+- `CLASSFLOW_ARTIFACT_PROXY_TOKEN` 是“后端访问 Worker 私有产物接口”使用的单独密钥，不给浏览器、不写进 userscript。
 - 如果 userscript 直连后端 Tunnel 域名，那么脚本里的 `Bearer Token` 也必须填这同一个值。
 - 如果 userscript 访问的是 Worker 域名，则推荐让脚本侧 `Bearer Token` 留空，由 Worker 代为补上。
 
@@ -133,11 +137,12 @@ npm run build
 npx wrangler dev
 ```
 
-发布前，把 Worker 需要的两个变量写成 secret：
+发布前，把 Worker 需要的三个变量写成 secret：
 
 ```bash
 npx wrangler secret put BACKEND_BASE_URL
 npx wrangler secret put BACKEND_TOKEN
+npx wrangler secret put ARTIFACT_PROXY_TOKEN
 ```
 
 填写规则：
@@ -146,6 +151,10 @@ npx wrangler secret put BACKEND_TOKEN
   - 填 Tunnel 暴露出来的后端地址，例如 `https://classflow-backend.example.com`
 - `BACKEND_TOKEN`
   - 必须与后端环境变量 `CLASSFLOW_BEARER_TOKEN` 完全一致
+- `ARTIFACT_PROXY_TOKEN`
+  - 必须与后端环境变量 `CLASSFLOW_ARTIFACT_PROXY_TOKEN` 完全一致
+
+另外，`wrangler.toml` 里需要把 `ARTIFACTS` 绑定到真实的 R2 bucket。当前仓库里提供的是 `binding` 名称和示例 bucket 名，正式部署前请改成你自己的 bucket。
 
 然后发布：
 
@@ -174,7 +183,7 @@ npx wrangler deploy
 
 ## 9. R2 目录约定
 
-后端最终会把文本成品写成以下布局：
+Worker 绑定的 R2 里，最终文本成品沿用以下布局：
 
 ```text
 <semester>/<course_name>/<date>-<teacher_name>/manifest.json

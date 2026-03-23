@@ -3,6 +3,8 @@
 # 注意：
 # 1. `BACKEND_BASE_URL` 指向后端 Tunnel 域名
 # 2. `BACKEND_TOKEN` 必须与后端 `CLASSFLOW_BEARER_TOKEN` 完全一致
+# 3. `ARTIFACT_PROXY_TOKEN` 是“后端 -> Worker 私有产物接口”使用的单独密钥
+# 4. 生产环境还需要在 `wrangler.toml` 中把 `ARTIFACTS` 绑定到真实 R2 bucket
 
 BACKEND_BASE_URL=https://classflow-backend.example.com
 BACKEND_TOKEN=replace-with-backend-bearer-token

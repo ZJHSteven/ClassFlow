@@ -61,6 +61,10 @@ export interface TaskDetail {
     page_url: string
     mp4_url: string
     last_error: string | null
+    segment_markdown_path?: string | null
+    segment_json_path?: string | null
+    course_manifest_path?: string | null
+    merged_markdown_path?: string | null
     created_at: string
     updated_at: string
   }

@@ -1,17 +1,27 @@
 /**
  * 任务台面板。
  *
- * 这个组件把“任务列表 + 任务详情”放到一个视图里：
+ * 这个组件负责“任务列表 + 任务详情 + 任务级下载动作”三件事：
  *
- * 1. 左侧负责任务筛选和列表。
- * 2. 右侧负责当前任务的详情与重试。
- * 3. 默认不做定时轮询，避免界面频繁闪烁，也避免 Cloudflare Worker 无意义计费。
- * 4. 采用“首次加载 + 手动刷新 + 页面重新回到前台时同步一次”的折中策略。
+ * 1. 左侧按任务维度浏览和筛选。
+ * 2. 右侧集中展示当前任务的阶段、错误、日志和下载入口。
+ * 3. 对失败任务提供“重试”和“彻底删除”两个明确动作。
+ *
+ * 这里特意把“下载按钮”放在详情区的显眼位置，
+ * 而不是塞进一堆小字里，目的是让用户一眼知道：
+ * “这个任务到底能导出什么，点哪里拿。”
  */
 
+import { motion, useReducedMotion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
-import { getTaskDetail, listTasks, retryTask } from '../api'
-import type { TaskDetail, TaskStatus, TaskSummary } from '../types'
+import {
+  deleteTask,
+  getTaskArtifactUrl,
+  getTaskDetail,
+  listTasks,
+  retryTask,
+} from '../api'
+import type { TaskDetail, TaskStage, TaskStatus, TaskSummary } from '../types'
 
 function statusLabel(status: TaskStatus) {
   const labelMap: Record<TaskStatus, string> = {
@@ -21,6 +31,21 @@ function statusLabel(status: TaskStatus) {
     failed: '失败',
   }
   return labelMap[status]
+}
+
+function stageLabel(stage: TaskStage) {
+  const labelMap: Record<TaskStage, string> = {
+    queued: '排队中',
+    downloading: '下载中',
+    extracting_audio: '抽音频',
+    uploading_audio: '上传音频',
+    transcribing: '转写中',
+    storing_artifacts: '写入产物',
+    merging_course: '合并课程',
+    cleanup: '清理中',
+    done: '已完成',
+  }
+  return labelMap[stage]
 }
 
 /**
@@ -49,13 +74,24 @@ export function TaskPanel() {
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [dateFilter, setDateFilter] = useState<string>('')
   const [courseFilter, setCourseFilter] = useState<string>('')
-  const [errorMessage, setErrorMessage] = useState<string>('')
+  const [listErrorMessage, setListErrorMessage] = useState<string>('')
+  const [detailMessage, setDetailMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
+  const [isDeleting, setIsDeleting] = useState<boolean>(false)
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedTaskIdRef = useRef<string>('')
+  const shouldReduceMotion = useReducedMotion()
+
+  const pressableProps = shouldReduceMotion
+    ? {}
+    : {
+        whileHover: { y: -2, scale: 1.01 },
+        whileTap: { y: 0, scale: 0.985 },
+        transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
+      }
 
   useEffect(() => {
     selectedTaskIdRef.current = selectedTaskId
@@ -64,8 +100,8 @@ export function TaskPanel() {
   /**
    * 单独刷新某个任务的详情。
    *
-   * 这里把列表刷新和详情刷新拆开，是为了避免“切换当前选中任务”时还要重新拉整个列表。
-   * 另外使用 `requestId` 丢弃过期响应，防止前一次慢请求把新状态覆盖掉。
+   * 这里用 `requestId` 丢弃过期响应，
+   * 目的是避免“用户快速切换两条任务，慢请求覆盖快请求”。
    */
   const loadTaskDetail = useCallback(async (taskId: string) => {
     const requestId = detailRequestIdRef.current + 1
@@ -79,25 +115,26 @@ export function TaskPanel() {
 
       startTransition(() => {
         setSelectedTaskDetail(detail)
+        setDetailMessage('')
       })
     } catch (error) {
       if (detailRequestIdRef.current === requestId) {
-        setErrorMessage(error instanceof Error ? error.message : '任务详情加载失败')
+        startTransition(() => {
+          setSelectedTaskDetail(null)
+          setDetailMessage(error instanceof Error ? error.message : '任务详情加载失败')
+        })
       }
     }
   }, [])
 
   /**
-   * 刷新任务列表，并在必要时顺手同步当前选中任务的详情。
+   * 刷新任务列表，并在必要时同步当前选中任务的详情。
    *
-   * 输入：
-   * - `blocking`：是否把这次刷新视为“阻塞式首次加载”。
-   * - `refreshDetail`：刷新完列表后，是否顺便刷新当前选中任务详情。
+   * 设计细节：
    *
-   * 核心取舍：
-   * - 首次进入页面时显示完整加载态。
-   * - 后续刷新只显示轻量“同步中”状态，不再让整块内容闪一下。
-   * - 使用 `startTransition()` 把大块列表替换标记为非紧急更新，减少界面顿挫。
+   * 1. 首次进入页面走阻塞加载，后续刷新只显示轻量“同步中”。
+   * 2. 当选中项没变时，刷新后会顺手更新右侧详情。
+   * 3. 当选中项变化时，让下面的 `useEffect` 接管详情刷新，避免重复请求。
    */
   const loadTasks = useCallback(async (options?: { blocking?: boolean; refreshDetail?: boolean }) => {
     const { blocking = false, refreshDetail = false } = options ?? {}
@@ -128,22 +165,23 @@ export function TaskPanel() {
       startTransition(() => {
         setTasks(nextTasks)
         setSelectedTaskId(nextSelectedTaskId)
-        setErrorMessage('')
+        setListErrorMessage('')
         setLastSyncedAt(new Date().toISOString())
       })
 
       if (refreshDetail) {
-        if (nextSelectedTaskId) {
+        if (nextSelectedTaskId && nextSelectedTaskId === selectedTaskIdRef.current) {
           await loadTaskDetail(nextSelectedTaskId)
         } else {
           startTransition(() => {
             setSelectedTaskDetail(null)
+            setDetailMessage('')
           })
         }
       }
     } catch (error) {
       if (listRequestIdRef.current === requestId) {
-        setErrorMessage(error instanceof Error ? error.message : '任务列表加载失败')
+        setListErrorMessage(error instanceof Error ? error.message : '任务列表加载失败')
       }
     } finally {
       if (listRequestIdRef.current === requestId) {
@@ -161,12 +199,6 @@ export function TaskPanel() {
   }, [loadTasks])
 
   useEffect(() => {
-    /**
-     * 只在“窗口重新聚焦”或“标签页重新可见”时同步一次。
-     *
-     * 这样既能在用户切回页面时看到比较新的状态，
-     * 又不会像轮询那样持续消耗 Worker 请求次数。
-     */
     const syncWhenVisibleAgain = () => {
       if (document.visibilityState !== 'visible') {
         return
@@ -190,6 +222,7 @@ export function TaskPanel() {
   useEffect(() => {
     if (!selectedTaskId) {
       setSelectedTaskDetail(null)
+      setDetailMessage('')
       return
     }
 
@@ -200,6 +233,7 @@ export function TaskPanel() {
     if (!selectedTaskDetail) {
       return
     }
+
     await retryTask(selectedTaskDetail.task.id)
     await loadTasks({
       blocking: false,
@@ -207,10 +241,65 @@ export function TaskPanel() {
     })
   }
 
+  const handleDelete = async () => {
+    if (!selectedTaskDetail) {
+      return
+    }
+
+    const shouldDelete = window.confirm(
+      '这会删除该失败任务的本地工作目录、列表记录，以及它已有的任务级备份。确定继续吗？',
+    )
+    if (!shouldDelete) {
+      return
+    }
+
+    try {
+      setIsDeleting(true)
+      await deleteTask(selectedTaskDetail.task.id)
+      await loadTasks({
+        blocking: false,
+        refreshDetail: true,
+      })
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  const taskActions = selectedTaskDetail
+    ? [
+        {
+          label: '下载任务快照',
+          href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'task.json'),
+        },
+        {
+          label: '下载事件日志',
+          href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'events.json'),
+        },
+        selectedTaskDetail.task.segment_markdown_path
+          ? {
+              label: '下载单节 Markdown',
+              href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'segment.md'),
+            }
+          : null,
+        selectedTaskDetail.task.segment_json_path
+          ? {
+              label: '下载单节 JSON',
+              href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'segment.json'),
+            }
+          : null,
+      ].filter(Boolean) as Array<{ label: string; href: string }>
+    : []
+
   return (
     <section className="panel">
       <div className="panel__grid">
-        <div className="card card--padded">
+        <motion.div
+          className="card card--padded"
+          layout
+          initial={shouldReduceMotion ? false : { opacity: 0, x: -10 }}
+          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          transition={{ duration: 0.24, ease: 'easeOut' }}
+        >
           <div className="card__header">
             <div>
               <h2>任务队列</h2>
@@ -218,7 +307,7 @@ export function TaskPanel() {
             </div>
             <div className="card__actions">
               <div className="syncHint">最近同步：{formatSyncTime(lastSyncedAt)}</div>
-              <button
+              <motion.button
                 type="button"
                 className="buttonSecondary"
                 onClick={() =>
@@ -228,14 +317,15 @@ export function TaskPanel() {
                   })
                 }
                 disabled={isRefreshing}
+                {...pressableProps}
               >
                 {isRefreshing ? '同步中...' : '刷新列表'}
-              </button>
+              </motion.button>
             </div>
           </div>
 
           <div className="filters">
-            <div className="field">
+            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
               <label htmlFor="task-status">状态</label>
               <select id="task-status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
                 <option value="">全部</option>
@@ -244,18 +334,18 @@ export function TaskPanel() {
                 <option value="succeeded">成功</option>
                 <option value="failed">失败</option>
               </select>
-            </div>
-            <div className="field">
+            </motion.div>
+            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
               <label htmlFor="task-date">日期</label>
               <input id="task-date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} placeholder="2026-03-20" />
-            </div>
-            <div className="field">
+            </motion.div>
+            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
               <label htmlFor="task-course">课程名</label>
               <input id="task-course" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)} placeholder="病理学" />
-            </div>
+            </motion.div>
           </div>
 
-          {errorMessage ? <div className="emptyState">{errorMessage}</div> : null}
+          {listErrorMessage ? <div className="detailNotice detailNotice--error">{listErrorMessage}</div> : null}
 
           <div className="tableWrap">
             <table className="table">
@@ -269,14 +359,16 @@ export function TaskPanel() {
               </thead>
               <tbody>
                 {tasks.map((task) => (
-                  <tr
+                  <motion.tr
                     key={task.id}
+                    layout
                     className={
                       task.id === selectedTaskId
                         ? 'tableRow tableRow--interactive is-selected'
                         : 'tableRow tableRow--interactive'
                     }
                     onClick={() => setSelectedTaskId(task.id)}
+                    {...pressableProps}
                   >
                     <td>
                       <strong>{task.course_name}</strong>
@@ -291,8 +383,8 @@ export function TaskPanel() {
                     <td>
                       <span className={`statusPill statusPill--${task.status}`}>{statusLabel(task.status)}</span>
                     </td>
-                    <td>{task.stage}</td>
-                  </tr>
+                    <td>{stageLabel(task.stage)}</td>
+                  </motion.tr>
                 ))}
               </tbody>
             </table>
@@ -300,19 +392,38 @@ export function TaskPanel() {
 
           {isLoading ? <div className="emptyState">正在加载任务列表...</div> : null}
           {!isLoading && tasks.length === 0 ? <div className="emptyState">当前没有任务记录。</div> : null}
-        </div>
+        </motion.div>
 
-        <aside className="card card--padded detail">
+        <motion.aside
+          className="card card--padded detail"
+          layout
+          initial={shouldReduceMotion ? false : { opacity: 0, x: 10 }}
+          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          transition={{ duration: 0.24, ease: 'easeOut' }}
+        >
           <div className="card__header">
             <div>
               <h3>任务详情</h3>
-              <p>查看当前任务完整阶段日志，并对失败任务执行重试。</p>
+              <p>右侧给出当前任务的原始下载入口、阶段日志，以及失败后的重试/删除动作。</p>
             </div>
-            {selectedTaskDetail?.task.status === 'failed' ? (
-              <button type="button" className="buttonSecondary" onClick={() => void handleRetry()}>
-                重试任务
-              </button>
-            ) : null}
+            <div className="card__actions card__actions--inline">
+              {selectedTaskDetail?.task.status === 'failed' ? (
+                <>
+                  <motion.button type="button" className="buttonSecondary" onClick={() => void handleRetry()} {...pressableProps}>
+                    重试任务
+                  </motion.button>
+                  <motion.button
+                    type="button"
+                    className="buttonDanger"
+                    onClick={() => void handleDelete()}
+                    disabled={isDeleting}
+                    {...pressableProps}
+                  >
+                    {isDeleting ? '删除中...' : '放弃并删除'}
+                  </motion.button>
+                </>
+              ) : null}
+            </div>
           </div>
 
           {selectedTaskDetail ? (
@@ -325,25 +436,41 @@ export function TaskPanel() {
                   {selectedTaskDetail.task.date} {selectedTaskDetail.task.start_time} - {selectedTaskDetail.task.end_time}
                 </div>
                 <div>状态：{statusLabel(selectedTaskDetail.task.status)}</div>
-                <div>阶段：{selectedTaskDetail.task.stage}</div>
-                {selectedTaskDetail.task.last_error ? <div>错误：{selectedTaskDetail.task.last_error}</div> : null}
+                <div>阶段：{stageLabel(selectedTaskDetail.task.stage)}</div>
               </div>
 
-              <div className="detail__events">
-                {selectedTaskDetail.events.map((event) => (
-                  <div key={event.id} className="detail__event">
-                    <small>
-                      {event.created_at} / {event.stage} / {event.level}
-                    </small>
-                    <div>{event.message}</div>
-                  </div>
+              {selectedTaskDetail.task.last_error ? (
+                <div className="detailNotice detailNotice--error">{selectedTaskDetail.task.last_error}</div>
+              ) : (
+                <div className="detailNotice detailNotice--info">这里的按钮会直接下载当前任务已有的 JSON、日志和单节 Markdown 备份。</div>
+              )}
+
+              <div className="detailActionGrid">
+                {taskActions.map((action) => (
+                  <motion.a key={action.label} className="artifactPill" href={action.href} download {...pressableProps}>
+                    {action.label}
+                  </motion.a>
                 ))}
+              </div>
+
+              <div className="detailSection">
+                <h4>阶段日志</h4>
+                <div className="detail__events">
+                  {selectedTaskDetail.events.map((event) => (
+                    <motion.div key={event.id} className="detail__event" layout>
+                      <small>
+                        {event.created_at} / {event.stage} / {event.level}
+                      </small>
+                      <div>{event.message}</div>
+                    </motion.div>
+                  ))}
+                </div>
               </div>
             </>
           ) : (
-            <div className="emptyState">从左侧选择一个任务查看详情。</div>
+            <div className="emptyState">{detailMessage || '从左侧选择一个任务查看详情。'}</div>
           )}
-        </aside>
+        </motion.aside>
       </div>
     </section>
   )
