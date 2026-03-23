@@ -262,9 +262,9 @@ impl WorkerArtifactStore {
             .join("__classflow/artifacts/")
             .map_err(|error| AppError::Internal(format!("拼接 Worker 产物前缀失败: {error}")))?;
         {
-            let mut segments = url.path_segments_mut().map_err(|()| {
-                AppError::Internal("Worker 产物 URL 不能作为路径前缀".to_string())
-            })?;
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|()| AppError::Internal("Worker 产物 URL 不能作为路径前缀".to_string()))?;
             for segment in path.split('/') {
                 if segment.is_empty() {
                     continue;

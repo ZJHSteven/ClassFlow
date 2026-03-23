@@ -221,8 +221,9 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .await
         {
             Ok(result) => {
-                let transcript_json = serde_json::to_value(&result)
-                    .map_err(|error| AppError::Internal(format!("转写结果 JSON 化失败: {error}")))?;
+                let transcript_json = serde_json::to_value(&result).map_err(|error| {
+                    AppError::Internal(format!("转写结果 JSON 化失败: {error}"))
+                })?;
                 state
                     .repo
                     .save_transcript_checkpoint(task_id, &result.text_accu, &transcript_json)
@@ -413,7 +414,10 @@ async fn restore_transcript_checkpoint(
  * 2. 课程仍存在但还没有成功片段时，只保留 manifest，不保留 merged 总稿。
  * 3. 课程有成功片段时，同时重建 manifest 与 merged 总稿。
  */
-pub async fn sync_course_artifacts(state: AppState, sample_task: &crate::models::TaskRecord) -> AppResult<()> {
+pub async fn sync_course_artifacts(
+    state: AppState,
+    sample_task: &crate::models::TaskRecord,
+) -> AppResult<()> {
     let course_tasks = state
         .repo
         .list_tasks_by_course_key(&sample_task.course_key)
@@ -426,7 +430,10 @@ pub async fn sync_course_artifacts(state: AppState, sample_task: &crate::models:
         return Ok(());
     }
 
-    let summary = state.repo.get_course_detail(&sample_task.course_key).await?;
+    let summary = state
+        .repo
+        .get_course_detail(&sample_task.course_key)
+        .await?;
     let manifest = build_manifest_json(
         &course_tasks,
         &crate::models::CourseSummaryResponse {

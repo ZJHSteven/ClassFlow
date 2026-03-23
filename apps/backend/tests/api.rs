@@ -23,8 +23,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use backend::{
-    AppError,
-    AppConfig, AppState,
+    AppConfig, AppError, AppState,
     app::build_app,
     artifacts::{ArtifactStore, LocalArtifactStore},
     config::ArtifactStoreMode,
@@ -86,7 +85,10 @@ impl PipelineIo for MockPipeline {
     }
 
     async fn transcribe_file_url(&self, _file_url: &str) -> AppResult<NormalizedTranscript> {
-        let current = self.counters.transcribe_calls.fetch_add(1, Ordering::SeqCst);
+        let current = self
+            .counters
+            .transcribe_calls
+            .fetch_add(1, Ordering::SeqCst);
         if self.fail_first_transcription && current == 0 {
             return Err(AppError::External("模拟转写失败".to_string()));
         }
@@ -421,10 +423,7 @@ async fn retry_should_requeue_failed_task() {
     })
     .await;
 
-    let failed_task = repo
-        .get_task(&task_id)
-        .await
-        .expect("失败任务应能查询成功");
+    let failed_task = repo.get_task(&task_id).await.expect("失败任务应能查询成功");
     assert_eq!(
         failed_task.uploaded_source_url.as_deref(),
         Some("oss://mock/audio.wav"),
@@ -669,10 +668,7 @@ async fn retry_should_resume_from_transcript_checkpoint_after_artifact_failure()
     })
     .await;
 
-    let failed_task = repo
-        .get_task(&task_id)
-        .await
-        .expect("失败任务应能查询成功");
+    let failed_task = repo.get_task(&task_id).await.expect("失败任务应能查询成功");
     assert!(
         failed_task.transcript_json.is_some(),
         "写产物失败前应已保存转写检查点"

@@ -188,15 +188,16 @@ async fn delete_failed_task(
     let work_dir = state.config.temp_root.join("jobs").join(&task_id);
     state.pipeline.cleanup_dir(&work_dir).await?;
 
-    for maybe_path in [
+    for path in [
         task.segment_markdown_path.clone(),
         task.segment_json_path.clone(),
         task.course_manifest_path.clone(),
         task.merged_markdown_path.clone(),
-    ] {
-        if let Some(path) = maybe_path {
-            state.artifact_store.delete(&path).await?;
-        }
+    ]
+    .into_iter()
+    .flatten()
+    {
+        state.artifact_store.delete(&path).await?;
     }
 
     state.repo.delete_task_and_events(&task_id).await?;

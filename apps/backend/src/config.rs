@@ -178,8 +178,7 @@ impl AppConfig {
             r2_region: env_or("CLASSFLOW_R2_REGION", "auto"),
             artifact_proxy_base_url: env::var("CLASSFLOW_ARTIFACT_PROXY_BASE_URL")
                 .unwrap_or_default(),
-            artifact_proxy_token: env::var("CLASSFLOW_ARTIFACT_PROXY_TOKEN")
-                .unwrap_or_default(),
+            artifact_proxy_token: env::var("CLASSFLOW_ARTIFACT_PROXY_TOKEN").unwrap_or_default(),
             task_event_retention_days: env_or_parse("CLASSFLOW_TASK_EVENT_RETENTION_DAYS", 30)?,
             task_event_retention_rows_per_task: env_or_parse(
                 "CLASSFLOW_TASK_EVENT_RETENTION_ROWS_PER_TASK",
@@ -215,10 +214,6 @@ where
     <T as FromStr>::Err: std::fmt::Display,
 {
     let raw = env_or_any(keys, &default.to_string());
-    raw.parse::<T>().map_err(|error| {
-        AppError::Config(format!(
-            "{} 解析失败: {error}",
-            keys.join(" / "),
-        ))
-    })
+    raw.parse::<T>()
+        .map_err(|error| AppError::Config(format!("{} 解析失败: {error}", keys.join(" / "),)))
 }

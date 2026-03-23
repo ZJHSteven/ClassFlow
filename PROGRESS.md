@@ -23,7 +23,7 @@
 - 已完成：`smartclass-downloader` 已调整为“指向 Worker 域名时可留空 Bearer Token”，并通过 `node --check` 与 `node --test`。
 - 已完成：前端已补齐课程总稿/manifest 下载按钮，修复“总稿未生成时仍保留旧预览”的误导展示，并为任务/课程列表增加 hover、选中、按下反馈；新版 Worker 已重新发布。
 - 已确认：`https://classflow.zjhstudio.com` 当前会被 Cloudflare Access 重定向到登录页；如果要公开访问，需要你在 Cloudflare Zero Trust 里调整 Access 策略。
-- 正在做：已开始落地“下载器 + 上传鲁棒性 + 断点续跑”主线代码；当前已改动 `config / pipeline / worker / repository / tests`，正在跑自动化验证，准备确认 `aria2c` 下载、上传/转写重试、阶段级恢复是否全部闭环。
+- 正在做：后端“下载器 + 上传鲁棒性 + 断点续跑”代码与测试已落地，`cargo test -p backend` 已通过；当前正在补 `clippy -D warnings` 收尾和部署文档同步，准备进入可上线验证阶段。
 - 已完成：已把 Worker 的 R2 绑定骨架与后端 `worker` 产物模式代码接上；当前代码已支持“后端通过 Worker 私有接口写/读/删产物”，为后续 R2 生命周期、任务删除和前端下载入口打下基础。
 - 已完成：后端已补上“任务级产物下载接口、失败任务彻底删除接口、课程产物重建函数，以及 SQLite 事件日志按天数/每任务条数裁剪”的代码与测试。
 - 已完成：前端已重做任务台 / 课程库交互，补上了任务级下载、课程级下载、失败任务删除入口、固定高度的课程总稿预览区，以及基于 `motion` 的 hover / tap / 面板切换动画；对应 lint / test / build 已通过。

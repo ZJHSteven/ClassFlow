@@ -14,13 +14,7 @@
 2. 测试时可以只替换这一层，不必真的访问网络或执行 ffmpeg。
 */
 
-use std::{
-    collections::HashMap,
-    future::Future,
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, future::Future, path::Path, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use reqwest::{
@@ -412,9 +406,12 @@ impl PipelineIo for RealPipelineIo {
             fs::create_dir_all(parent).await?;
         }
 
-        let output_name = target_path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-            AppError::Internal(format!("下载目标文件名非法: {}", target_path.display()))
-        })?;
+        let output_name = target_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                AppError::Internal(format!("下载目标文件名非法: {}", target_path.display()))
+            })?;
         let output_dir = target_path.parent().ok_or_else(|| {
             AppError::Internal(format!("下载目标缺少父目录: {}", target_path.display()))
         })?;
@@ -532,13 +529,19 @@ impl PipelineIo for RealPipelineIo {
                 let policy = self.request_dashscope_policy().await?;
                 let policy_data = policy.get("data").unwrap_or(&policy);
                 let upload_host = pick_string(policy_data, &["upload_host", "uploadHost"])
-                    .ok_or_else(|| AppError::External(format!("百炼上传凭证缺少 upload_host: {policy}")))?;
+                    .ok_or_else(|| {
+                        AppError::External(format!("百炼上传凭证缺少 upload_host: {policy}"))
+                    })?;
                 let upload_dir = pick_string(policy_data, &["upload_dir", "uploadDir"])
-                    .ok_or_else(|| AppError::External(format!("百炼上传凭证缺少 upload_dir: {policy}")))?;
-                let policy_text = pick_string(policy_data, &["policy"])
-                    .ok_or_else(|| AppError::External(format!("百炼上传凭证缺少 policy: {policy}")))?;
-                let signature = pick_string(policy_data, &["signature"])
-                    .ok_or_else(|| AppError::External(format!("百炼上传凭证缺少 signature: {policy}")))?;
+                    .ok_or_else(|| {
+                        AppError::External(format!("百炼上传凭证缺少 upload_dir: {policy}"))
+                    })?;
+                let policy_text = pick_string(policy_data, &["policy"]).ok_or_else(|| {
+                    AppError::External(format!("百炼上传凭证缺少 policy: {policy}"))
+                })?;
+                let signature = pick_string(policy_data, &["signature"]).ok_or_else(|| {
+                    AppError::External(format!("百炼上传凭证缺少 signature: {policy}"))
+                })?;
                 let access_key_id = pick_string(
                     policy_data,
                     &["oss_access_key_id", "ossAccessKeyId", "OSSAccessKeyId"],
@@ -603,22 +606,25 @@ impl PipelineIo for RealPipelineIo {
                     Part::bytes(audio_bytes)
                         .file_name(filename.to_string())
                         .mime_str("audio/wav")
-                        .map_err(|error| AppError::Internal(format!("音频 MIME 设置失败: {error}")))?,
+                        .map_err(|error| {
+                            AppError::Internal(format!("音频 MIME 设置失败: {error}"))
+                        })?,
                 );
 
-                let normalized_host = if upload_host.starts_with("http://")
-                    || upload_host.starts_with("https://")
-                {
-                    upload_host
-                } else {
-                    format!("https://{}", upload_host.trim_start_matches('/'))
-                };
+                let normalized_host =
+                    if upload_host.starts_with("http://") || upload_host.starts_with("https://") {
+                        upload_host
+                    } else {
+                        format!("https://{}", upload_host.trim_start_matches('/'))
+                    };
 
                 let response = self
                     .client
                     .post(normalized_host)
                     .multipart(form)
-                    .timeout(Duration::from_secs_f64(self.config.upload_timeout_secs.max(1.0)))
+                    .timeout(Duration::from_secs_f64(
+                        self.config.upload_timeout_secs.max(1.0),
+                    ))
                     .send()
                     .await?;
 

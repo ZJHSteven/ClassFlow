@@ -19,7 +19,7 @@
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ffmpeg sqlite3 cloudflared
+sudo apt-get install -y ffmpeg sqlite3 cloudflared aria2
 rustup default stable
 ```
 
@@ -34,6 +34,7 @@ npx wrangler whoami
 说明：
 
 - `ffmpeg` 是后端从 MP4 抽音频的硬依赖，没有它就不可能进入 DashScope。
+- `aria2` 是视频下载器依赖；当前后端已经切到 `aria2c`，没有它就无法执行下载阶段。
 - `cloudflared` 负责把校园机本地 `127.0.0.1:8787` 暴露到公网。
 - `wrangler whoami` 用来确认 Cloudflare 账号已登录；如果没登录，先执行 `npx wrangler login`。
 
@@ -45,6 +46,11 @@ npx wrangler whoami
    - `CLASSFLOW_BEARER_TOKEN`
    - `DASHSCOPE_API_KEY`
    - `CLASSFLOW_ARTIFACT_STORE_MODE`
+   - 下载 / 上传稳健性相关参数至少要确认：
+     - `CLASSFLOW_DOWNLOAD_CONCURRENCY`
+     - `CLASSFLOW_UPLOAD_CONCURRENCY`
+     - `CLASSFLOW_TRANSCRIBE_CONCURRENCY`
+     - `CLASSFLOW_ARIA2_BIN`
    - 若使用 `worker` 模式，则还要填：
      - `CLASSFLOW_ARTIFACT_PROXY_BASE_URL`
      - `CLASSFLOW_ARTIFACT_PROXY_TOKEN`
@@ -59,6 +65,8 @@ npx wrangler whoami
 - `CLASSFLOW_BEARER_TOKEN` 是后端真正校验的共享鉴权值。
 - Worker 的 `BACKEND_TOKEN` 必须与 `CLASSFLOW_BEARER_TOKEN` 完全一致。
 - `CLASSFLOW_ARTIFACT_PROXY_TOKEN` 是“后端访问 Worker 私有产物接口”使用的单独密钥，不给浏览器、不写进 userscript。
+- 新版本把“上传并发”和“转写并发”拆开了；校园网弱上行环境下，建议先从 `2 / 2` 起步，不要再沿用旧的 `CLASSFLOW_DASHSCOPE_CONCURRENCY=8`。
+- 下载链路现在依赖 `aria2c`，并支持断点续传、自动重试、连接超时和低速退出；推荐直接使用 [env.example](/home/zjhsteven/ClassFlow/apps/backend/env.example) 里的默认稳健参数起步。
 - 如果 userscript 直连后端 Tunnel 域名，那么脚本里的 `Bearer Token` 也必须填这同一个值。
 - 如果 userscript 访问的是 Worker 域名，则推荐让脚本侧 `Bearer Token` 留空，由 Worker 代为补上。
 

@@ -854,14 +854,9 @@ mod tests {
             .expect("写事件应成功");
         }
 
-        repo.prune_task_events(30, 2)
-            .await
-            .expect("裁剪事件应成功");
+        repo.prune_task_events(30, 2).await.expect("裁剪事件应成功");
 
-        let detail = repo
-            .get_task_detail(task_id)
-            .await
-            .expect("查询详情应成功");
+        let detail = repo.get_task_detail(task_id).await.expect("查询详情应成功");
         assert!(detail.events.len() <= 2);
         assert_eq!(
             detail.events.last().map(|event| event.message.as_str()),
