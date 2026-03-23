@@ -23,8 +23,8 @@
 - 已完成：`smartclass-downloader` 已调整为“指向 Worker 域名时可留空 Bearer Token”，并通过 `node --check` 与 `node --test`。
 - 已完成：前端已补齐课程总稿/manifest 下载按钮，修复“总稿未生成时仍保留旧预览”的误导展示，并为任务/课程列表增加 hover、选中、按下反馈；新版 Worker 已重新发布。
 - 已确认：`https://classflow.zjhstudio.com` 当前会被 Cloudflare Access 重定向到登录页；如果要公开访问，需要你在 Cloudflare Zero Trust 里调整 Access 策略。
-- 正在做：梳理并落地后端后续改造方案，包括下载/上传并发拆分、失败重试、分稿下载接口、进度/速率采集，以及真正启用前的发布窗口安排。
-- 下一步：在不影响当前 release 服务的前提下，先把后端源代码级改造做完并用 debug/test 验证，再选择合适窗口切换 release。
+- 正在做：按新确认的方向重构存储与前端交互，具体包括“Worker 绑定 R2、后端经 Worker 私有接口写读删产物、失败任务保留 7 天、本地成功即删、前端补齐动画/下载/删除入口”。
+- 下一步：先改 Worker + 后端产物链路与接口，再改前端课程库/任务台交互，最后做完整测试并部署。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -34,6 +34,8 @@
 - 决策E：前端默认关闭定时轮询，只保留显式刷新和焦点回到页面时的同步。（原因：减少视觉闪烁、避免 Worker 按请求计费被无意义消耗。）
 - 决策F：userscript 优先访问 Worker，而不是直连后端 Tunnel。（原因：这样脚本端可不暴露后端 Bearer Token，配置更简单，也更不容易填错。）
 - 决策G：在 `classflow.zjhstudio.com` 仍受 Cloudflare Access 保护期间，公共脚本与自动请求默认仍以 `workers.dev` 或明确可访问域名为准；自定义域名主要作为你登录后的浏览器入口使用。（原因：未登录访问该域名当前仍会 302 到 Access 登录页。）
+- 决策H：新一轮存储改造采用“Worker 绑定 R2 + 后端调用 Worker 私有产物接口”方案，不继续使用后端直连 R2 作为最终形态。（原因：用户明确要求隐藏 R2 对外访问面，并统一从 Worker 下载。）
+- 决策I：本地长期产物不保留；成功任务在产物入库后立即清掉本地工作目录，失败任务仅保留 7 天。（原因：控制本地空间占用，同时保留必要的失败排查窗口。）
 
 ## 常见坑 / 复现方法
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
