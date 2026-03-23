@@ -23,11 +23,11 @@
 - 已完成：`smartclass-downloader` 已调整为“指向 Worker 域名时可留空 Bearer Token”，并通过 `node --check` 与 `node --test`。
 - 已完成：前端已补齐课程总稿/manifest 下载按钮，修复“总稿未生成时仍保留旧预览”的误导展示，并为任务/课程列表增加 hover、选中、按下反馈；新版 Worker 已重新发布。
 - 已确认：`https://classflow.zjhstudio.com` 当前会被 Cloudflare Access 重定向到登录页；如果要公开访问，需要你在 Cloudflare Zero Trust 里调整 Access 策略。
-- 正在做：后端“下载器 + 上传鲁棒性 + 断点续跑”代码与测试已落地，`cargo test -p backend` 已通过；当前正在补 `clippy -D warnings` 收尾和部署文档同步，准备进入可上线验证阶段。
+- 已完成：后端已切入 `aria2c` 下载链路，并补齐下载重试/超时/低速退出、上传与转写并发拆分、DashScope 请求重试、上传阶段重试、上传检查点与转写检查点持久化、阶段级断点续跑；对应 `cargo test -p backend` 与 `cargo clippy -p backend --all-targets --all-features -- -D warnings` 已通过。
 - 已完成：已把 Worker 的 R2 绑定骨架与后端 `worker` 产物模式代码接上；当前代码已支持“后端通过 Worker 私有接口写/读/删产物”，为后续 R2 生命周期、任务删除和前端下载入口打下基础。
 - 已完成：后端已补上“任务级产物下载接口、失败任务彻底删除接口、课程产物重建函数，以及 SQLite 事件日志按天数/每任务条数裁剪”的代码与测试。
 - 已完成：前端已重做任务台 / 课程库交互，补上了任务级下载、课程级下载、失败任务删除入口、固定高度的课程总稿预览区，以及基于 `motion` 的 hover / tap / 面板切换动画；对应 lint / test / build 已通过。
-- 下一步：先完成 `aria2c` 下载、上传重试/超时、阶段级断点续跑与相应测试，再考虑上线发布窗口。
+- 下一步：把新增后端环境变量写入真实 `backend.env`，确认服务器已安装 `aria2c`，然后执行一次 `cargo build --release` + `systemctl --user restart classflow-backend.service` 的线上切换与真实任务回归。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -39,6 +39,8 @@
 - 决策G：在 `classflow.zjhstudio.com` 仍受 Cloudflare Access 保护期间，公共脚本与自动请求默认仍以 `workers.dev` 或明确可访问域名为准；自定义域名主要作为你登录后的浏览器入口使用。（原因：未登录访问该域名当前仍会 302 到 Access 登录页。）
 - 决策H：新一轮存储改造采用“Worker 绑定 R2 + 后端调用 Worker 私有产物接口”方案，不继续使用后端直连 R2 作为最终形态。（原因：用户明确要求隐藏 R2 对外访问面，并统一从 Worker 下载。）
 - 决策I：本地长期产物不保留；成功任务在产物入库后立即清掉本地工作目录，失败任务仅保留 7 天。（原因：控制本地空间占用，同时保留必要的失败排查窗口。）
+- 决策J：视频下载链路已从 `reqwest + response.bytes()` 切换为 `aria2c` 命令行下载，并保留 `.aria2` sidecar 检查后再判定下载检查点有效。（原因：只有这样才能真正获得断点续传、低速判定和更可靠的中断恢复。）
+- 决策K：阶段级续跑以“数据库检查点 + 本地中间文件”双重判断实现：`uploaded_source_url`、`transcript_json` 负责跳过昂贵外部步骤，`source.mp4` / `audio.wav` 负责跳过本地重复计算。（原因：单靠数据库或单靠文件都不够稳，组合判断更适合真实弱网场景。）
 
 ## 常见坑 / 复现方法
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。

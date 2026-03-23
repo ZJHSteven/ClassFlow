@@ -14,9 +14,10 @@
 8. 已完成：已移除前端定时轮询，改为“手动刷新 + 页面重新聚焦同步”；并把 Worker 后端地址切换到 `classflow-backend.zjhstudio.com`。
 9. 已完成：统一整理后端 / Worker / userscript 的鉴权说明，完成 userscript“走 Worker 时可不手填 token”的改造，并完成共享 token 旋转与重新部署验证。
 10. 已完成：在不重启当前 release 后端的前提下，完成前端安全改动：总稿 404 误导修复、下载按钮补齐、交互反馈增强，并重新发布 Worker；后端下载/上传并发与进度采集改造留待后续启用。
+11. 已完成：后端已补齐下载/上传鲁棒性主线：`aria2c` 下载、下载重试与低速退出、上传与转写并发拆分、DashScope 请求重试、上传重试、上传/转写检查点持久化，以及“失败后从已完成阶段继续”的 API 集成测试。
 
 ## 当前决策
-- 后端使用 `axum + tokio + sqlx(sqlite) + reqwest`。
+- 后端使用 `axum + tokio + sqlx(sqlite) + reqwest + aria2c`。
 - 前端使用 Cloudflare 官方 React Workers 脚手架方向，浏览器只访问 Worker，不直接访问后端。
 - 课程归组键固定为 `学期 + 日期 + 课程名 + 老师`。
 - 第一版只报告已收片段数，不启发式推断课程理论节数。
