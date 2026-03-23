@@ -9,7 +9,10 @@ worker 的职责很单一：
 4. 失败时记录错误，供前端查看和重试。
 */
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use tokio::{fs, sync::mpsc};
 use tracing::{error, info};
@@ -21,7 +24,7 @@ use crate::{
         build_segment_paths,
     },
     error::{AppError, AppResult},
-    models::{TaskStage, TaskStatus},
+    models::{NormalizedTranscript, TaskRecord, TaskStage, TaskStatus},
     repository::TaskSuccessUpdate,
 };
 
@@ -91,7 +94,28 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .mark_task_running(task_id, TaskStage::Downloading)
         .await?;
 
-    if let Err(error) = state
+    let audio_ready = file_exists_and_non_empty(&extracted_audio).await?;
+    let video_ready = download_file_ready(&source_video).await?;
+
+    if audio_ready {
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::Downloading,
+                "检测到历史音频检查点，跳过重复下载视频",
+            )
+            .await?;
+    } else if video_ready {
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::Downloading,
+                "检测到历史视频检查点，跳过重复下载视频",
+            )
+            .await?;
+    } else if let Err(error) = state
         .pipeline
         .download_video(&task.mp4_url, &source_video)
         .await
@@ -111,7 +135,16 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             "开始使用 ffmpeg 抽取音频",
         )
         .await?;
-    if let Err(error) = state
+    if audio_ready {
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::ExtractingAudio,
+                "检测到历史音频检查点，跳过重复抽音频",
+            )
+            .await?;
+    } else if let Err(error) = state
         .pipeline
         .extract_audio(&source_video, &extracted_audio)
         .await
@@ -131,18 +164,37 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             "开始上传音频到百炼临时 OSS",
         )
         .await?;
-    let uploaded_source_url = match state
-        .pipeline
-        .upload_audio_for_transcription(&extracted_audio)
-        .await
+    let uploaded_source_url = if let Some(saved_url) = task
+        .uploaded_source_url
+        .clone()
+        .filter(|value| !value.trim().is_empty())
     {
-        Ok(url) => url,
-        Err(error) => {
-            state
-                .repo
-                .mark_task_failed(task_id, TaskStage::UploadingAudio, &error.to_string())
-                .await?;
-            return Err(error);
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::UploadingAudio,
+                "检测到历史上传检查点，跳过重复上传音频",
+            )
+            .await?;
+        saved_url
+    } else {
+        match state
+            .pipeline
+            .upload_audio_for_transcription(&extracted_audio)
+            .await
+        {
+            Ok(url) => {
+                state.repo.save_uploaded_source_url(task_id, &url).await?;
+                url
+            }
+            Err(error) => {
+                state
+                    .repo
+                    .mark_task_failed(task_id, TaskStage::UploadingAudio, &error.to_string())
+                    .await?;
+                return Err(error);
+            }
         }
     };
 
@@ -150,18 +202,40 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .repo
         .update_task_stage(task_id, TaskStage::Transcribing, "开始轮询百炼异步转写任务")
         .await?;
-    let transcript = match state
-        .pipeline
-        .transcribe_file_url(&uploaded_source_url)
-        .await
+    let transcript = if let Some(saved_transcript) =
+        restore_transcript_checkpoint(&task, &state, task_id).await?
     {
-        Ok(result) => result,
-        Err(error) => {
-            state
-                .repo
-                .mark_task_failed(task_id, TaskStage::Transcribing, &error.to_string())
-                .await?;
-            return Err(error);
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::Transcribing,
+                "检测到历史转写检查点，跳过重复调用百炼",
+            )
+            .await?;
+        saved_transcript
+    } else {
+        match state
+            .pipeline
+            .transcribe_file_url(&uploaded_source_url)
+            .await
+        {
+            Ok(result) => {
+                let transcript_json = serde_json::to_value(&result)
+                    .map_err(|error| AppError::Internal(format!("转写结果 JSON 化失败: {error}")))?;
+                state
+                    .repo
+                    .save_transcript_checkpoint(task_id, &result.text_accu, &transcript_json)
+                    .await?;
+                result
+            }
+            Err(error) => {
+                state
+                    .repo
+                    .mark_task_failed(task_id, TaskStage::Transcribing, &error.to_string())
+                    .await?;
+                return Err(error);
+            }
         }
     };
 
@@ -259,6 +333,72 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .await?;
 
     Ok(())
+}
+
+/**
+ * 判断某个中间文件是否存在且非空。
+ *
+ * 这样做的原因很直接：
+ *
+ * 1. 下载/抽音频中途异常时，经常会留下零字节或截断文件。
+ * 2. worker 只有确认文件里确实有内容，才允许把它当成“可复用检查点”。
+ */
+async fn file_exists_and_non_empty(path: &Path) -> AppResult<bool> {
+    match fs::metadata(path).await {
+        Ok(metadata) => Ok(metadata.is_file() && metadata.len() > 0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(AppError::Io(format!(
+            "读取检查点文件失败: path={}, error={error}",
+            path.display()
+        ))),
+    }
+}
+
+/**
+ * 下载阶段除了 `source.mp4` 本身，还要检查 aria2 的 sidecar 文件。
+ *
+ * `aria2c` 未完全结束时会留下 `source.mp4.aria2`。只要 sidecar 还在，就说明这次下载
+ * 还没有真正收口，不能把它当作“下次重试可直接跳过”的完整检查点。
+ */
+async fn download_file_ready(path: &Path) -> AppResult<bool> {
+    if !file_exists_and_non_empty(path).await? {
+        return Ok(false);
+    }
+
+    let aria2_sidecar = PathBuf::from(format!("{}.aria2", path.display()));
+    Ok(!aria2_sidecar.exists())
+}
+
+/**
+ * 尝试恢复已保存的转写检查点。
+ *
+ * 正常情况下，`transcript_json` 会被反序列化回 `NormalizedTranscript`。
+ * 如果历史数据已经损坏，这里不会直接把任务判死，而是记一条警告日志后回退到重新转写。
+ */
+async fn restore_transcript_checkpoint(
+    task: &TaskRecord,
+    state: &AppState,
+    task_id: &str,
+) -> AppResult<Option<NormalizedTranscript>> {
+    let Some(raw_transcript) = task.transcript_json.clone() else {
+        return Ok(None);
+    };
+
+    match serde_json::from_value::<NormalizedTranscript>(raw_transcript) {
+        Ok(transcript) => Ok(Some(transcript)),
+        Err(error) => {
+            state
+                .repo
+                .add_task_event(
+                    task_id,
+                    TaskStage::Transcribing.as_str(),
+                    "warn",
+                    &format!("发现损坏的转写检查点，已回退到重新转写: {error}"),
+                )
+                .await?;
+            Ok(None)
+        }
+    }
 }
 
 /**

@@ -44,15 +44,30 @@ pub struct AppConfig {
     pub local_artifact_root: PathBuf,
     pub task_worker_count: usize,
     pub download_concurrency: usize,
-    pub dashscope_concurrency: usize,
+    pub upload_concurrency: usize,
+    pub transcribe_concurrency: usize,
     pub r2_concurrency: usize,
     pub cleanup_hours: u64,
     pub artifact_store_mode: ArtifactStoreMode,
+    pub aria2_bin: String,
+    pub download_retry_attempts: u32,
+    pub download_retry_wait_secs: f64,
+    pub download_connect_timeout_secs: f64,
+    pub download_timeout_secs: f64,
+    pub download_split: usize,
+    pub download_connections_per_server: usize,
+    pub download_lowest_speed_limit_bytes: u64,
     pub dashscope_api_key: String,
     pub dashscope_model: String,
     pub dashscope_submit_url: String,
     pub dashscope_task_url_template: String,
     pub dashscope_upload_policy_url: String,
+    pub dashscope_request_timeout_secs: f64,
+    pub dashscope_request_retry_attempts: u32,
+    pub dashscope_request_retry_wait_secs: f64,
+    pub upload_retry_attempts: u32,
+    pub upload_retry_wait_secs: f64,
+    pub upload_timeout_secs: f64,
     pub dashscope_poll_interval_secs: f64,
     pub dashscope_poll_timeout_secs: f64,
     pub r2_bucket: String,
@@ -84,11 +99,41 @@ impl AppConfig {
             )),
             task_worker_count: env_or_parse("CLASSFLOW_TASK_WORKER_COUNT", 4)?,
             download_concurrency: env_or_parse("CLASSFLOW_DOWNLOAD_CONCURRENCY", 2)?,
-            dashscope_concurrency: env_or_parse("CLASSFLOW_DASHSCOPE_CONCURRENCY", 8)?,
+            upload_concurrency: env_or_parse_any(
+                &[
+                    "CLASSFLOW_UPLOAD_CONCURRENCY",
+                    "CLASSFLOW_DASHSCOPE_CONCURRENCY",
+                ],
+                2,
+            )?,
+            transcribe_concurrency: env_or_parse_any(
+                &[
+                    "CLASSFLOW_TRANSCRIBE_CONCURRENCY",
+                    "CLASSFLOW_DASHSCOPE_CONCURRENCY",
+                ],
+                2,
+            )?,
             r2_concurrency: env_or_parse("CLASSFLOW_R2_CONCURRENCY", 4)?,
             cleanup_hours: env_or_parse("CLASSFLOW_TMP_CLEANUP_HOURS", 168)?,
             artifact_store_mode: env_or("CLASSFLOW_ARTIFACT_STORE_MODE", "local")
                 .parse::<ArtifactStoreMode>()?,
+            aria2_bin: env_or("CLASSFLOW_ARIA2_BIN", "aria2c"),
+            download_retry_attempts: env_or_parse("CLASSFLOW_DOWNLOAD_RETRY_ATTEMPTS", 3)?,
+            download_retry_wait_secs: env_or_parse("CLASSFLOW_DOWNLOAD_RETRY_WAIT_SECS", 3.0)?,
+            download_connect_timeout_secs: env_or_parse(
+                "CLASSFLOW_DOWNLOAD_CONNECT_TIMEOUT_SECS",
+                15.0,
+            )?,
+            download_timeout_secs: env_or_parse("CLASSFLOW_DOWNLOAD_TIMEOUT_SECS", 60.0)?,
+            download_split: env_or_parse("CLASSFLOW_DOWNLOAD_SPLIT", 6)?,
+            download_connections_per_server: env_or_parse(
+                "CLASSFLOW_DOWNLOAD_CONNECTIONS_PER_SERVER",
+                6,
+            )?,
+            download_lowest_speed_limit_bytes: env_or_parse(
+                "CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES",
+                32 * 1024,
+            )?,
             dashscope_api_key: env::var("DASHSCOPE_API_KEY").unwrap_or_default(),
             dashscope_model: env_or("CLASSFLOW_DASHSCOPE_MODEL", "fun-asr"),
             dashscope_submit_url: env_or(
@@ -103,6 +148,21 @@ impl AppConfig {
                 "CLASSFLOW_DASHSCOPE_UPLOAD_POLICY_URL",
                 "https://dashscope.aliyuncs.com/api/v1/uploads",
             ),
+            dashscope_request_timeout_secs: env_or_parse(
+                "CLASSFLOW_DASHSCOPE_REQUEST_TIMEOUT_SECS",
+                60.0,
+            )?,
+            dashscope_request_retry_attempts: env_or_parse(
+                "CLASSFLOW_DASHSCOPE_REQUEST_RETRY_ATTEMPTS",
+                3,
+            )?,
+            dashscope_request_retry_wait_secs: env_or_parse(
+                "CLASSFLOW_DASHSCOPE_REQUEST_RETRY_WAIT_SECS",
+                3.0,
+            )?,
+            upload_retry_attempts: env_or_parse("CLASSFLOW_UPLOAD_RETRY_ATTEMPTS", 3)?,
+            upload_retry_wait_secs: env_or_parse("CLASSFLOW_UPLOAD_RETRY_WAIT_SECS", 3.0)?,
+            upload_timeout_secs: env_or_parse("CLASSFLOW_UPLOAD_TIMEOUT_SECS", 900.0)?,
             dashscope_poll_interval_secs: env_or_parse(
                 "CLASSFLOW_DASHSCOPE_POLL_INTERVAL_SECS",
                 1.0,
@@ -133,6 +193,12 @@ fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+fn env_or_any(keys: &[&str], default: &str) -> String {
+    keys.iter()
+        .find_map(|key| env::var(key).ok())
+        .unwrap_or_else(|| default.to_string())
+}
+
 fn env_or_parse<T>(key: &str, default: T) -> AppResult<T>
 where
     T: FromStr + ToString,
@@ -141,4 +207,18 @@ where
     let raw = env::var(key).unwrap_or_else(|_| default.to_string());
     raw.parse::<T>()
         .map_err(|error| AppError::Config(format!("{key} 解析失败: {error}")))
+}
+
+fn env_or_parse_any<T>(keys: &[&str], default: T) -> AppResult<T>
+where
+    T: FromStr + ToString,
+    <T as FromStr>::Err: std::fmt::Display,
+{
+    let raw = env_or_any(keys, &default.to_string());
+    raw.parse::<T>().map_err(|error| {
+        AppError::Config(format!(
+            "{} 解析失败: {error}",
+            keys.join(" / "),
+        ))
+    })
 }

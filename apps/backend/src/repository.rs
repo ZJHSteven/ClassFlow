@@ -350,6 +350,64 @@ impl Repository {
             .await
     }
 
+    /**
+     * 保存“上传阶段已经完成”的断点信息。
+     *
+     * 一旦 `uploaded_source_url` 已经拿到，后续即使任务失败，也没有必要重新上传同一个音频文件。
+     * 这里单独落库，就是为了让“上传成功、转写失败”的任务能直接从转写阶段继续。
+     */
+    pub async fn save_uploaded_source_url(
+        &self,
+        task_id: &str,
+        uploaded_source_url: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE tasks SET uploaded_source_url = ?, updated_at = ? WHERE id = ?")
+            .bind(uploaded_source_url)
+            .bind(&now)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await?;
+        self.add_task_event(
+            task_id,
+            TaskStage::UploadingAudio.as_str(),
+            "info",
+            "音频上传成功，已保存上传检查点",
+        )
+        .await
+    }
+
+    /**
+     * 保存“转写阶段已经完成”的断点信息。
+     *
+     * 这一步刻意放在“写产物之前”，因为对象存储、课程总稿合并都属于后处理步骤，
+     * 成本远低于重新上传和重新调用百炼。只要把转写结果先写进数据库，后续失败就能精准续跑。
+     */
+    pub async fn save_transcript_checkpoint(
+        &self,
+        task_id: &str,
+        transcript_text: &str,
+        transcript_json: &serde_json::Value,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE tasks SET transcript_text = ?, transcript_json = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(transcript_text)
+        .bind(transcript_json.to_string())
+        .bind(&now)
+        .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        self.add_task_event(
+            task_id,
+            TaskStage::Transcribing.as_str(),
+            "info",
+            "转写完成，已保存转写检查点",
+        )
+        .await
+    }
+
     pub async fn mark_task_succeeded(
         &self,
         task_id: &str,

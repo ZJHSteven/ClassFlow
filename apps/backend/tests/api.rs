@@ -23,6 +23,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use backend::{
+    AppError,
     AppConfig, AppState,
     app::build_app,
     artifacts::{ArtifactStore, LocalArtifactStore},
@@ -38,15 +39,24 @@ use serde_json::{Value, json};
 use tempfile::tempdir;
 use tower::ServiceExt;
 
+#[derive(Default)]
+struct MockPipelineCounters {
+    download_calls: AtomicUsize,
+    extract_calls: AtomicUsize,
+    upload_calls: AtomicUsize,
+    transcribe_calls: AtomicUsize,
+}
+
 #[derive(Clone)]
 struct MockPipeline {
-    call_count: Arc<AtomicUsize>,
+    counters: Arc<MockPipelineCounters>,
     fail_first_transcription: bool,
 }
 
 #[async_trait]
 impl PipelineIo for MockPipeline {
     async fn download_video(&self, _url: &str, target_path: &std::path::Path) -> AppResult<()> {
+        self.counters.download_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(parent) = target_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -59,6 +69,7 @@ impl PipelineIo for MockPipeline {
         _source_video_path: &std::path::Path,
         target_audio_path: &std::path::Path,
     ) -> AppResult<()> {
+        self.counters.extract_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(parent) = target_audio_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -70,13 +81,14 @@ impl PipelineIo for MockPipeline {
         &self,
         _audio_path: &std::path::Path,
     ) -> AppResult<String> {
+        self.counters.upload_calls.fetch_add(1, Ordering::SeqCst);
         Ok("oss://mock/audio.wav".to_string())
     }
 
     async fn transcribe_file_url(&self, _file_url: &str) -> AppResult<NormalizedTranscript> {
-        let current = self.call_count.fetch_add(1, Ordering::SeqCst);
+        let current = self.counters.transcribe_calls.fetch_add(1, Ordering::SeqCst);
         if self.fail_first_transcription && current == 0 {
-            return Err(backend::AppError::External("模拟转写失败".to_string()));
+            return Err(AppError::External("模拟转写失败".to_string()));
         }
 
         Ok(NormalizedTranscript {
@@ -97,7 +109,40 @@ impl PipelineIo for MockPipeline {
     }
 }
 
-async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile::TempDir) {
+#[derive(Default)]
+struct MockArtifactStoreCounters {
+    put_calls: AtomicUsize,
+}
+
+struct MockArtifactStore {
+    inner: LocalArtifactStore,
+    counters: Arc<MockArtifactStoreCounters>,
+    fail_first_put: bool,
+}
+
+#[async_trait]
+impl ArtifactStore for MockArtifactStore {
+    async fn put_bytes(&self, path: &str, content_type: &str, bytes: Vec<u8>) -> AppResult<()> {
+        let current = self.counters.put_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_first_put && current == 0 {
+            return Err(AppError::External("模拟产物写入失败".to_string()));
+        }
+        self.inner.put_bytes(path, content_type, bytes).await
+    }
+
+    async fn get_bytes(&self, path: &str) -> AppResult<backend::models::StoredObject> {
+        self.inner.get_bytes(path).await
+    }
+
+    async fn delete(&self, path: &str) -> AppResult<()> {
+        self.inner.delete(path).await
+    }
+}
+
+async fn build_test_state(
+    fail_first_transcription: bool,
+    fail_first_artifact_put: bool,
+) -> (AppState, tempfile::TempDir, Arc<MockPipelineCounters>) {
     let temp = tempdir().expect("临时目录应创建成功");
     let db_path = temp.path().join("classflow.db");
     let artifact_root = temp.path().join("artifacts");
@@ -112,10 +157,19 @@ async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile
         local_artifact_root: artifact_root.clone(),
         task_worker_count: 1,
         download_concurrency: 1,
-        dashscope_concurrency: 1,
+        upload_concurrency: 1,
+        transcribe_concurrency: 1,
         r2_concurrency: 1,
         cleanup_hours: 24,
         artifact_store_mode: ArtifactStoreMode::Local,
+        aria2_bin: "aria2c".to_string(),
+        download_retry_attempts: 3,
+        download_retry_wait_secs: 1.0,
+        download_connect_timeout_secs: 5.0,
+        download_timeout_secs: 30.0,
+        download_split: 2,
+        download_connections_per_server: 2,
+        download_lowest_speed_limit_bytes: 1024,
         dashscope_api_key: String::new(),
         dashscope_model: "fun-asr".to_string(),
         dashscope_submit_url:
@@ -123,6 +177,12 @@ async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile
         dashscope_task_url_template: "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
             .to_string(),
         dashscope_upload_policy_url: "https://dashscope.aliyuncs.com/api/v1/uploads".to_string(),
+        dashscope_request_timeout_secs: 30.0,
+        dashscope_request_retry_attempts: 2,
+        dashscope_request_retry_wait_secs: 0.1,
+        upload_retry_attempts: 2,
+        upload_retry_wait_secs: 0.1,
+        upload_timeout_secs: 30.0,
         dashscope_poll_interval_secs: 1.0,
         dashscope_poll_timeout_secs: 60.0,
         r2_bucket: String::new(),
@@ -139,9 +199,14 @@ async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile
     let repo = Repository::connect(&config.db_url)
         .await
         .expect("测试数据库应连接成功");
-    let artifact_store: Arc<dyn ArtifactStore> = Arc::new(LocalArtifactStore::new(artifact_root));
+    let pipeline_counters = Arc::new(MockPipelineCounters::default());
+    let artifact_store: Arc<dyn ArtifactStore> = Arc::new(MockArtifactStore {
+        inner: LocalArtifactStore::new(artifact_root),
+        counters: Arc::new(MockArtifactStoreCounters::default()),
+        fail_first_put: fail_first_artifact_put,
+    });
     let pipeline: Arc<dyn PipelineIo> = Arc::new(MockPipeline {
-        call_count: Arc::new(AtomicUsize::new(0)),
+        counters: pipeline_counters.clone(),
         fail_first_transcription,
     });
 
@@ -153,7 +218,7 @@ async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile
         queue: detached_queue(),
     };
     state.queue = spawn_workers(state.clone(), 1);
-    (state, temp)
+    (state, temp, pipeline_counters)
 }
 
 fn intake_request_json() -> Value {
@@ -195,7 +260,7 @@ async fn wait_for_condition(
 
 #[tokio::test]
 async fn health_should_not_require_auth() {
-    let (state, _temp) = build_test_state(false).await;
+    let (state, _temp, _counters) = build_test_state(false, false).await;
     let app = build_app(state);
 
     let response = app
@@ -213,7 +278,7 @@ async fn health_should_not_require_auth() {
 
 #[tokio::test]
 async fn protected_route_should_require_auth() {
-    let (state, _temp) = build_test_state(false).await;
+    let (state, _temp, _counters) = build_test_state(false, false).await;
     let app = build_app(state);
 
     let response = app
@@ -231,7 +296,7 @@ async fn protected_route_should_require_auth() {
 
 #[tokio::test]
 async fn intake_should_create_task_and_artifacts() {
-    let (state, _temp) = build_test_state(false).await;
+    let (state, _temp, _counters) = build_test_state(false, false).await;
     let repo = state.repo.clone();
 
     let intake_response = build_app(state.clone())
@@ -313,7 +378,7 @@ async fn intake_should_create_task_and_artifacts() {
 
 #[tokio::test]
 async fn retry_should_requeue_failed_task() {
-    let (state, _temp) = build_test_state(true).await;
+    let (state, _temp, counters) = build_test_state(true, false).await;
     let repo = state.repo.clone();
 
     let intake_response = build_app(state.clone())
@@ -356,6 +421,20 @@ async fn retry_should_requeue_failed_task() {
     })
     .await;
 
+    let failed_task = repo
+        .get_task(&task_id)
+        .await
+        .expect("失败任务应能查询成功");
+    assert_eq!(
+        failed_task.uploaded_source_url.as_deref(),
+        Some("oss://mock/audio.wav"),
+        "上传成功后应立刻持久化上传检查点"
+    );
+    assert!(
+        failed_task.transcript_json.is_none(),
+        "转写失败前不应提前写入转写检查点"
+    );
+
     let retry_response = build_app(state)
         .oneshot(
             Request::builder()
@@ -380,11 +459,32 @@ async fn retry_should_requeue_failed_task() {
         })
     })
     .await;
+
+    assert_eq!(
+        counters.download_calls.load(Ordering::SeqCst),
+        1,
+        "转写失败后再次重试不应重新下载视频"
+    );
+    assert_eq!(
+        counters.extract_calls.load(Ordering::SeqCst),
+        1,
+        "转写失败后再次重试不应重新抽取音频"
+    );
+    assert_eq!(
+        counters.upload_calls.load(Ordering::SeqCst),
+        1,
+        "转写失败后再次重试不应重新上传音频"
+    );
+    assert_eq!(
+        counters.transcribe_calls.load(Ordering::SeqCst),
+        2,
+        "转写失败后再次重试只应再次触发转写阶段"
+    );
 }
 
 #[tokio::test]
 async fn should_download_task_level_artifacts() {
-    let (state, _temp) = build_test_state(false).await;
+    let (state, _temp, _counters) = build_test_state(false, false).await;
     let repo = state.repo.clone();
 
     let intake_response = build_app(state.clone())
@@ -453,7 +553,7 @@ async fn should_download_task_level_artifacts() {
 
 #[tokio::test]
 async fn should_delete_failed_task_and_work_dir() {
-    let (state, _temp) = build_test_state(true).await;
+    let (state, _temp, _counters) = build_test_state(true, false).await;
     let repo = state.repo.clone();
 
     let intake_response = build_app(state.clone())
@@ -522,4 +622,105 @@ async fn should_delete_failed_task_and_work_dir() {
         .await
         .expect("查询任务应成功");
     assert!(tasks.is_empty(), "失败任务被删除后，任务列表应为空");
+}
+
+#[tokio::test]
+async fn retry_should_resume_from_transcript_checkpoint_after_artifact_failure() {
+    let (state, _temp, counters) = build_test_state(false, true).await;
+    let repo = state.repo.clone();
+
+    let intake_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/intake/batches")
+                .header("Authorization", "Bearer test-token")
+                .header("Content-Type", "application/json")
+                .body(Body::from(intake_request_json().to_string()))
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("intake 应返回响应");
+    assert_eq!(intake_response.status(), StatusCode::ACCEPTED);
+
+    let payload: Value = serde_json::from_slice(
+        &intake_response
+            .into_body()
+            .collect()
+            .await
+            .expect("响应体应可读取")
+            .to_bytes(),
+    )
+    .expect("响应体应是合法 JSON");
+    let task_id = payload["task_ids"][0]
+        .as_str()
+        .expect("应返回 task_id")
+        .to_string();
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Failed)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    let failed_task = repo
+        .get_task(&task_id)
+        .await
+        .expect("失败任务应能查询成功");
+    assert!(
+        failed_task.transcript_json.is_some(),
+        "写产物失败前应已保存转写检查点"
+    );
+
+    let retry_response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/tasks/{task_id}/retry"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("重试请求应返回响应");
+    assert_eq!(retry_response.status(), StatusCode::ACCEPTED);
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Succeeded)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    assert_eq!(
+        counters.download_calls.load(Ordering::SeqCst),
+        1,
+        "产物写入失败后再次重试不应重新下载视频"
+    );
+    assert_eq!(
+        counters.extract_calls.load(Ordering::SeqCst),
+        1,
+        "产物写入失败后再次重试不应重新抽取音频"
+    );
+    assert_eq!(
+        counters.upload_calls.load(Ordering::SeqCst),
+        1,
+        "产物写入失败后再次重试不应重新上传音频"
+    );
+    assert_eq!(
+        counters.transcribe_calls.load(Ordering::SeqCst),
+        1,
+        "产物写入失败后再次重试不应重新调用转写"
+    );
 }
