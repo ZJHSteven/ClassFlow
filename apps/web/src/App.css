@@ -133,6 +133,32 @@
   color: #6d7f7c;
 }
 
+.card__actions {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
+.syncHint {
+  color: #6d7f7c;
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.buttonSecondary {
+  padding: 10px 14px;
+  border: 1px solid rgba(17, 48, 56, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #143238;
+  font-weight: 700;
+}
+
+.buttonSecondary:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
 .filters {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -307,5 +333,9 @@
 
   .tabBar {
     flex-wrap: wrap;
+  }
+
+  .card__actions {
+    justify-items: stretch;
   }
 }

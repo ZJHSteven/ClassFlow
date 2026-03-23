@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 const fetchMock = vi.fn()
+const setIntervalSpy = vi.spyOn(window, 'setInterval')
 
 const taskListPayload = [
   {
@@ -113,21 +114,46 @@ function buildMockResponse(input: RequestInfo | URL): Response {
 describe('App', () => {
   beforeEach(() => {
     fetchMock.mockReset()
+    setIntervalSpy.mockClear()
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => buildMockResponse(input))
     vi.stubGlobal('fetch', fetchMock)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it('应该渲染任务列表并切换到课程库', async () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText('病理学')).toBeInTheDocument()
+      expect(screen.getAllByText('病理学').length).toBeGreaterThan(0)
     })
 
-    fireEvent.click(screen.getByRole('button', { name: '课程库' }))
+    fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
 
     await waitFor(() => {
       expect(screen.getByText('课程总稿预览')).toBeInTheDocument()
     })
+  })
+
+  it('不应该使用定时轮询，而应该提供手动刷新入口', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '刷新列表' }).length).toBeGreaterThan(0)
+    })
+
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 5000)
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 8000)
+
+    fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '刷新课程库' })).toBeInTheDocument()
+    })
+
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 5000)
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 8000)
   })
 })

@@ -5,10 +5,11 @@
  *
  * 1. 左侧负责任务筛选和列表。
  * 2. 右侧负责当前任务的详情与重试。
- * 3. 使用轻量轮询，保持状态变化能及时反映到界面上。
+ * 3. 默认不做定时轮询，避免界面频繁闪烁，也避免 Cloudflare Worker 无意义计费。
+ * 4. 采用“首次加载 + 手动刷新 + 页面重新回到前台时同步一次”的折中策略。
  */
 
-import { useEffect, useState } from 'react'
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getTaskDetail, listTasks, retryTask } from '../api'
 import type { TaskDetail, TaskStatus, TaskSummary } from '../types'
 
@@ -22,6 +23,25 @@ function statusLabel(status: TaskStatus) {
   return labelMap[status]
 }
 
+/**
+ * 把“最近同步时间”格式化成更适合界面阅读的短时间文本。
+ *
+ * 输入：
+ * - `timestamp`：ISO 时间字符串。
+ *
+ * 输出：
+ * - 返回 `HH:mm:ss` 形式的时间；若为空则返回“尚未同步”。
+ */
+function formatSyncTime(timestamp: string) {
+  if (!timestamp) {
+    return '尚未同步'
+  }
+
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour12: false,
+  })
+}
+
 export function TaskPanel() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [selectedTaskId, setSelectedTaskId] = useState<string>('')
@@ -31,52 +51,141 @@ export function TaskPanel() {
   const [courseFilter, setCourseFilter] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
+  const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
+  const listRequestIdRef = useRef<number>(0)
+  const detailRequestIdRef = useRef<number>(0)
+  const selectedTaskIdRef = useRef<string>('')
 
   useEffect(() => {
-    let isMounted = true
+    selectedTaskIdRef.current = selectedTaskId
+  }, [selectedTaskId])
 
-    const loadTasks = async () => {
-      try {
-        if (isMounted) {
-          setIsLoading(true)
-        }
-        const nextTasks = await listTasks({
-          status: statusFilter || undefined,
-          date: dateFilter || undefined,
-          course_name: courseFilter || undefined,
-        })
+  /**
+   * 单独刷新某个任务的详情。
+   *
+   * 这里把列表刷新和详情刷新拆开，是为了避免“切换当前选中任务”时还要重新拉整个列表。
+   * 另外使用 `requestId` 丢弃过期响应，防止前一次慢请求把新状态覆盖掉。
+   */
+  const loadTaskDetail = useCallback(async (taskId: string) => {
+    const requestId = detailRequestIdRef.current + 1
+    detailRequestIdRef.current = requestId
 
-        if (!isMounted) {
-          return
-        }
+    try {
+      const detail = await getTaskDetail(taskId)
+      if (detailRequestIdRef.current !== requestId) {
+        return
+      }
 
-        setTasks(nextTasks)
-        setErrorMessage('')
-
-        if (!selectedTaskId && nextTasks[0]) {
-          setSelectedTaskId(nextTasks[0].id)
-        }
-      } catch (error) {
-        if (isMounted) {
-          setErrorMessage(error instanceof Error ? error.message : '任务列表加载失败')
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false)
-        }
+      startTransition(() => {
+        setSelectedTaskDetail(detail)
+      })
+    } catch (error) {
+      if (detailRequestIdRef.current === requestId) {
+        setErrorMessage(error instanceof Error ? error.message : '任务详情加载失败')
       }
     }
+  }, [])
 
-    void loadTasks()
-    const timer = window.setInterval(() => {
-      void loadTasks()
-    }, 5000)
+  /**
+   * 刷新任务列表，并在必要时顺手同步当前选中任务的详情。
+   *
+   * 输入：
+   * - `blocking`：是否把这次刷新视为“阻塞式首次加载”。
+   * - `refreshDetail`：刷新完列表后，是否顺便刷新当前选中任务详情。
+   *
+   * 核心取舍：
+   * - 首次进入页面时显示完整加载态。
+   * - 后续刷新只显示轻量“同步中”状态，不再让整块内容闪一下。
+   * - 使用 `startTransition()` 把大块列表替换标记为非紧急更新，减少界面顿挫。
+   */
+  const loadTasks = useCallback(async (options?: { blocking?: boolean; refreshDetail?: boolean }) => {
+    const { blocking = false, refreshDetail = false } = options ?? {}
+    const requestId = listRequestIdRef.current + 1
+    listRequestIdRef.current = requestId
+
+    try {
+      if (blocking) {
+        setIsLoading(true)
+      } else {
+        setIsRefreshing(true)
+      }
+
+      const nextTasks = await listTasks({
+        status: statusFilter || undefined,
+        date: dateFilter || undefined,
+        course_name: courseFilter || undefined,
+      })
+
+      if (listRequestIdRef.current !== requestId) {
+        return
+      }
+
+      const nextSelectedTaskId = nextTasks.some((task) => task.id === selectedTaskIdRef.current)
+        ? selectedTaskIdRef.current
+        : nextTasks[0]?.id ?? ''
+
+      startTransition(() => {
+        setTasks(nextTasks)
+        setSelectedTaskId(nextSelectedTaskId)
+        setErrorMessage('')
+        setLastSyncedAt(new Date().toISOString())
+      })
+
+      if (refreshDetail) {
+        if (nextSelectedTaskId) {
+          await loadTaskDetail(nextSelectedTaskId)
+        } else {
+          startTransition(() => {
+            setSelectedTaskDetail(null)
+          })
+        }
+      }
+    } catch (error) {
+      if (listRequestIdRef.current === requestId) {
+        setErrorMessage(error instanceof Error ? error.message : '任务列表加载失败')
+      }
+    } finally {
+      if (listRequestIdRef.current === requestId) {
+        setIsLoading(false)
+        setIsRefreshing(false)
+      }
+    }
+  }, [courseFilter, dateFilter, loadTaskDetail, statusFilter])
+
+  useEffect(() => {
+    void loadTasks({
+      blocking: true,
+      refreshDetail: true,
+    })
+  }, [loadTasks])
+
+  useEffect(() => {
+    /**
+     * 只在“窗口重新聚焦”或“标签页重新可见”时同步一次。
+     *
+     * 这样既能在用户切回页面时看到比较新的状态，
+     * 又不会像轮询那样持续消耗 Worker 请求次数。
+     */
+    const syncWhenVisibleAgain = () => {
+      if (document.visibilityState !== 'visible') {
+        return
+      }
+
+      void loadTasks({
+        blocking: false,
+        refreshDetail: true,
+      })
+    }
+
+    window.addEventListener('focus', syncWhenVisibleAgain)
+    document.addEventListener('visibilitychange', syncWhenVisibleAgain)
 
     return () => {
-      isMounted = false
-      window.clearInterval(timer)
+      window.removeEventListener('focus', syncWhenVisibleAgain)
+      document.removeEventListener('visibilitychange', syncWhenVisibleAgain)
     }
-  }, [statusFilter, dateFilter, courseFilter, selectedTaskId])
+  }, [loadTasks])
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -84,35 +193,18 @@ export function TaskPanel() {
       return
     }
 
-    let isMounted = true
-
-    const loadTaskDetail = async () => {
-      try {
-        const detail = await getTaskDetail(selectedTaskId)
-        if (isMounted) {
-          setSelectedTaskDetail(detail)
-        }
-      } catch (error) {
-        if (isMounted) {
-          setErrorMessage(error instanceof Error ? error.message : '任务详情加载失败')
-        }
-      }
-    }
-
-    void loadTaskDetail()
-
-    return () => {
-      isMounted = false
-    }
-  }, [selectedTaskId])
+    void loadTaskDetail(selectedTaskId)
+  }, [loadTaskDetail, selectedTaskId])
 
   const handleRetry = async () => {
     if (!selectedTaskDetail) {
       return
     }
     await retryTask(selectedTaskDetail.task.id)
-    setSelectedTaskDetail(await getTaskDetail(selectedTaskDetail.task.id))
-    setTasks(await listTasks({}))
+    await loadTasks({
+      blocking: false,
+      refreshDetail: true,
+    })
   }
 
   return (
@@ -122,7 +214,23 @@ export function TaskPanel() {
           <div className="card__header">
             <div>
               <h2>任务队列</h2>
-              <p>实时查看当前任务在哪个阶段卡住，并按课程或日期快速过滤。</p>
+              <p>默认不做定时轮询；手动刷新，或切回页面时自动同步一次。</p>
+            </div>
+            <div className="card__actions">
+              <div className="syncHint">最近同步：{formatSyncTime(lastSyncedAt)}</div>
+              <button
+                type="button"
+                className="buttonSecondary"
+                onClick={() =>
+                  void loadTasks({
+                    blocking: false,
+                    refreshDetail: true,
+                  })
+                }
+                disabled={isRefreshing}
+              >
+                {isRefreshing ? '同步中...' : '刷新列表'}
+              </button>
             </div>
           </div>
 
@@ -182,6 +290,7 @@ export function TaskPanel() {
             </table>
           </div>
 
+          {isLoading ? <div className="emptyState">正在加载任务列表...</div> : null}
           {!isLoading && tasks.length === 0 ? <div className="emptyState">当前没有任务记录。</div> : null}
         </div>
 

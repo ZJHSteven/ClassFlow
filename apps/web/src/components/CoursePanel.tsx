@@ -5,12 +5,26 @@
  *
  * 1. 左侧按课程维度浏览。
  * 2. 右侧展示课程总稿 Markdown 预览。
- * 3. 如果课程还有失败片段，也能在列表里一眼看出来。
+ * 3. 默认不做后台轮询，避免列表定时闪烁，也避免 Worker 代理产生无意义请求。
+ * 4. 采用“首次加载 + 手动刷新 + 页面回到前台时同步”的策略。
  */
 
-import { useEffect, useState } from 'react'
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getCourseDetail, getCourseMarkdown, listCourses } from '../api'
 import type { CourseDetail, CourseSummary } from '../types'
+
+/**
+ * 把最近同步时间格式化成短时间。
+ */
+function formatSyncTime(timestamp: string) {
+  if (!timestamp) {
+    return '尚未同步'
+  }
+
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour12: false,
+  })
+}
 
 export function CoursePanel() {
   const [courses, setCourses] = useState<CourseSummary[]>([])
@@ -21,43 +35,133 @@ export function CoursePanel() {
   const [dateFilter, setDateFilter] = useState<string>('')
   const [courseFilter, setCourseFilter] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
+  const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
+  const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
+  const listRequestIdRef = useRef<number>(0)
+  const detailRequestIdRef = useRef<number>(0)
+  const selectedCourseKeyRef = useRef<string>('')
 
   useEffect(() => {
-    let isMounted = true
+    selectedCourseKeyRef.current = selectedCourseKey
+  }, [selectedCourseKey])
 
-    const loadCourses = async () => {
-      try {
-        const nextCourses = await listCourses({
-          semester: semesterFilter || undefined,
-          date: dateFilter || undefined,
-          course_name: courseFilter || undefined,
-        })
-        if (!isMounted) {
-          return
-        }
+  /**
+   * 刷新单个课程详情与总稿。
+   *
+   * 课程详情页需要同时取详情 JSON 和 Markdown 正文，
+   * 所以这里并行拉取两条请求，减少等待时间。
+   */
+  const loadCourseDetail = useCallback(async (courseKey: string) => {
+    const requestId = detailRequestIdRef.current + 1
+    detailRequestIdRef.current = requestId
 
-        setCourses(nextCourses)
-        setErrorMessage('')
-        if (!selectedCourseKey && nextCourses[0]) {
-          setSelectedCourseKey(nextCourses[0].course_key)
-        }
-      } catch (error) {
-        if (isMounted) {
-          setErrorMessage(error instanceof Error ? error.message : '课程库加载失败')
-        }
+    try {
+      const [detail, markdown] = await Promise.all([
+        getCourseDetail(courseKey),
+        getCourseMarkdown(courseKey),
+      ])
+
+      if (detailRequestIdRef.current !== requestId) {
+        return
+      }
+
+      startTransition(() => {
+        setSelectedCourseDetail(detail)
+        setMarkdownPreview(markdown)
+      })
+    } catch (error) {
+      if (detailRequestIdRef.current === requestId) {
+        setErrorMessage(error instanceof Error ? error.message : '课程详情加载失败')
       }
     }
+  }, [])
 
-    void loadCourses()
-    const timer = window.setInterval(() => {
-      void loadCourses()
-    }, 8000)
+  /**
+   * 刷新课程列表；必要时顺带刷新当前课程详情。
+   */
+  const loadCourses = useCallback(async (options?: { blocking?: boolean; refreshDetail?: boolean }) => {
+    const { blocking = false, refreshDetail = false } = options ?? {}
+    const requestId = listRequestIdRef.current + 1
+    listRequestIdRef.current = requestId
+
+    try {
+      if (blocking) {
+        setIsLoading(true)
+      } else {
+        setIsRefreshing(true)
+      }
+
+      const nextCourses = await listCourses({
+        semester: semesterFilter || undefined,
+        date: dateFilter || undefined,
+        course_name: courseFilter || undefined,
+      })
+
+      if (listRequestIdRef.current !== requestId) {
+        return
+      }
+
+      const nextSelectedCourseKey = nextCourses.some((course) => course.course_key === selectedCourseKeyRef.current)
+        ? selectedCourseKeyRef.current
+        : nextCourses[0]?.course_key ?? ''
+
+      startTransition(() => {
+        setCourses(nextCourses)
+        setSelectedCourseKey(nextSelectedCourseKey)
+        setErrorMessage('')
+        setLastSyncedAt(new Date().toISOString())
+      })
+
+      if (refreshDetail) {
+        if (nextSelectedCourseKey) {
+          await loadCourseDetail(nextSelectedCourseKey)
+        } else {
+          startTransition(() => {
+            setSelectedCourseDetail(null)
+            setMarkdownPreview('')
+          })
+        }
+      }
+    } catch (error) {
+      if (listRequestIdRef.current === requestId) {
+        setErrorMessage(error instanceof Error ? error.message : '课程库加载失败')
+      }
+    } finally {
+      if (listRequestIdRef.current === requestId) {
+        setIsLoading(false)
+        setIsRefreshing(false)
+      }
+    }
+  }, [courseFilter, dateFilter, loadCourseDetail, semesterFilter])
+
+  useEffect(() => {
+    void loadCourses({
+      blocking: true,
+      refreshDetail: true,
+    })
+  }, [loadCourses])
+
+  useEffect(() => {
+    const syncWhenVisibleAgain = () => {
+      if (document.visibilityState !== 'visible') {
+        return
+      }
+
+      void loadCourses({
+        blocking: false,
+        refreshDetail: true,
+      })
+    }
+
+    window.addEventListener('focus', syncWhenVisibleAgain)
+    document.addEventListener('visibilitychange', syncWhenVisibleAgain)
 
     return () => {
-      isMounted = false
-      window.clearInterval(timer)
+      window.removeEventListener('focus', syncWhenVisibleAgain)
+      document.removeEventListener('visibilitychange', syncWhenVisibleAgain)
     }
-  }, [semesterFilter, dateFilter, courseFilter, selectedCourseKey])
+  }, [loadCourses])
 
   useEffect(() => {
     if (!selectedCourseKey) {
@@ -66,29 +170,8 @@ export function CoursePanel() {
       return
     }
 
-    let isMounted = true
-
-    const loadCourseDetail = async () => {
-      try {
-        const detail = await getCourseDetail(selectedCourseKey)
-        const markdown = await getCourseMarkdown(selectedCourseKey)
-        if (isMounted) {
-          setSelectedCourseDetail(detail)
-          setMarkdownPreview(markdown)
-        }
-      } catch (error) {
-        if (isMounted) {
-          setErrorMessage(error instanceof Error ? error.message : '课程详情加载失败')
-        }
-      }
-    }
-
-    void loadCourseDetail()
-
-    return () => {
-      isMounted = false
-    }
-  }, [selectedCourseKey])
+    void loadCourseDetail(selectedCourseKey)
+  }, [loadCourseDetail, selectedCourseKey])
 
   return (
     <section className="panel">
@@ -97,7 +180,23 @@ export function CoursePanel() {
           <div className="card__header">
             <div>
               <h2>课程库</h2>
-              <p>以“课程”而不是“单个任务”的视角审查最终交付物。</p>
+              <p>以“课程”而不是“单个任务”的视角审查最终交付物，并避免后台定时轮询。</p>
+            </div>
+            <div className="card__actions">
+              <div className="syncHint">最近同步：{formatSyncTime(lastSyncedAt)}</div>
+              <button
+                type="button"
+                className="buttonSecondary"
+                onClick={() =>
+                  void loadCourses({
+                    blocking: false,
+                    refreshDetail: true,
+                  })
+                }
+                disabled={isRefreshing}
+              >
+                {isRefreshing ? '同步中...' : '刷新课程库'}
+              </button>
             </div>
           </div>
 
@@ -149,7 +248,8 @@ export function CoursePanel() {
             </table>
           </div>
 
-          {courses.length === 0 ? <div className="emptyState">当前没有课程总稿可展示。</div> : null}
+          {isLoading ? <div className="emptyState">正在加载课程列表...</div> : null}
+          {!isLoading && courses.length === 0 ? <div className="emptyState">当前没有课程总稿可展示。</div> : null}
         </div>
 
         <aside className="card card--padded detail">
