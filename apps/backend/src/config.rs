@@ -62,6 +62,8 @@ pub struct AppConfig {
     pub r2_region: String,
     pub artifact_proxy_base_url: String,
     pub artifact_proxy_token: String,
+    pub task_event_retention_days: u64,
+    pub task_event_retention_rows_per_task: u64,
 }
 
 impl AppConfig {
@@ -118,6 +120,11 @@ impl AppConfig {
                 .unwrap_or_default(),
             artifact_proxy_token: env::var("CLASSFLOW_ARTIFACT_PROXY_TOKEN")
                 .unwrap_or_default(),
+            task_event_retention_days: env_or_parse("CLASSFLOW_TASK_EVENT_RETENTION_DAYS", 30)?,
+            task_event_retention_rows_per_task: env_or_parse(
+                "CLASSFLOW_TASK_EVENT_RETENTION_ROWS_PER_TASK",
+                200,
+            )?,
         })
     }
 }

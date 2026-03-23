@@ -179,25 +179,39 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .await?;
 
     let segment_markdown = build_segment_markdown(&current_task, &transcript);
-    state
+    if let Err(error) = state
         .artifact_store
         .put_bytes(
             &segment_markdown_path,
             "text/markdown; charset=utf-8",
             segment_markdown.into_bytes(),
         )
-        .await?;
+        .await
+    {
+        state
+            .repo
+            .mark_task_failed(task_id, TaskStage::StoringArtifacts, &error.to_string())
+            .await?;
+        return Err(error);
+    }
 
     let segment_json = serde_json::to_vec_pretty(&transcript)
         .map_err(|error| AppError::Internal(format!("序列化单节 JSON 失败: {error}")))?;
-    state
+    if let Err(error) = state
         .artifact_store
         .put_bytes(
             &segment_json_path,
             "application/json; charset=utf-8",
             segment_json,
         )
-        .await?;
+        .await
+    {
+        state
+            .repo
+            .mark_task_failed(task_id, TaskStage::StoringArtifacts, &error.to_string())
+            .await?;
+        return Err(error);
+    }
 
     state
         .repo
@@ -226,25 +240,53 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         )
         .await?;
 
+    if let Err(error) = sync_course_artifacts(state.clone(), &current_task).await {
+        state
+            .repo
+            .mark_task_failed(task_id, TaskStage::MergingCourse, &error.to_string())
+            .await?;
+        return Err(error);
+    }
+
+    state
+        .repo
+        .update_task_stage(task_id, TaskStage::Cleanup, "开始清理本地临时目录")
+        .await?;
+    state.pipeline.cleanup_dir(&work_dir).await?;
+    state
+        .repo
+        .update_task_stage(task_id, TaskStage::Done, "任务已完成")
+        .await?;
+
+    Ok(())
+}
+
+/**
+ * 按课程维度重建 manifest / merged 产物。
+ *
+ * 这个函数专门抽出来，是因为它不仅会在“任务成功后”调用，
+ * 后续“失败任务被用户彻底删除”时也需要复用同一套逻辑来刷新课程聚合结果。
+ *
+ * 规则：
+ *
+ * 1. 课程已不存在时，删除旧的 manifest / merged 对象。
+ * 2. 课程仍存在但还没有成功片段时，只保留 manifest，不保留 merged 总稿。
+ * 3. 课程有成功片段时，同时重建 manifest 与 merged 总稿。
+ */
+pub async fn sync_course_artifacts(state: AppState, sample_task: &crate::models::TaskRecord) -> AppResult<()> {
     let course_tasks = state
         .repo
-        .list_tasks_by_course_key(&current_task.course_key)
+        .list_tasks_by_course_key(&sample_task.course_key)
         .await?;
-    let summary = state
-        .repo
-        .get_course_detail(&current_task.course_key)
-        .await?;
+    let (manifest_path, merged_markdown_path) = build_course_paths(sample_task);
 
-    let merged_markdown = build_merged_markdown(&course_tasks);
-    state
-        .artifact_store
-        .put_bytes(
-            &merged_markdown_path,
-            "text/markdown; charset=utf-8",
-            merged_markdown.into_bytes(),
-        )
-        .await?;
+    if course_tasks.is_empty() {
+        state.artifact_store.delete(&manifest_path).await?;
+        state.artifact_store.delete(&merged_markdown_path).await?;
+        return Ok(());
+    }
 
+    let summary = state.repo.get_course_detail(&sample_task.course_key).await?;
     let manifest = build_manifest_json(
         &course_tasks,
         &crate::models::CourseSummaryResponse {
@@ -256,8 +298,12 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             received_segment_count: summary.received_segment_count,
             successful_segment_count: summary.successful_segment_count,
             has_failed_segment: summary.has_failed_segment,
-            merged_markdown_path: summary.merged_markdown_path.clone(),
-            manifest_path: summary.manifest_path.clone(),
+            merged_markdown_path: if summary.successful_segment_count > 0 {
+                Some(merged_markdown_path.clone())
+            } else {
+                None
+            },
+            manifest_path: Some(manifest_path.clone()),
             updated_at: chrono::Utc::now(),
         },
     );
@@ -272,17 +318,20 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         )
         .await?;
 
-    state
-        .repo
-        .update_task_stage(task_id, TaskStage::Cleanup, "开始清理本地临时目录")
-        .await?;
-    state.pipeline.cleanup_dir(&work_dir).await?;
-    state
-        .repo
-        .update_task_stage(task_id, TaskStage::Done, "任务已完成")
-        .await?;
+    if summary.successful_segment_count == 0 {
+        state.artifact_store.delete(&merged_markdown_path).await?;
+        return Ok(());
+    }
 
-    Ok(())
+    let merged_markdown = build_merged_markdown(&course_tasks);
+    state
+        .artifact_store
+        .put_bytes(
+            &merged_markdown_path,
+            "text/markdown; charset=utf-8",
+            merged_markdown.into_bytes(),
+        )
+        .await
 }
 
 pub async fn cleanup_stale_temp_dirs(root: &PathBuf, max_age_hours: u64) -> AppResult<usize> {

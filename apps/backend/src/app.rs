@@ -42,6 +42,14 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
     let state = build_state(config).await?;
     let router = build_app(state.clone());
 
+    state
+        .repo
+        .prune_task_events(
+            state.config.task_event_retention_days,
+            state.config.task_event_retention_rows_per_task,
+        )
+        .await?;
+
     let recoverable_task_ids = state.repo.list_recoverable_task_ids().await?;
     for task_id in recoverable_task_ids {
         if let Err(error) = state.queue.enqueue(task_id.clone()) {

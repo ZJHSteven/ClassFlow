@@ -132,6 +132,8 @@ async fn build_test_state(fail_first_transcription: bool) -> (AppState, tempfile
         r2_region: "auto".to_string(),
         artifact_proxy_base_url: String::new(),
         artifact_proxy_token: String::new(),
+        task_event_retention_days: 30,
+        task_event_retention_rows_per_task: 200,
     };
 
     let repo = Repository::connect(&config.db_url)
@@ -378,4 +380,146 @@ async fn retry_should_requeue_failed_task() {
         })
     })
     .await;
+}
+
+#[tokio::test]
+async fn should_download_task_level_artifacts() {
+    let (state, _temp) = build_test_state(false).await;
+    let repo = state.repo.clone();
+
+    let intake_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/intake/batches")
+                .header("Authorization", "Bearer test-token")
+                .header("Content-Type", "application/json")
+                .body(Body::from(intake_request_json().to_string()))
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("intake 请求应返回响应");
+
+    let payload: Value = serde_json::from_slice(
+        &intake_response
+            .into_body()
+            .collect()
+            .await
+            .expect("响应体应可读取")
+            .to_bytes(),
+    )
+    .expect("响应体应是合法 JSON");
+    let task_id = payload["task_ids"][0]
+        .as_str()
+        .expect("应返回 task_id")
+        .to_string();
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Succeeded)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    let segment_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tasks/{task_id}/artifacts/segment.md"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("片段请求应成功");
+    assert_eq!(segment_response.status(), StatusCode::OK);
+
+    let events_response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tasks/{task_id}/artifacts/events.json"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("事件请求应成功");
+    assert_eq!(events_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn should_delete_failed_task_and_work_dir() {
+    let (state, _temp) = build_test_state(true).await;
+    let repo = state.repo.clone();
+
+    let intake_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/intake/batches")
+                .header("Authorization", "Bearer test-token")
+                .header("Content-Type", "application/json")
+                .body(Body::from(intake_request_json().to_string()))
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("intake 应返回响应");
+    assert_eq!(intake_response.status(), StatusCode::ACCEPTED);
+
+    let payload: Value = serde_json::from_slice(
+        &intake_response
+            .into_body()
+            .collect()
+            .await
+            .expect("响应体应可读取")
+            .to_bytes(),
+    )
+    .expect("响应体应是合法 JSON");
+    let task_id = payload["task_ids"][0]
+        .as_str()
+        .expect("应返回 task_id")
+        .to_string();
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Failed)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    let work_dir = state.config.temp_root.join("jobs").join(&task_id);
+    assert!(work_dir.exists(), "失败任务的工作目录应保留下来");
+
+    let delete_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/tasks/{task_id}"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("删除请求应返回响应");
+    assert_eq!(delete_response.status(), StatusCode::OK);
+
+    assert!(!work_dir.exists(), "删除失败任务后应清掉本地工作目录");
+    let tasks = repo
+        .list_tasks(&TaskListQuery {
+            status: None,
+            date: None,
+            course_name: None,
+        })
+        .await
+        .expect("查询任务应成功");
+    assert!(tasks.is_empty(), "失败任务被删除后，任务列表应为空");
 }

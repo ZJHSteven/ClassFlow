@@ -14,20 +14,26 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde_json::json;
 
 use crate::{
     app::AppState,
     error::{AppError, AppResult},
-    models::{CourseListQuery, IntakeBatchRequest, TaskListQuery},
+    models::{CourseListQuery, IntakeBatchRequest, TaskListQuery, TaskStatus},
+    worker::sync_course_artifacts,
 };
 
 pub fn build_router(state: AppState) -> Router {
     let protected_routes = Router::new()
         .route("/tasks", get(list_tasks))
         .route("/tasks/{task_id}", get(get_task_detail))
+        .route("/tasks/{task_id}", delete(delete_failed_task))
+        .route(
+            "/tasks/{task_id}/artifacts/{artifact_name}",
+            get(get_task_artifact),
+        )
         .route("/tasks/{task_id}/retry", post(retry_task))
         .route("/courses", get(list_courses))
         .route("/courses/{course_key}", get(get_course_detail))
@@ -102,6 +108,103 @@ async fn retry_task(
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({"task_id": task_id, "status": "requeued"})),
+    ))
+}
+
+async fn get_task_artifact(
+    State(state): State<AppState>,
+    Path((task_id, artifact_name)): Path<(String, String)>,
+) -> AppResult<impl IntoResponse> {
+    let detail = state.repo.get_task_detail(&task_id).await?;
+    match artifact_name.as_str() {
+        "segment.md" => {
+            let path = detail
+                .task
+                .segment_markdown_path
+                .clone()
+                .ok_or_else(|| AppError::NotFound("任务还没有单节 Markdown".to_string()))?;
+            let stored = state.artifact_store.get_bytes(&path).await?;
+            Ok((
+                [(axum::http::header::CONTENT_TYPE, stored.content_type)],
+                stored.bytes,
+            )
+                .into_response())
+        }
+        "segment.json" => {
+            let path = detail
+                .task
+                .segment_json_path
+                .clone()
+                .ok_or_else(|| AppError::NotFound("任务还没有单节 JSON".to_string()))?;
+            let stored = state.artifact_store.get_bytes(&path).await?;
+            Ok((
+                [(axum::http::header::CONTENT_TYPE, stored.content_type)],
+                stored.bytes,
+            )
+                .into_response())
+        }
+        "events.json" => {
+            let bytes = serde_json::to_vec_pretty(&detail.events)
+                .map_err(|error| AppError::Internal(format!("序列化任务事件失败: {error}")))?;
+            Ok((
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/json; charset=utf-8".to_string(),
+                )],
+                bytes,
+            )
+                .into_response())
+        }
+        "task.json" => {
+            let bytes = serde_json::to_vec_pretty(&detail.task)
+                .map_err(|error| AppError::Internal(format!("序列化任务详情失败: {error}")))?;
+            Ok((
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/json; charset=utf-8".to_string(),
+                )],
+                bytes,
+            )
+                .into_response())
+        }
+        _ => Err(AppError::BadRequest(
+            "artifact_name 目前仅支持 segment.md / segment.json / events.json / task.json"
+                .to_string(),
+        )),
+    }
+}
+
+async fn delete_failed_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let task = state.repo.get_task(&task_id).await?;
+    if task.status != TaskStatus::Failed {
+        return Err(AppError::BadRequest(
+            "只有失败任务才能执行彻底删除".to_string(),
+        ));
+    }
+
+    let work_dir = state.config.temp_root.join("jobs").join(&task_id);
+    state.pipeline.cleanup_dir(&work_dir).await?;
+
+    for maybe_path in [
+        task.segment_markdown_path.clone(),
+        task.segment_json_path.clone(),
+        task.course_manifest_path.clone(),
+        task.merged_markdown_path.clone(),
+    ] {
+        if let Some(path) = maybe_path {
+            state.artifact_store.delete(&path).await?;
+        }
+    }
+
+    state.repo.delete_task_and_events(&task_id).await?;
+    sync_course_artifacts(state.clone(), &task).await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({"task_id": task_id, "status": "deleted"})),
     ))
 }
 

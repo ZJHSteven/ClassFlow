@@ -427,6 +427,70 @@ impl Repository {
         .await
     }
 
+    /**
+     * 彻底删除某个任务及其事件日志。
+     *
+     * 当前主要用于“失败任务我不再重试，直接清掉”的场景。
+     */
+    pub async fn delete_task_and_events(&self, task_id: &str) -> AppResult<()> {
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("DELETE FROM task_events WHERE task_id = ?")
+            .bind(task_id)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("DELETE FROM tasks WHERE id = ?")
+            .bind(task_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /**
+     * 裁剪 SQLite 中的任务事件日志。
+     *
+     * 分两步：
+     *
+     * 1. 先删掉超过保留天数的旧日志。
+     * 2. 再按“每个任务最多保留 N 条”裁掉最早事件。
+     *
+     * 这样能同时控制“绝对时间跨度”和“单任务异常刷屏”两类膨胀来源。
+     */
+    pub async fn prune_task_events(
+        &self,
+        retention_days: u64,
+        max_rows_per_task: u64,
+    ) -> AppResult<()> {
+        let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
+        sqlx::query("DELETE FROM task_events WHERE created_at < ?")
+            .bind(cutoff.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM task_events
+            WHERE id IN (
+                SELECT id FROM (
+                    SELECT
+                        id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY task_id
+                            ORDER BY created_at DESC, id DESC
+                        ) AS row_num
+                    FROM task_events
+                )
+                WHERE row_num > ?
+            )
+            "#,
+        )
+        .bind(max_rows_per_task as i64)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn list_tasks_by_course_key(&self, course_key: &str) -> AppResult<Vec<TaskRecord>> {
         let rows = sqlx::query("SELECT * FROM tasks WHERE course_key = ? ORDER BY start_time ASC, new_id ASC, created_at ASC")
             .bind(course_key)
@@ -710,5 +774,40 @@ mod tests {
         assert_eq!(task.status, TaskStatus::Pending);
         assert_eq!(task.stage, TaskStage::Queued);
         assert!(task.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn should_prune_task_events_by_count() {
+        let repo = repo().await;
+        let response = repo
+            .create_batch_with_tasks(&demo_request(), "2025-2026-2")
+            .await
+            .expect("写入成功");
+        let task_id = &response.task_ids[0];
+
+        for index in 0..5 {
+            repo.add_task_event(
+                task_id,
+                TaskStage::Queued.as_str(),
+                "info",
+                &format!("event-{index}"),
+            )
+            .await
+            .expect("写事件应成功");
+        }
+
+        repo.prune_task_events(30, 2)
+            .await
+            .expect("裁剪事件应成功");
+
+        let detail = repo
+            .get_task_detail(task_id)
+            .await
+            .expect("查询详情应成功");
+        assert!(detail.events.len() <= 2);
+        assert_eq!(
+            detail.events.last().map(|event| event.message.as_str()),
+            Some("event-4")
+        );
     }
 }
