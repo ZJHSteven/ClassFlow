@@ -1,7 +1,7 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
-- 现状：主仓库代码、自动化测试、真实 DashScope 冒烟、后端常驻服务、Cloudflare Worker 外网代理均已打通；Worker 已切到正式后端域名 `classflow-backend.zjhstudio.com`，前端页面已取消定时轮询。
+- 现状：主仓库代码、自动化测试、真实 DashScope 冒烟、后端常驻服务、Cloudflare Worker 外网代理均已打通；Worker 已切到正式后端域名 `classflow-backend.zjhstudio.com`，前端页面已取消定时轮询；本轮已完成“移除 reduced motion 降级 + 修复后端实时下载进度写回 + 重新部署前后端 + 真实任务验收”。
 - 已完成：方案已定稿；已确认本机具备 Rust、Node.js 与 ffmpeg；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支；已清理 `cargo new` 误生成的子仓库元数据。
 - 已完成：Rust 后端第一轮 `cargo check` 与单元测试已通过，核心骨架可编译。
 - 已完成：Rust 后端接口级测试已通过，验证了鉴权、任务执行、课程聚合、失败重试。
@@ -30,8 +30,11 @@
 - 已完成：本地代码已补齐“更显著的切页 / 按钮 / 行项交互反馈、长错误文本自动换行、受控下载按钮及浏览器侧下载进度/速率显示、任务详情里的下载/上传阶段进度条”；前端 `npm run lint`、`npm test`、`npm run build` 已再次通过。
 - 已完成：后端任务模型与 SQLite 已补齐 `progress_percent / transferred_bytes / total_bytes / rate_bytes_per_sec / eta_seconds` 五个实时传输字段；音频上传阶段会回写上传进度；此前下载阶段虽然已经接入了解析逻辑，但真实排查后确认仍存在“只在进程退出后统一写库”的时序问题。
 - 已完成：`aria2c` 的低速退出从“默认启用 32 KiB/s 阈值”改为“默认关闭，只有显式配置 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES > 0` 才启用”，避免校园网低速场景被误杀。
-- 正在做：按最终上线口径继续收口前端与后端。前端侧已移除 `useReducedMotion` / `MotionConfig reducedMotion` 相关分支，并把任务台改成“任务执行中自动短周期刷新”；后端侧已定位并修复 `aria2c` 下载进度采集的核心根因：原实现先 `wait()` 再读 stdout/stderr，导致运行中不会持续写库，现在已改为“进程运行中并发读取输出并即时上报进度”，同时补上“退出前已能收到进度快照”的回归测试；当前 `cargo fmt --check`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml` 已通过。
-- 下一步：重新跑后端/前端自动化测试，重新部署后端和 Worker，再用真实任务验证三件事：1）下载慢但不中断；2）前端能看到任务级下载/上传进度与速率；3）长错误文本不再撑破右侧详情卡片。
+- 已完成：前端已彻底移除 `useReducedMotion` / `MotionConfig reducedMotion` 相关分支，并把任务台改成“任务执行中自动短周期刷新”。
+- 已完成：后端已定位并修复 `aria2c` 下载进度采集的核心根因：原实现先 `wait()` 再读 stdout/stderr，导致运行中不会持续写库；现已改为“进程运行中并发读取输出并即时上报进度”，并补上“退出前已能收到进度快照”的回归测试。
+- 已完成：本轮验证与部署已完成：`cargo fmt --check`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、前端 `npm run lint`、`npm test`、`npm run build` 全部通过；后端 `systemd --user` 服务已重启到新 `release`，Worker 已发布到 `https://classflow-web.zhangjiahe0830.workers.dev`。
+- 已完成：真实任务 `a2d54821-60ad-4810-a44d-a74a7747a54a` 已验证通过两段进度链路：下载阶段一度显示 `99% / 471040 B/s / ETA 2s`，随后切到上传阶段显示 `18.90% / 1377435 B/s / ETA 50s`，证明前端现在能够拿到任务运行中的下载/上传进度与速率。
+- 下一步：继续观察这批真实任务的长周期稳定性，若后续还需要，再补“转写阶段更细粒度状态展示”或浏览器实机截图验收。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
