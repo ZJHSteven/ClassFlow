@@ -5,6 +5,32 @@ import App from './App'
 const fetchMock = vi.fn()
 const setIntervalSpy = vi.spyOn(window, 'setInterval')
 
+class MockEventSource {
+  static instances: MockEventSource[] = []
+
+  readonly url: string
+  readonly listeners = new Map<string, Set<(event: Event) => void>>()
+
+  constructor(url: string | URL) {
+    this.url = String(url)
+    MockEventSource.instances.push(this)
+  }
+
+  addEventListener(type: string, listener: (event: Event) => void) {
+    const listeners = this.listeners.get(type) ?? new Set<(event: Event) => void>()
+    listeners.add(listener)
+    this.listeners.set(type, listeners)
+  }
+
+  removeEventListener(type: string, listener: (event: Event) => void) {
+    this.listeners.get(type)?.delete(listener)
+  }
+
+  close() {
+    // 测试里不需要额外行为，保留空实现即可。
+  }
+}
+
 const taskListPayload = [
   {
     id: 'task-1',
@@ -117,8 +143,10 @@ describe('App', () => {
   beforeEach(() => {
     fetchMock.mockReset()
     setIntervalSpy.mockClear()
+    MockEventSource.instances.length = 0
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => buildMockResponse(input))
     vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('EventSource', MockEventSource)
   })
 
   afterEach(() => {
@@ -148,6 +176,7 @@ describe('App', () => {
 
     expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 5000)
     expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 8000)
+    expect(MockEventSource.instances[0]?.url).toContain('/api/v1/tasks/stream')
 
     fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
 

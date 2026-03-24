@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use tokio::signal;
+use tokio::sync::broadcast;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -35,6 +36,31 @@ pub struct AppState {
     pub artifact_store: Arc<dyn ArtifactStore>,
     pub pipeline: Arc<dyn PipelineIo>,
     pub queue: TaskQueue,
+    pub task_list_events: broadcast::Sender<()>,
+}
+
+impl AppState {
+    /**
+     * 向任务台订阅端广播“任务列表可能已经变化”。
+     *
+     * 这里故意只发送一个空信号，而不直接把完整任务数组塞进广播：
+     *
+     * 1. 广播频道主要承担“唤醒 SSE 推送协程”的职责，不负责长期缓存大对象。
+     * 2. 真实任务列表仍以数据库为准，SSE 端每次收到信号后再按当前筛选条件重新查询。
+     * 3. 即使短时间内连续触发多次更新，接收端也只需要知道“有变化了”，不需要逐条回放。
+     */
+    pub fn notify_task_list_changed(&self) {
+        let _ = self.task_list_events.send(());
+    }
+
+    /**
+     * 为每个 SSE 客户端创建独立的广播接收端。
+     *
+     * 这样每个浏览器页签都能按自己的连接生命周期消费更新，不会互相干扰。
+     */
+    pub fn subscribe_task_list_events(&self) -> broadcast::Receiver<()> {
+        self.task_list_events.subscribe()
+    }
 }
 
 pub async fn run_server(config: AppConfig) -> AppResult<()> {
@@ -90,6 +116,7 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
     let repo = Repository::connect(&config.db_url).await?;
     let artifact_store = build_artifact_store(&config).await?;
     let pipeline: Arc<dyn PipelineIo> = Arc::new(RealPipelineIo::new(config.clone()));
+    let (task_list_events, _) = broadcast::channel::<()>(256);
 
     let placeholder_queue = spawn_workers_placeholder();
     let mut state = AppState {
@@ -98,6 +125,7 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
         artifact_store,
         pipeline,
         queue: placeholder_queue,
+        task_list_events,
     };
 
     let queue = spawn_workers(state.clone(), config.task_worker_count);

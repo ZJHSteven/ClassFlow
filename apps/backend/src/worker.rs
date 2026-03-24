@@ -106,6 +106,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .repo
         .mark_task_running(task_id, TaskStage::Downloading)
         .await?;
+    state.notify_task_list_changed();
 
     let audio_ready = file_exists_and_non_empty(&extracted_audio).await?;
     let video_ready = download_file_ready(&source_video).await?;
@@ -137,6 +138,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .repo
             .mark_task_failed(task_id, TaskStage::Downloading, &error.to_string())
             .await?;
+        state.notify_task_list_changed();
         return Err(error);
     }
 
@@ -148,6 +150,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             "开始使用 ffmpeg 抽取音频",
         )
         .await?;
+    state.notify_task_list_changed();
     if audio_ready {
         state
             .repo
@@ -166,6 +169,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .repo
             .mark_task_failed(task_id, TaskStage::ExtractingAudio, &error.to_string())
             .await?;
+        state.notify_task_list_changed();
         return Err(error);
     }
 
@@ -177,6 +181,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             "开始上传音频到百炼临时 OSS",
         )
         .await?;
+    state.notify_task_list_changed();
     let uploaded_source_url = if let Some(saved_url) = task
         .uploaded_source_url
         .clone()
@@ -199,6 +204,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         {
             Ok(url) => {
                 state.repo.save_uploaded_source_url(task_id, &url).await?;
+                state.notify_task_list_changed();
                 url
             }
             Err(error) => {
@@ -206,6 +212,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
                     .repo
                     .mark_task_failed(task_id, TaskStage::UploadingAudio, &error.to_string())
                     .await?;
+                state.notify_task_list_changed();
                 return Err(error);
             }
         }
@@ -215,6 +222,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .repo
         .update_task_stage(task_id, TaskStage::Transcribing, "开始轮询百炼异步转写任务")
         .await?;
+    state.notify_task_list_changed();
     let transcript = if let Some(saved_transcript) =
         restore_transcript_checkpoint(&task, &state, task_id).await?
     {
@@ -241,6 +249,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
                     .repo
                     .save_transcript_checkpoint(task_id, &result.text_accu, &transcript_json)
                     .await?;
+                state.notify_task_list_changed();
                 result
             }
             Err(error) => {
@@ -248,6 +257,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
                     .repo
                     .mark_task_failed(task_id, TaskStage::Transcribing, &error.to_string())
                     .await?;
+                state.notify_task_list_changed();
                 return Err(error);
             }
         }
@@ -265,6 +275,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             "开始写入单节 Markdown 与 JSON",
         )
         .await?;
+    state.notify_task_list_changed();
 
     let segment_markdown = build_segment_markdown(&current_task, &transcript);
     if let Err(error) = state
@@ -280,6 +291,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .repo
             .mark_task_failed(task_id, TaskStage::StoringArtifacts, &error.to_string())
             .await?;
+        state.notify_task_list_changed();
         return Err(error);
     }
 
@@ -298,6 +310,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .repo
             .mark_task_failed(task_id, TaskStage::StoringArtifacts, &error.to_string())
             .await?;
+        state.notify_task_list_changed();
         return Err(error);
     }
 
@@ -309,6 +322,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             "开始重建课程总稿与 manifest",
         )
         .await?;
+    state.notify_task_list_changed();
 
     let transcript_json = serde_json::to_value(&transcript)
         .map_err(|error| AppError::Internal(format!("转写结果 JSON 化失败: {error}")))?;
@@ -327,12 +341,14 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             },
         )
         .await?;
+    state.notify_task_list_changed();
 
     if let Err(error) = sync_course_artifacts(state.clone(), &current_task).await {
         state
             .repo
             .mark_task_failed(task_id, TaskStage::MergingCourse, &error.to_string())
             .await?;
+        state.notify_task_list_changed();
         return Err(error);
     }
 
@@ -340,11 +356,13 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .repo
         .update_task_stage(task_id, TaskStage::Cleanup, "开始清理本地临时目录")
         .await?;
+    state.notify_task_list_changed();
     state.pipeline.cleanup_dir(&work_dir).await?;
     state
         .repo
         .update_task_stage(task_id, TaskStage::Done, "任务已完成")
         .await?;
+    state.notify_task_list_changed();
 
     Ok(())
 }
@@ -372,7 +390,9 @@ impl ProgressSink for TaskStageProgressSink {
                     eta_seconds: snapshot.eta_seconds,
                 },
             )
-            .await
+            .await?;
+        self.state.notify_task_list_changed();
+        Ok(())
     }
 }
 

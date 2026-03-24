@@ -13,10 +13,16 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     middleware,
-    response::IntoResponse,
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{delete, get, post},
 };
+use chrono::Utc;
+use futures_util::stream;
 use serde_json::json;
+use std::{convert::Infallible, time::Duration};
 
 use crate::{
     app::AppState,
@@ -28,6 +34,7 @@ use crate::{
 pub fn build_router(state: AppState) -> Router {
     let protected_routes = Router::new()
         .route("/tasks", get(list_tasks))
+        .route("/tasks/stream", get(stream_tasks))
         .route("/tasks/{task_id}", get(get_task_detail))
         .route("/tasks/{task_id}", delete(delete_failed_task))
         .route(
@@ -75,6 +82,7 @@ async fn create_batch(
     for task_id in &response.task_ids {
         state.queue.enqueue(task_id.clone())?;
     }
+    state.notify_task_list_changed();
 
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
@@ -92,6 +100,46 @@ async fn list_tasks(
     ))
 }
 
+/**
+ * 以 SSE 方式持续推送“任务摘要快照”。
+ *
+ * 为什么这里推的是“整份筛选后列表”，而不是“单条增量补丁”：
+ *
+ * 1. 当前任务量不大，整份快照足够轻，前端实现也更直观。
+ * 2. SSE 订阅者可能带筛选条件，后端直接按筛选条件重查数据库最稳，不需要在浏览器端重复实现过滤逻辑。
+ * 3. 广播频道只负责通知“列表变了”，真正的权威数据仍然来自 SQLite，避免内存态和数据库态漂移。
+ */
+async fn stream_tasks(
+    State(state): State<AppState>,
+    Query(query): Query<TaskListQuery>,
+) -> AppResult<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>> {
+    let receiver = state.subscribe_task_list_events();
+    let stream = stream::unfold(
+        (true, state, query, receiver),
+        |(should_send_initial, state, query, mut receiver)| async move {
+            if !should_send_initial {
+                loop {
+                    match receiver.recv().await {
+                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            break;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+                    }
+                }
+            }
+
+            let event = build_task_snapshot_event(&state, &query).await;
+            Some((Ok(event), (false, state, query, receiver)))
+        },
+    );
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keepalive"),
+    ))
+}
+
 async fn get_task_detail(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
@@ -105,6 +153,7 @@ async fn retry_task(
 ) -> AppResult<impl IntoResponse> {
     state.repo.retry_task(&task_id).await?;
     state.queue.enqueue(task_id.clone())?;
+    state.notify_task_list_changed();
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({"task_id": task_id, "status": "requeued"})),
@@ -202,11 +251,37 @@ async fn delete_failed_task(
 
     state.repo.delete_task_and_events(&task_id).await?;
     sync_course_artifacts(state.clone(), &task).await?;
+    state.notify_task_list_changed();
 
     Ok((
         StatusCode::OK,
         Json(json!({"task_id": task_id, "status": "deleted"})),
     ))
+}
+
+async fn build_task_snapshot_event(state: &AppState, query: &TaskListQuery) -> Event {
+    match state.repo.list_tasks(query).await {
+        Ok(tasks) => {
+            let payload = json!({
+                "tasks": tasks
+                    .iter()
+                    .map(crate::models::TaskSummaryResponse::from)
+                    .collect::<Vec<_>>(),
+                "generated_at": Utc::now().to_rfc3339(),
+            });
+
+            Event::default()
+                .event("tasks_snapshot")
+                .data(payload.to_string())
+        }
+        Err(error) => Event::default().event("tasks_error").data(
+            json!({
+                "error": error.to_string(),
+                "generated_at": Utc::now().to_rfc3339(),
+            })
+            .to_string(),
+        ),
+    }
 }
 
 async fn list_courses(

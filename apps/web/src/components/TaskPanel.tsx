@@ -20,6 +20,7 @@ import {
   getTaskDetail,
   listTasks,
   retryTask,
+  subscribeTaskStream,
 } from '../api'
 import { downloadWithProgress } from '../downloads'
 import { formatBytes, formatEta, formatPercent, formatSpeed, normalizePercent } from '../progress'
@@ -78,6 +79,46 @@ function formatSyncTime(timestamp: string) {
   })
 }
 
+/**
+ * 把 SSE 推来的最新任务摘要合并进当前详情。
+ *
+ * 这里故意只覆盖“任务摘要里本来就有”的字段：
+ *
+ * 1. 进度、速率、阶段、状态这些需要实时刷新。
+ * 2. 事件日志、产物路径等详情字段继续保留上一次显式加载结果。
+ * 3. 这样既能消掉高频详情轮询，又不会把右侧详情面板整个清空重建。
+ */
+function mergeTaskSummaryIntoDetail(detail: TaskDetail | null, summary: TaskSummary | undefined): TaskDetail | null {
+  if (!detail || !summary || detail.task.id !== summary.id) {
+    return detail
+  }
+
+  return {
+    ...detail,
+    task: {
+      ...detail.task,
+      id: summary.id,
+      batch_id: summary.batch_id,
+      status: summary.status,
+      stage: summary.stage,
+      semester: summary.semester,
+      course_key: summary.course_key,
+      course_name: summary.course_name,
+      teacher_name: summary.teacher_name,
+      date: summary.date,
+      start_time: summary.start_time,
+      end_time: summary.end_time,
+      last_error: summary.last_error,
+      progress_percent: summary.progress_percent,
+      transferred_bytes: summary.transferred_bytes,
+      total_bytes: summary.total_bytes,
+      rate_bytes_per_sec: summary.rate_bytes_per_sec,
+      eta_seconds: summary.eta_seconds,
+      updated_at: summary.updated_at,
+    },
+  }
+}
+
 export function TaskPanel() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [selectedTaskId, setSelectedTaskId] = useState<string>('')
@@ -93,6 +134,7 @@ export function TaskPanel() {
   const [isDeleting, setIsDeleting] = useState<boolean>(false)
   const [downloadStates, setDownloadStates] = useState<Record<string, DownloadButtonState>>({})
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
+  const [isPageVisible, setIsPageVisible] = useState<boolean>(document.visibilityState === 'visible')
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedTaskIdRef = useRef<string>('')
@@ -105,6 +147,17 @@ export function TaskPanel() {
   useEffect(() => {
     selectedTaskIdRef.current = selectedTaskId
   }, [selectedTaskId])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsPageVisible(document.visibilityState === 'visible')
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
 
   /**
    * 单独刷新某个任务的详情。
@@ -229,27 +282,36 @@ export function TaskPanel() {
   }, [loadTasks])
 
   useEffect(() => {
-    if (document.visibilityState !== 'visible') {
+    if (!isPageVisible) {
       return
     }
 
-    const hasRunningTask = tasks.some((task) => task.status === 'running')
-    const selectedTaskRunning = selectedTaskDetail?.task.status === 'running'
-    if (!hasRunningTask && !selectedTaskRunning) {
-      return
-    }
+    return subscribeTaskStream(
+      {
+        status: statusFilter || undefined,
+        date: dateFilter || undefined,
+        course_name: courseFilter || undefined,
+      },
+      (payload) => {
+        const nextTasks = payload.tasks
+        const nextSelectedTaskId = nextTasks.some((task) => task.id === selectedTaskIdRef.current)
+          ? selectedTaskIdRef.current
+          : nextTasks[0]?.id ?? ''
+        const nextSelectedSummary = nextTasks.find((task) => task.id === nextSelectedTaskId)
 
-    const timer = window.setTimeout(() => {
-      void loadTasks({
-        blocking: false,
-        refreshDetail: true,
-      })
-    }, 1200)
-
-    return () => {
-      window.clearTimeout(timer)
-    }
-  }, [loadTasks, selectedTaskDetail?.task.status, tasks])
+        startTransition(() => {
+          setTasks(nextTasks)
+          setSelectedTaskId(nextSelectedTaskId)
+          setSelectedTaskDetail((current) => mergeTaskSummaryIntoDetail(current, nextSelectedSummary))
+          setListErrorMessage('')
+          setLastSyncedAt(payload.generated_at || new Date().toISOString())
+        })
+      },
+      (message) => {
+        setListErrorMessage(message)
+      },
+    )
+  }, [courseFilter, dateFilter, isPageVisible, statusFilter])
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -419,7 +481,7 @@ export function TaskPanel() {
           <div className="card__header">
             <div>
               <h2>任务队列</h2>
-              <p>任务执行中会自动短周期刷新进度；空闲时仍以手动刷新和回到前台同步为主。</p>
+              <p>任务进度通过 SSE 实时推送；任务详情日志仍以手动刷新和回到前台同步为主。</p>
             </div>
             <div className="card__actions">
               <div className="syncHint">最近同步：{formatSyncTime(lastSyncedAt)}</div>

@@ -1,7 +1,7 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
-- 现状：主仓库代码、自动化测试、真实 DashScope 冒烟、后端常驻服务、Cloudflare Worker 外网代理均已打通；本轮正在把任务台从“运行中 1.2 秒短轮询”改成“SSE 推送任务摘要 + 手动刷新详情”，以降低 Worker 请求次数，同时保留下载/上传速率可见性。
+- 现状：主仓库代码、自动化测试、真实 DashScope 冒烟、后端常驻服务、Cloudflare Worker 外网代理均已打通；本轮已完成任务台 `SSE` 推送改造，前端不再依赖“运行中每 1.2 秒轮询任务列表/详情”，从而显著降低 Worker 请求次数，同时保留下载/上传速率可见性。
 - 已完成：方案已定稿；已确认本机具备 Rust、Node.js 与 ffmpeg；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支；已清理 `cargo new` 误生成的子仓库元数据。
 - 已完成：Rust 后端第一轮 `cargo check` 与单元测试已通过，核心骨架可编译。
 - 已完成：Rust 后端接口级测试已通过，验证了鉴权、任务执行、课程聚合、失败重试。
@@ -34,8 +34,9 @@
 - 已完成：后端已定位并修复 `aria2c` 下载进度采集的核心根因：原实现先 `wait()` 再读 stdout/stderr，导致运行中不会持续写库；现已改为“进程运行中并发读取输出并即时上报进度”，并补上“退出前已能收到进度快照”的回归测试。
 - 已完成：本轮验证与部署已完成：`cargo fmt --check`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、前端 `npm run lint`、`npm test`、`npm run build` 全部通过；后端 `systemd --user` 服务已重启到新 `release`，Worker 已发布到 `https://classflow-web.zhangjiahe0830.workers.dev`。
 - 已完成：真实任务 `a2d54821-60ad-4810-a44d-a74a7747a54a` 已验证通过两段进度链路：下载阶段一度显示 `99% / 471040 B/s / ETA 2s`，随后切到上传阶段显示 `18.90% / 1377435 B/s / ETA 50s`，证明前端现在能够拿到任务运行中的下载/上传进度与速率。
-- 正在做：实现后端任务摘要 SSE、Worker 透传 `text/event-stream`、以及前端 TaskPanel 订阅改造。
-- 下一步：完成 SSE 改造后补齐前后端测试，重新执行 `cargo test`、前端 `npm test` / `npm run build`，再决定是否继续细化转写阶段状态展示。
+- 已完成：后端已新增任务摘要 SSE 路由，前端 TaskPanel 已改为 `EventSource` 订阅，Worker 沿用流式透传；右侧详情日志改为“选中加载 + 手动刷新/回到前台同步”兜底，不再跟随高频轮询。
+- 已完成：本轮验证已通过：后端 `cargo fmt`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`；前端 `npm run lint`、`npm test`、`npm run build` 全部通过。
+- 下一步：根据你后续真实使用结果，决定是否继续补“详情日志的按需 SSE”或“转写阶段更细粒度状态展示”。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -67,3 +68,4 @@
 - 坑9：旧部署如果仍保留 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES=32768`，即使新代码默认改成 `0`，线上也依然会按旧阈值触发“速度过低退出”；上线前必须同步检查真实 `backend.env`。
 - 坑10：即使 `aria2c` stdout 里已经有进度文本，如果后端实现是“先等待进程退出，再统一读取管道”，前端运行中仍然会一直显示 `0`；必须边跑边读边写库。
 - 坑11：仓库文档里曾写过“前端默认关闭自动轮询”，但当前 `TaskPanel` 实现实际仍保留“运行中每 1.2 秒刷新一次任务列表与详情”的逻辑；做 SSE 改造时必须以代码现状而不是旧文档为准。
+- 坑12：SSE 改造虽然消掉了高频轮询，但右侧详情里的事件日志与产物路径不会再跟着每秒自动补齐；如果需要最新日志，当前设计要求用户手动刷新或切回前台同步一次。

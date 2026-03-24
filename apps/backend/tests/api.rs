@@ -224,9 +224,63 @@ async fn build_test_state(
         artifact_store,
         pipeline,
         queue: detached_queue(),
+        task_list_events: tokio::sync::broadcast::channel::<()>(64).0,
     };
     state.queue = spawn_workers(state.clone(), 1);
     (state, temp, pipeline_counters)
+}
+
+#[tokio::test]
+async fn should_stream_task_snapshots_over_sse() {
+    let (state, _temp, _counters) = build_test_state(false, false).await;
+    let app = build_app(state.clone());
+
+    let intake_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/intake/batches")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer test-token")
+                .body(Body::from(intake_request_json().to_string()))
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("intake 请求应成功");
+    assert_eq!(intake_response.status(), StatusCode::ACCEPTED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/tasks/stream")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("SSE 请求应构造成功"),
+        )
+        .await
+        .expect("SSE 请求应成功");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    let mut body = response.into_body();
+    let frame = tokio::time::timeout(Duration::from_secs(2), body.frame())
+        .await
+        .expect("应在超时前收到首帧")
+        .expect("SSE body 不应提前结束")
+        .expect("SSE 首帧读取应成功");
+    let bytes = frame.into_data().expect("首帧应为数据帧");
+    let text = String::from_utf8(bytes.to_vec()).expect("SSE 首帧应为 UTF-8");
+
+    assert!(text.contains("event: tasks_snapshot"));
+    assert!(text.contains("病理学"));
 }
 
 fn intake_request_json() -> Value {

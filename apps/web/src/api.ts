@@ -49,6 +49,11 @@ export interface TaskFilters {
   course_name?: string
 }
 
+export interface TaskStreamSnapshotPayload {
+  tasks: TaskSummary[]
+  generated_at: string
+}
+
 export interface CourseFilters {
   semester?: string
   date?: string
@@ -75,6 +80,62 @@ export function listTasks(filters: TaskFilters): Promise<TaskSummary[]> {
       ['course_name', filters.course_name],
     ])}`,
   )
+}
+
+/**
+ * 订阅任务摘要 SSE。
+ *
+ * 这里特意只推“任务摘要列表”，不把详情日志一起塞进流里，原因是：
+ *
+ * 1. 用户当前最在意的是运行中任务的阶段、进度和速率。
+ * 2. 详情日志更新频率更低，继续走按需请求更省实现复杂度。
+ * 3. 这样能先把最费 Worker 请求数的短轮询拿掉，而不把接口面一次性改得太重。
+ */
+export function subscribeTaskStream(
+  filters: TaskFilters,
+  onSnapshot: (payload: TaskStreamSnapshotPayload) => void,
+  onStreamError: (message: string) => void,
+): () => void {
+  if (typeof EventSource === 'undefined') {
+    onStreamError('当前环境不支持 SSE，已回退到手动刷新。')
+    return () => {}
+  }
+
+  const eventSource = new EventSource(
+    `/api/v1/tasks/stream${buildQuery([
+      ['status', filters.status],
+      ['date', filters.date],
+      ['course_name', filters.course_name],
+    ])}`,
+  )
+
+  const handleSnapshot = (event: Event) => {
+    try {
+      const messageEvent = event as MessageEvent<string>
+      onSnapshot(JSON.parse(messageEvent.data) as TaskStreamSnapshotPayload)
+    } catch {
+      onStreamError('任务流数据解析失败，已回退到手动刷新。')
+    }
+  }
+
+  const handleErrorMessage = (event: Event) => {
+    try {
+      const messageEvent = event as MessageEvent<string>
+      const payload = JSON.parse(messageEvent.data) as { error?: string }
+      onStreamError(payload.error || '任务流推送失败。')
+    } catch {
+      onStreamError('任务流推送失败。')
+    }
+  }
+
+  eventSource.addEventListener('tasks_snapshot', handleSnapshot)
+  eventSource.addEventListener('tasks_error', handleErrorMessage)
+
+  return () => {
+    eventSource.removeEventListener('tasks_snapshot', handleSnapshot)
+    eventSource.removeEventListener('tasks_error', handleErrorMessage)
+    eventSource.close()
+  }
 }
 
 export function getTaskDetail(taskId: string): Promise<TaskDetail> {
