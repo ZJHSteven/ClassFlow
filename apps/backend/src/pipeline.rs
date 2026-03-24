@@ -18,6 +18,7 @@ use std::{
     collections::HashMap,
     future::Future,
     path::Path,
+    process::ExitStatus,
     process::Stdio,
     sync::{
         Arc,
@@ -59,6 +60,24 @@ pub struct TransferProgressSnapshot {
     pub total_bytes: Option<u64>,
     pub rate_bytes_per_sec: Option<u64>,
     pub eta_seconds: Option<u64>,
+}
+
+/**
+ * 汇总命令执行期间采集到的标准输出、标准错误与最新进度快照。
+ *
+ * 下载阶段之所以单独抽这个结构，是因为我们有两个互相独立的需求：
+ *
+ * 1. 运行中就要把最新进度立刻写回数据库，供前端轮询展示。
+ * 2. 命令最终失败时，仍然要把完整 stdout / stderr 拼进错误信息，便于排障。
+ *
+ * 这两个目标都需要“边跑边读”，而不是等进程结束后再统一处理。
+ */
+#[derive(Debug)]
+struct CommandOutputSummary {
+    exit_status: ExitStatus,
+    stdout_lines: Vec<String>,
+    stderr_lines: Vec<String>,
+    latest_progress: TransferProgressSnapshot,
 }
 
 #[async_trait]
@@ -530,29 +549,12 @@ impl PipelineIo for RealPipelineIo {
         let stderr_handle = tokio::spawn(read_command_lines(stderr, true, line_tx.clone()));
         drop(line_tx);
 
-        let exit_status = child
-            .wait()
-            .await
-            .map_err(|error| AppError::External(format!("等待 aria2c 结束失败: {error}")))?;
-
-        let mut stdout_lines = Vec::new();
-        let mut stderr_lines = Vec::new();
-        let mut latest_progress = TransferProgressSnapshot::default();
-
-        while let Some((is_stderr, line)) = line_rx.recv().await {
-            if is_stderr {
-                stderr_lines.push(line.clone());
-            } else {
-                stdout_lines.push(line.clone());
-            }
-
-            if let Some(snapshot) = parse_aria2_progress_line(&line) {
-                latest_progress = snapshot.clone();
-                if let Some(sink) = &progress_sink {
-                    sink.report(snapshot).await?;
-                }
-            }
-        }
+        let command_output = collect_command_output_while_running(
+            child.wait(),
+            line_rx,
+            progress_sink.clone(),
+        )
+        .await?;
 
         stdout_handle
             .await
@@ -561,12 +563,12 @@ impl PipelineIo for RealPipelineIo {
             .await
             .map_err(|error| AppError::Internal(format!("读取 aria2 stderr 任务失败: {error}")))??;
 
-        if !exit_status.success() {
-            let stderr = stderr_lines.join("\n");
-            let stdout = stdout_lines.join("\n");
+        if !command_output.exit_status.success() {
+            let stderr = command_output.stderr_lines.join("\n");
+            let stdout = command_output.stdout_lines.join("\n");
             return Err(AppError::External(format!(
                 "aria2 下载视频失败: {}，stderr={}，stdout={}",
-                describe_aria2_exit(exit_status.code()),
+                describe_aria2_exit(command_output.exit_status.code()),
                 stderr,
                 stdout
             )));
@@ -578,8 +580,8 @@ impl PipelineIo for RealPipelineIo {
             sink.report(TransferProgressSnapshot {
                 progress_percent: Some(100.0),
                 transferred_bytes: completed_bytes,
-                total_bytes: completed_bytes.or(latest_progress.total_bytes),
-                rate_bytes_per_sec: latest_progress.rate_bytes_per_sec,
+                total_bytes: completed_bytes.or(command_output.latest_progress.total_bytes),
+                rate_bytes_per_sec: command_output.latest_progress.rate_bytes_per_sec,
                 eta_seconds: Some(0),
             })
             .await?;
@@ -887,6 +889,82 @@ where
     Ok(())
 }
 
+/**
+ * 在命令执行期间持续消费 stdout / stderr，并把可解析出的进度实时推给上层。
+ *
+ * 这是这次修复的关键点：
+ *
+ * 1. 不能先 `wait()` 再读管道，否则数据库要等命令结束才会收到进度。
+ * 2. 也不能只顾着读管道不等进程结束，否则会丢掉最终退出码，无法正确判断成功/失败。
+ *
+ * 因此这里采用 `tokio::select!` 同时等待两件事：
+ *
+ * - 子进程退出；
+ * - 管道里继续有新行到达。
+ *
+ * 只有在“退出码已拿到”且“输出管道也完全读空”之后，才允许真正返回。
+ */
+async fn collect_command_output_while_running<F>(
+    wait_future: F,
+    mut line_rx: mpsc::UnboundedReceiver<(bool, String)>,
+    progress_sink: Option<Arc<dyn ProgressSink>>,
+) -> AppResult<CommandOutputSummary>
+where
+    F: Future<Output = Result<ExitStatus, std::io::Error>>,
+{
+    let mut stdout_lines = Vec::new();
+    let mut stderr_lines = Vec::new();
+    let mut latest_progress = TransferProgressSnapshot::default();
+    let mut exit_status = None;
+    let mut channel_closed = false;
+    tokio::pin!(wait_future);
+
+    loop {
+        if channel_closed && exit_status.is_some() {
+            break;
+        }
+
+        tokio::select! {
+            status = &mut wait_future, if exit_status.is_none() => {
+                exit_status = Some(
+                    status.map_err(|error| AppError::External(format!("等待 aria2c 结束失败: {error}")))?
+                );
+            }
+            maybe_line = line_rx.recv(), if !channel_closed => {
+                match maybe_line {
+                    Some((is_stderr, line)) => {
+                        if is_stderr {
+                            stderr_lines.push(line.clone());
+                        } else {
+                            stdout_lines.push(line.clone());
+                        }
+
+                        if let Some(snapshot) = parse_aria2_progress_line(&line) {
+                            latest_progress = snapshot.clone();
+                            if let Some(sink) = &progress_sink {
+                                sink.report(snapshot).await?;
+                            }
+                        }
+                    }
+                    None => {
+                        channel_closed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    let exit_status =
+        exit_status.ok_or_else(|| AppError::Internal("aria2 退出状态未成功采集".to_string()))?;
+
+    Ok(CommandOutputSummary {
+        exit_status,
+        stdout_lines,
+        stderr_lines,
+        latest_progress,
+    })
+}
+
 fn parse_aria2_progress_line(line: &str) -> Option<TransferProgressSnapshot> {
     let candidate = line
         .split('[')
@@ -1051,9 +1129,33 @@ fn pick_string(root: &Value, paths: &[&str]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        os::unix::process::ExitStatusExt,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use async_trait::async_trait;
     use serde_json::json;
+    use tokio::sync::{mpsc, oneshot};
 
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingProgressSink {
+        snapshots: Mutex<Vec<TransferProgressSnapshot>>,
+    }
+
+    #[async_trait]
+    impl ProgressSink for RecordingProgressSink {
+        async fn report(&self, snapshot: TransferProgressSnapshot) -> AppResult<()> {
+            self.snapshots
+                .lock()
+                .expect("测试锁不应中毒")
+                .push(snapshot);
+            Ok(())
+        }
+    }
 
     #[tokio::test]
     async fn should_parse_transcription_url_payload() {
@@ -1097,5 +1199,51 @@ mod tests {
         assert_eq!(snapshot.total_bytes, Some(282 * 1024 * 1024));
         assert_eq!(snapshot.rate_bytes_per_sec, Some(407 * 1024));
         assert_eq!(snapshot.eta_seconds, Some(10 * 60 + 8));
+    }
+
+    #[tokio::test]
+    async fn should_report_download_progress_before_process_exit() {
+        let (line_tx, line_rx) = mpsc::unbounded_channel::<(bool, String)>();
+        let (exit_tx, exit_rx) = oneshot::channel::<()>();
+        let sink = Arc::new(RecordingProgressSink::default());
+        let sink_for_assert = sink.clone();
+
+        let collector = tokio::spawn(async move {
+            collect_command_output_while_running(
+                async move {
+                    let _ = exit_rx.await;
+                    Ok(ExitStatus::from_raw(0))
+                },
+                line_rx,
+                Some(sink),
+            )
+            .await
+        });
+
+        line_tx
+            .send((
+                false,
+                "[#f0b77a 35MiB/282MiB(12%) CN:6 DL:407KiB ETA:10m8s]".to_string(),
+            ))
+            .expect("测试应能送入进度行");
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let snapshots = sink_for_assert
+            .snapshots
+            .lock()
+            .expect("测试锁不应中毒")
+            .clone();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].progress_percent, Some(12.0));
+        assert_eq!(snapshots[0].rate_bytes_per_sec, Some(407 * 1024));
+
+        exit_tx.send(()).expect("测试应能通知子进程退出");
+        drop(line_tx);
+
+        let summary = collector.await.expect("收集任务应正常结束").expect("收集逻辑应成功");
+        assert!(summary.exit_status.success());
+        assert_eq!(summary.latest_progress.progress_percent, Some(12.0));
+        assert_eq!(summary.stdout_lines.len(), 1);
     }
 }
