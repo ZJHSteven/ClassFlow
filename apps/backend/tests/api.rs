@@ -29,7 +29,7 @@ use backend::{
     config::ArtifactStoreMode,
     error::AppResult,
     models::{NormalizedTranscript, TaskListQuery, TaskStatus},
-    pipeline::PipelineIo,
+    pipeline::{PipelineIo, ProgressSink},
     repository::Repository,
     worker::{detached_queue, spawn_workers},
 };
@@ -54,7 +54,12 @@ struct MockPipeline {
 
 #[async_trait]
 impl PipelineIo for MockPipeline {
-    async fn download_video(&self, _url: &str, target_path: &std::path::Path) -> AppResult<()> {
+    async fn download_video(
+        &self,
+        _url: &str,
+        target_path: &std::path::Path,
+        _progress_sink: Option<Arc<dyn ProgressSink>>,
+    ) -> AppResult<()> {
         self.counters.download_calls.fetch_add(1, Ordering::SeqCst);
         if let Some(parent) = target_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -79,6 +84,7 @@ impl PipelineIo for MockPipeline {
     async fn upload_audio_for_transcription(
         &self,
         _audio_path: &std::path::Path,
+        _progress_sink: Option<Arc<dyn ProgressSink>>,
     ) -> AppResult<String> {
         self.counters.upload_calls.fetch_add(1, Ordering::SeqCst);
         Ok("oss://mock/audio.wav".to_string())

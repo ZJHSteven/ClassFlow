@@ -165,8 +165,8 @@ describe('App', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: '下载课程总稿' })).toBeInTheDocument()
-      expect(screen.getByRole('link', { name: '下载课程清单' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载课程总稿' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载课程清单' })).toBeInTheDocument()
     })
   })
 
@@ -174,8 +174,8 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: '下载任务快照' })).toBeInTheDocument()
-      expect(screen.getByRole('link', { name: '下载事件日志' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载任务快照' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载事件日志' })).toBeInTheDocument()
     })
   })
 })

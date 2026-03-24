@@ -14,6 +14,7 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use tokio::{fs, sync::mpsc};
 use tracing::{error, info};
 
@@ -25,7 +26,8 @@ use crate::{
     },
     error::{AppError, AppResult},
     models::{NormalizedTranscript, TaskRecord, TaskStage, TaskStatus},
-    repository::TaskSuccessUpdate,
+    pipeline::{ProgressSink, TransferProgressSnapshot},
+    repository::{TaskSuccessUpdate, TaskTransferUpdate},
 };
 
 #[derive(Clone)]
@@ -89,6 +91,17 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         fs::create_dir_all(parent).await?;
     }
 
+    let download_progress_sink: Arc<dyn ProgressSink> = Arc::new(TaskStageProgressSink {
+        state: state.clone(),
+        task_id: task_id.to_string(),
+        stage: TaskStage::Downloading,
+    });
+    let upload_progress_sink: Arc<dyn ProgressSink> = Arc::new(TaskStageProgressSink {
+        state: state.clone(),
+        task_id: task_id.to_string(),
+        stage: TaskStage::UploadingAudio,
+    });
+
     state
         .repo
         .mark_task_running(task_id, TaskStage::Downloading)
@@ -117,7 +130,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .await?;
     } else if let Err(error) = state
         .pipeline
-        .download_video(&task.mp4_url, &source_video)
+        .download_video(&task.mp4_url, &source_video, Some(download_progress_sink))
         .await
     {
         state
@@ -181,7 +194,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
     } else {
         match state
             .pipeline
-            .upload_audio_for_transcription(&extracted_audio)
+            .upload_audio_for_transcription(&extracted_audio, Some(upload_progress_sink))
             .await
         {
             Ok(url) => {
@@ -334,6 +347,33 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .await?;
 
     Ok(())
+}
+
+#[derive(Clone)]
+struct TaskStageProgressSink {
+    state: AppState,
+    task_id: String,
+    stage: TaskStage,
+}
+
+#[async_trait]
+impl ProgressSink for TaskStageProgressSink {
+    async fn report(&self, snapshot: TransferProgressSnapshot) -> AppResult<()> {
+        self.state
+            .repo
+            .update_task_transfer_progress(
+                &self.task_id,
+                self.stage.clone(),
+                TaskTransferUpdate {
+                    progress_percent: snapshot.progress_percent,
+                    transferred_bytes: snapshot.transferred_bytes,
+                    total_bytes: snapshot.total_bytes,
+                    rate_bytes_per_sec: snapshot.rate_bytes_per_sec,
+                    eta_seconds: snapshot.eta_seconds,
+                },
+            )
+            .await
+    }
 }
 
 /**

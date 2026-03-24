@@ -27,7 +27,10 @@
 - 已完成：已把 Worker 的 R2 绑定骨架与后端 `worker` 产物模式代码接上；当前代码已支持“后端通过 Worker 私有接口写/读/删产物”，为后续 R2 生命周期、任务删除和前端下载入口打下基础。
 - 已完成：后端已补上“任务级产物下载接口、失败任务彻底删除接口、课程产物重建函数，以及 SQLite 事件日志按天数/每任务条数裁剪”的代码与测试。
 - 已完成：前端已重做任务台 / 课程库交互，补上了任务级下载、课程级下载、失败任务删除入口、固定高度的课程总稿预览区，以及基于 `motion` 的 hover / tap / 面板切换动画；对应 lint / test / build 已通过。
-- 下一步：把新增后端环境变量写入真实 `backend.env`，确认服务器已安装 `aria2c`，然后执行一次 `cargo build --release` + `systemctl --user restart classflow-backend.service` 的线上切换与真实任务回归。
+- 已完成：本地代码已补齐“更显著的切页 / 按钮 / 行项交互反馈、长错误文本自动换行、受控下载按钮及浏览器侧下载进度/速率显示、任务详情里的下载/上传阶段进度条”；前端 `npm run lint`、`npm test`、`npm run build` 已再次通过。
+- 已完成：后端任务模型与 SQLite 已补齐 `progress_percent / transferred_bytes / total_bytes / rate_bytes_per_sec / eta_seconds` 五个实时传输字段；`aria2c` 下载阶段现已按秒解析进度并写回数据库，音频上传阶段也会回写上传进度；`cargo test --manifest-path apps/backend/Cargo.toml` 已通过。
+- 已完成：`aria2c` 的低速退出从“默认启用 32 KiB/s 阈值”改为“默认关闭，只有显式配置 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES > 0` 才启用”，避免校园网低速场景被误杀。
+- 下一步：把新的后端二进制与前端静态资源真正部署到线上，更新真实 `backend.env` 的低速阈值策略，然后用真实任务验证三件事：1）下载慢但不中断；2）前端能看到任务级下载/上传进度与速率；3）长错误文本不再撑破右侧详情卡片。
 
 ## 关键决策与理由（防止“吃书”）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
@@ -41,6 +44,9 @@
 - 决策I：本地长期产物不保留；成功任务在产物入库后立即清掉本地工作目录，失败任务仅保留 7 天。（原因：控制本地空间占用，同时保留必要的失败排查窗口。）
 - 决策J：视频下载链路已从 `reqwest + response.bytes()` 切换为 `aria2c` 命令行下载，并保留 `.aria2` sidecar 检查后再判定下载检查点有效。（原因：只有这样才能真正获得断点续传、低速判定和更可靠的中断恢复。）
 - 决策K：阶段级续跑以“数据库检查点 + 本地中间文件”双重判断实现：`uploaded_source_url`、`transcript_json` 负责跳过昂贵外部步骤，`source.mp4` / `audio.wav` 负责跳过本地重复计算。（原因：单靠数据库或单靠文件都不够稳，组合判断更适合真实弱网场景。）
+- 决策L：`useReducedMotion()` 不再直接把交互动效整体关死，而是降级为“保留轻量反馈、减少大幅位移”的策略。（原因：否则部分系统环境里会几乎看不到任何 hover / tap / 切页反馈，和用户的真实操作感知目标冲突。）
+- 决策M：下载按钮统一改为前端受控 `fetch + stream`，不再使用裸 `<a download>`。（原因：只有这样才能显示“正在下载、百分比、当前速率、失败提示”，避免用户觉得按钮点了没反应。）
+- 决策N：`CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES` 默认值改为 `0`，表示不因低速主动失败；如需低速保护，必须显式配置正数阈值。（原因：校园网/教学网存在长时间低速但可完成的真实场景，默认强杀误伤过大。）
 
 ## 常见坑 / 复现方法
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
@@ -50,3 +56,5 @@
 - 坑5：`classflow.zjhstudio.com` 当前受 Cloudflare Access 保护，未登录会直接 `302` 到 Access 登录页；这不是前端挂了，而是访问策略生效。
 - 坑6：如果 userscript 指向的是 Worker 域名，却仍强制要求手填后端 token，实际上会把本来可以隐藏的密钥再次暴露给脚本侧；推荐脚本走 Worker 时允许 token 留空。
 - 坑7：课程列表里可能存在“已收片段但尚无总稿”的课程；这时后端返回 `merged_markdown_path = null` 是正常状态，前端若继续盲拉 `course.md` 就会出现 404 误导。
+- 坑8：如果浏览器或系统开启了“减少动态效果”，`motion` 的位移动画会被自动减弱；现在代码会保留轻量 hover / press / 淡入反馈，但不再依赖“大位移”来表达交互。
+- 坑9：旧部署如果仍保留 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES=32768`，即使新代码默认改成 `0`，线上也依然会按旧阈值触发“速度过低退出”；上线前必须同步检查真实 `backend.env`。

@@ -132,7 +132,7 @@ impl AppConfig {
             )?,
             download_lowest_speed_limit_bytes: env_or_parse(
                 "CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES",
-                32 * 1024,
+                0,
             )?,
             dashscope_api_key: env::var("DASHSCOPE_API_KEY").unwrap_or_default(),
             dashscope_model: env_or("CLASSFLOW_DASHSCOPE_MODEL", "fun-asr"),

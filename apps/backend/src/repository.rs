@@ -31,6 +31,14 @@ pub struct TaskSuccessUpdate<'a> {
     pub merged_markdown_path: &'a str,
 }
 
+pub struct TaskTransferUpdate {
+    pub progress_percent: Option<f64>,
+    pub transferred_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub rate_bytes_per_sec: Option<u64>,
+    pub eta_seconds: Option<u64>,
+}
+
 #[derive(Clone)]
 pub struct Repository {
     pool: SqlitePool,
@@ -114,6 +122,36 @@ impl Repository {
         .execute(&self.pool)
         .await?;
 
+        self.ensure_optional_task_column("progress_percent", "REAL")
+            .await?;
+        self.ensure_optional_task_column("transferred_bytes", "INTEGER")
+            .await?;
+        self.ensure_optional_task_column("total_bytes", "INTEGER")
+            .await?;
+        self.ensure_optional_task_column("rate_bytes_per_sec", "INTEGER")
+            .await?;
+        self.ensure_optional_task_column("eta_seconds", "INTEGER")
+            .await?;
+
+        Ok(())
+    }
+
+    async fn ensure_optional_task_column(&self, column_name: &str, column_definition: &str) -> AppResult<()> {
+        let rows = sqlx::query("PRAGMA table_info(tasks)")
+            .fetch_all(&self.pool)
+            .await?;
+        let exists = rows
+            .iter()
+            .any(|row| row.get::<String, _>("name") == column_name);
+        if exists {
+            return Ok(());
+        }
+
+        sqlx::query(&format!(
+            "ALTER TABLE tasks ADD COLUMN {column_name} {column_definition}"
+        ))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -297,7 +335,7 @@ impl Repository {
     pub async fn mark_task_running(&self, task_id: &str, stage: TaskStage) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "UPDATE tasks SET status = ?, stage = ?, attempt_count = attempt_count + 1, started_at = ?, updated_at = ?, last_error = NULL WHERE id = ?",
+            "UPDATE tasks SET status = ?, stage = ?, attempt_count = attempt_count + 1, started_at = ?, updated_at = ?, last_error = NULL, progress_percent = NULL, transferred_bytes = NULL, total_bytes = NULL, rate_bytes_per_sec = NULL, eta_seconds = NULL WHERE id = ?",
         )
         .bind(TaskStatus::Running.as_str())
         .bind(stage.as_str())
@@ -318,7 +356,9 @@ impl Repository {
         message: &str,
     ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE tasks SET stage = ?, updated_at = ? WHERE id = ?")
+        sqlx::query(
+            "UPDATE tasks SET stage = ?, updated_at = ?, progress_percent = NULL, transferred_bytes = NULL, total_bytes = NULL, rate_bytes_per_sec = NULL, eta_seconds = NULL WHERE id = ?",
+        )
             .bind(stage.as_str())
             .bind(&now)
             .bind(task_id)
@@ -326,6 +366,35 @@ impl Repository {
             .await?;
         self.add_task_event(task_id, stage.as_str(), "info", message)
             .await
+    }
+
+    /**
+     * 写入下载 / 上传阶段的实时进度快照。
+     *
+     * 这里不会额外写事件日志，因为这些字段更新频率较高。
+     * 如果每次更新都插入事件，会很快把事件表刷爆，前端读取也会变得很重。
+     */
+    pub async fn update_task_transfer_progress(
+        &self,
+        task_id: &str,
+        stage: TaskStage,
+        update: TaskTransferUpdate,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE tasks SET stage = ?, updated_at = ?, progress_percent = ?, transferred_bytes = ?, total_bytes = ?, rate_bytes_per_sec = ?, eta_seconds = ? WHERE id = ?",
+        )
+        .bind(stage.as_str())
+        .bind(&now)
+        .bind(update.progress_percent)
+        .bind(update.transferred_bytes.map(|value| value as i64))
+        .bind(update.total_bytes.map(|value| value as i64))
+        .bind(update.rate_bytes_per_sec.map(|value| value as i64))
+        .bind(update.eta_seconds.map(|value| value as i64))
+        .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     pub async fn mark_task_failed(
@@ -419,7 +488,9 @@ impl Repository {
             UPDATE tasks
             SET status = ?, stage = ?, uploaded_source_url = ?, transcript_text = ?, transcript_json = ?,
                 segment_markdown_path = ?, segment_json_path = ?, course_manifest_path = ?,
-                merged_markdown_path = ?, completed_at = ?, updated_at = ?
+                merged_markdown_path = ?, progress_percent = NULL, transferred_bytes = NULL,
+                total_bytes = NULL, rate_bytes_per_sec = NULL, eta_seconds = NULL,
+                completed_at = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
@@ -468,7 +539,7 @@ impl Repository {
         }
 
         sqlx::query(
-            "UPDATE tasks SET status = ?, stage = ?, last_error = NULL, completed_at = NULL, updated_at = ? WHERE id = ?",
+            "UPDATE tasks SET status = ?, stage = ?, last_error = NULL, completed_at = NULL, updated_at = ?, progress_percent = NULL, transferred_bytes = NULL, total_bytes = NULL, rate_bytes_per_sec = NULL, eta_seconds = NULL WHERE id = ?",
         )
         .bind(TaskStatus::Pending.as_str())
         .bind(TaskStage::Queued.as_str())
@@ -703,6 +774,11 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         transcript_json: row
             .get::<Option<String>, _>("transcript_json")
             .and_then(|value| serde_json::from_str(&value).ok()),
+        progress_percent: row.try_get("progress_percent").ok(),
+        transferred_bytes: row.try_get("transferred_bytes").ok(),
+        total_bytes: row.try_get("total_bytes").ok(),
+        rate_bytes_per_sec: row.try_get("rate_bytes_per_sec").ok(),
+        eta_seconds: row.try_get("eta_seconds").ok(),
         started_at: parse_optional_datetime(row.get("started_at"))?,
         completed_at: parse_optional_datetime(row.get("completed_at"))?,
         created_at: parse_datetime(row.get("created_at"))?,

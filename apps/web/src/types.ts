@@ -31,6 +31,11 @@ export interface TaskSummary {
   start_time: string
   end_time: string
   last_error: string | null
+  progress_percent?: number | null
+  transferred_bytes?: number | null
+  total_bytes?: number | null
+  rate_bytes_per_sec?: number | null
+  eta_seconds?: number | null
   created_at: string
   updated_at: string
 }
@@ -61,6 +66,11 @@ export interface TaskDetail {
     page_url: string
     mp4_url: string
     last_error: string | null
+    progress_percent?: number | null
+    transferred_bytes?: number | null
+    total_bytes?: number | null
+    rate_bytes_per_sec?: number | null
+    eta_seconds?: number | null
     segment_markdown_path?: string | null
     segment_json_path?: string | null
     course_manifest_path?: string | null

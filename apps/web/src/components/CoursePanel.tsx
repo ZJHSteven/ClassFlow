@@ -17,7 +17,18 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, listCourses } from '../api'
+import { downloadWithProgress } from '../downloads'
+import { formatBytes, formatPercent, formatSpeed, normalizePercent } from '../progress'
 import type { CourseDetail, CourseSummary } from '../types'
+
+interface DownloadButtonState {
+  status: 'idle' | 'downloading' | 'succeeded' | 'failed'
+  progressPercent: number | null
+  receivedBytes: number
+  totalBytes: number | null
+  speedBytesPerSec: number | null
+  errorMessage: string
+}
 
 /**
  * 把最近同步时间格式化成短时间。
@@ -45,6 +56,7 @@ export function CoursePanel() {
   const [listErrorMessage, setListErrorMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
+  const [downloadStates, setDownloadStates] = useState<Record<string, DownloadButtonState>>({})
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
@@ -52,7 +64,11 @@ export function CoursePanel() {
   const shouldReduceMotion = useReducedMotion()
 
   const pressableProps = shouldReduceMotion
-    ? {}
+    ? {
+        whileHover: { scale: 1.008 },
+        whileTap: { scale: 0.992 },
+        transition: { duration: 0.14, ease: 'easeOut' as const },
+      }
     : {
         whileHover: { y: -2, scale: 1.01 },
         whileTap: { y: 0, scale: 0.985 },
@@ -231,6 +247,88 @@ export function CoursePanel() {
     ? getCourseArtifactUrl(selectedCourseDetail.course_key, 'manifest.json')
     : ''
 
+  const courseActions = selectedCourseDetail
+    ? [
+        courseMarkdownDownloadUrl
+          ? {
+              key: 'course.md',
+              label: '下载课程总稿',
+              href: courseMarkdownDownloadUrl,
+              filename: `${selectedCourseDetail.course_name}-${selectedCourseDetail.date}.md`,
+              primary: true,
+            }
+          : null,
+        manifestDownloadUrl
+          ? {
+              key: 'manifest.json',
+              label: '下载课程清单',
+              href: manifestDownloadUrl,
+              filename: `${selectedCourseDetail.course_name}-${selectedCourseDetail.date}-manifest.json`,
+              primary: false,
+            }
+          : null,
+      ].filter(Boolean) as Array<{ key: string; label: string; href: string; filename: string; primary: boolean }>
+    : []
+
+  const handleCourseDownload = async (action: { key: string; href: string; filename: string }) => {
+    setDownloadStates((current) => ({
+      ...current,
+      [action.key]: {
+        status: 'downloading',
+        progressPercent: 0,
+        receivedBytes: 0,
+        totalBytes: null,
+        speedBytesPerSec: 0,
+        errorMessage: '',
+      },
+    }))
+
+    try {
+      await downloadWithProgress(action.href, action.filename, (snapshot) => {
+        setDownloadStates((current) => ({
+          ...current,
+          [action.key]: {
+            status: 'downloading',
+            progressPercent: snapshot.progressPercent,
+            receivedBytes: snapshot.receivedBytes,
+            totalBytes: snapshot.totalBytes,
+            speedBytesPerSec: snapshot.speedBytesPerSec,
+            errorMessage: '',
+          },
+        }))
+      })
+
+      setDownloadStates((current) => ({
+        ...current,
+        [action.key]: {
+          ...(current[action.key] ?? {
+            progressPercent: 100,
+            receivedBytes: 0,
+            totalBytes: null,
+            speedBytesPerSec: null,
+          }),
+          status: 'succeeded',
+          progressPercent: 100,
+          errorMessage: '',
+        },
+      }))
+    } catch (error) {
+      setDownloadStates((current) => ({
+        ...current,
+        [action.key]: {
+          ...(current[action.key] ?? {
+            progressPercent: null,
+            receivedBytes: 0,
+            totalBytes: null,
+            speedBytesPerSec: null,
+          }),
+          status: 'failed',
+          errorMessage: error instanceof Error ? error.message : '下载失败',
+        },
+      }))
+    }
+  }
+
   return (
     <section className="panel">
       <div className="panel__grid">
@@ -359,26 +457,44 @@ export function CoursePanel() {
               </div>
 
               <div className="detailActionGrid">
-                {courseMarkdownDownloadUrl ? (
-                  <motion.a
-                    className="artifactPill artifactPill--primary"
-                    href={courseMarkdownDownloadUrl}
-                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}.md`}
-                    {...pressableProps}
-                  >
-                    下载课程总稿
-                  </motion.a>
-                ) : null}
-                {manifestDownloadUrl ? (
-                  <motion.a
-                    className="artifactPill"
-                    href={manifestDownloadUrl}
-                    download={`${selectedCourseDetail.course_name}-${selectedCourseDetail.date}-manifest.json`}
-                    {...pressableProps}
-                  >
-                    下载课程清单
-                  </motion.a>
-                ) : null}
+                {courseActions.map((action) => (
+                  <div key={action.key} className="downloadAction">
+                    <motion.button
+                      type="button"
+                      className={
+                        downloadStates[action.key]?.status === 'failed'
+                          ? 'artifactPill artifactPill--error'
+                          : action.primary
+                            ? 'artifactPill artifactPill--primary'
+                            : 'artifactPill'
+                      }
+                      onClick={() => void handleCourseDownload(action)}
+                      disabled={downloadStates[action.key]?.status === 'downloading'}
+                      {...pressableProps}
+                    >
+                      {downloadStates[action.key]?.status === 'downloading'
+                        ? `${action.label} · ${formatPercent(downloadStates[action.key]?.progressPercent)}`
+                        : action.label}
+                    </motion.button>
+                    {downloadStates[action.key]?.status === 'downloading' ? (
+                      <div className="downloadAction__meta">
+                        <div className="miniBar">
+                          <div
+                            className="miniBar__fill"
+                            style={{ width: `${normalizePercent(downloadStates[action.key]?.progressPercent) ?? 6}%` }}
+                          />
+                        </div>
+                        <span>
+                          {formatBytes(downloadStates[action.key]?.receivedBytes)} / {formatBytes(downloadStates[action.key]?.totalBytes)}
+                        </span>
+                        <span>{formatSpeed(downloadStates[action.key]?.speedBytesPerSec)}</span>
+                      </div>
+                    ) : null}
+                    {downloadStates[action.key]?.status === 'failed' ? (
+                      <div className="downloadAction__error">{downloadStates[action.key]?.errorMessage}</div>
+                    ) : null}
+                  </div>
+                ))}
               </div>
 
               {previewMessage ? <div className="detailNotice detailNotice--warning">{previewMessage}</div> : null}

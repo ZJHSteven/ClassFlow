@@ -14,15 +14,35 @@
 2. 测试时可以只替换这一层，不必真的访问网络或执行 ffmpeg。
 */
 
-use std::{collections::HashMap, future::Future, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::Path,
+    process::Stdio,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
+use futures_util::TryStreamExt;
+use http_body::Frame;
+use http_body_util::StreamBody;
 use reqwest::{
+    Body,
     Client,
     multipart::{Form, Part},
 };
 use serde_json::{Value, json};
-use tokio::{fs, process::Command, sync::Semaphore};
+use tokio::{
+    fs,
+    io::{AsyncBufReadExt, AsyncRead, BufReader},
+    process::Command,
+    sync::{Semaphore, mpsc},
+};
+use tokio_util::io::ReaderStream;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -32,15 +52,38 @@ use crate::{
     models::NormalizedTranscript,
 };
 
+#[derive(Debug, Clone, Default)]
+pub struct TransferProgressSnapshot {
+    pub progress_percent: Option<f64>,
+    pub transferred_bytes: Option<u64>,
+    pub total_bytes: Option<u64>,
+    pub rate_bytes_per_sec: Option<u64>,
+    pub eta_seconds: Option<u64>,
+}
+
+#[async_trait]
+pub trait ProgressSink: Send + Sync {
+    async fn report(&self, snapshot: TransferProgressSnapshot) -> AppResult<()>;
+}
+
 #[async_trait]
 pub trait PipelineIo: Send + Sync {
-    async fn download_video(&self, url: &str, target_path: &Path) -> AppResult<()>;
+    async fn download_video(
+        &self,
+        url: &str,
+        target_path: &Path,
+        progress_sink: Option<Arc<dyn ProgressSink>>,
+    ) -> AppResult<()>;
     async fn extract_audio(
         &self,
         source_video_path: &Path,
         target_audio_path: &Path,
     ) -> AppResult<()>;
-    async fn upload_audio_for_transcription(&self, audio_path: &Path) -> AppResult<String>;
+    async fn upload_audio_for_transcription(
+        &self,
+        audio_path: &Path,
+        progress_sink: Option<Arc<dyn ProgressSink>>,
+    ) -> AppResult<String>;
     async fn transcribe_file_url(&self, file_url: &str) -> AppResult<NormalizedTranscript>;
     async fn cleanup_dir(&self, dir_path: &Path) -> AppResult<()>;
 }
@@ -395,7 +438,12 @@ impl RealPipelineIo {
 
 #[async_trait]
 impl PipelineIo for RealPipelineIo {
-    async fn download_video(&self, url: &str, target_path: &Path) -> AppResult<()> {
+    async fn download_video(
+        &self,
+        url: &str,
+        target_path: &Path,
+        progress_sink: Option<Arc<dyn ProgressSink>>,
+    ) -> AppResult<()> {
         let _permit = self
             .download_semaphore
             .acquire()
@@ -416,12 +464,17 @@ impl PipelineIo for RealPipelineIo {
             AppError::Internal(format!("下载目标缺少父目录: {}", target_path.display()))
         })?;
 
-        let output = Command::new(&self.config.aria2_bin)
+        if let Some(sink) = &progress_sink {
+            sink.report(TransferProgressSnapshot::default()).await?;
+        }
+
+        let mut command = Command::new(&self.config.aria2_bin);
+        command
             .arg("--continue=true")
             .arg("--auto-file-renaming=false")
             .arg("--allow-overwrite=true")
-            .arg("--summary-interval=0")
-            .arg("--console-log-level=warn")
+            .arg("--summary-interval=1")
+            .arg("--console-log-level=notice")
             .arg("--file-allocation=none")
             .arg(format!(
                 "--max-tries={}",
@@ -444,32 +497,93 @@ impl PipelineIo for RealPipelineIo {
                 "--max-connection-per-server={}",
                 self.config.download_connections_per_server.max(1)
             ))
-            .arg(format!(
-                "--lowest-speed-limit={}",
-                self.config.download_lowest_speed_limit_bytes.max(1)
-            ))
             .arg("--max-resume-failure-tries=0")
             .arg("--dir")
             .arg(output_dir)
             .arg("--out")
             .arg(output_name)
             .arg(url)
-            .output()
-            .await
-            .map_err(|error| AppError::External(format!("调用 aria2c 失败: {error}")))?;
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if self.config.download_lowest_speed_limit_bytes > 0 {
+            command.arg(format!(
+                "--lowest-speed-limit={}",
+                self.config.download_lowest_speed_limit_bytes
+            ));
+        }
+
+        let mut child = command
+            .spawn()
+            .map_err(|error| AppError::External(format!("调用 aria2c 失败: {error}")))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::Internal("aria2 stdout 管道获取失败".to_string()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| AppError::Internal("aria2 stderr 管道获取失败".to_string()))?;
+
+        let (line_tx, mut line_rx) = mpsc::unbounded_channel::<(bool, String)>();
+        let stdout_handle = tokio::spawn(read_command_lines(stdout, false, line_tx.clone()));
+        let stderr_handle = tokio::spawn(read_command_lines(stderr, true, line_tx.clone()));
+        drop(line_tx);
+
+        let exit_status = child
+            .wait()
+            .await
+            .map_err(|error| AppError::External(format!("等待 aria2c 结束失败: {error}")))?;
+
+        let mut stdout_lines = Vec::new();
+        let mut stderr_lines = Vec::new();
+        let mut latest_progress = TransferProgressSnapshot::default();
+
+        while let Some((is_stderr, line)) = line_rx.recv().await {
+            if is_stderr {
+                stderr_lines.push(line.clone());
+            } else {
+                stdout_lines.push(line.clone());
+            }
+
+            if let Some(snapshot) = parse_aria2_progress_line(&line) {
+                latest_progress = snapshot.clone();
+                if let Some(sink) = &progress_sink {
+                    sink.report(snapshot).await?;
+                }
+            }
+        }
+
+        stdout_handle
+            .await
+            .map_err(|error| AppError::Internal(format!("读取 aria2 stdout 任务失败: {error}")))??;
+        stderr_handle
+            .await
+            .map_err(|error| AppError::Internal(format!("读取 aria2 stderr 任务失败: {error}")))??;
+
+        if !exit_status.success() {
+            let stderr = stderr_lines.join("\n");
+            let stdout = stdout_lines.join("\n");
             return Err(AppError::External(format!(
                 "aria2 下载视频失败: {}，stderr={}，stdout={}",
-                describe_aria2_exit(output.status.code()),
+                describe_aria2_exit(exit_status.code()),
                 stderr,
                 stdout
             )));
         }
 
         ensure_non_empty_file(target_path, "aria2 下载完成后目标文件为空").await?;
+        if let Some(sink) = &progress_sink {
+            let completed_bytes = fs::metadata(target_path).await.map(|metadata| metadata.len()).ok();
+            sink.report(TransferProgressSnapshot {
+                progress_percent: Some(100.0),
+                transferred_bytes: completed_bytes,
+                total_bytes: completed_bytes.or(latest_progress.total_bytes),
+                rate_bytes_per_sec: latest_progress.rate_bytes_per_sec,
+                eta_seconds: Some(0),
+            })
+            .await?;
+        }
         Ok(())
     }
 
@@ -508,7 +622,11 @@ impl PipelineIo for RealPipelineIo {
         Ok(())
     }
 
-    async fn upload_audio_for_transcription(&self, audio_path: &Path) -> AppResult<String> {
+    async fn upload_audio_for_transcription(
+        &self,
+        audio_path: &Path,
+        progress_sink: Option<Arc<dyn ProgressSink>>,
+    ) -> AppResult<String> {
         let _permit = self
             .upload_semaphore
             .acquire()
@@ -526,6 +644,19 @@ impl PipelineIo for RealPipelineIo {
             self.config.upload_retry_attempts,
             self.config.upload_retry_wait_secs,
             || async {
+                let file_metadata = fs::metadata(audio_path).await?;
+                let total_bytes = file_metadata.len();
+                if let Some(sink) = &progress_sink {
+                    sink.report(TransferProgressSnapshot {
+                        progress_percent: Some(0.0),
+                        transferred_bytes: Some(0),
+                        total_bytes: Some(total_bytes),
+                        rate_bytes_per_sec: Some(0),
+                        eta_seconds: None,
+                    })
+                    .await?;
+                }
+
                 let policy = self.request_dashscope_policy().await?;
                 let policy_data = policy.get("data").unwrap_or(&policy);
                 let upload_host = pick_string(policy_data, &["upload_host", "uploadHost"])
@@ -600,10 +731,58 @@ impl PipelineIo for RealPipelineIo {
                     form = form.text(key, value);
                 }
 
-                let audio_bytes = fs::read(audio_path).await?;
+                let file = fs::File::open(audio_path).await?;
+                let started_at = Instant::now();
+                let transferred_bytes = Arc::new(AtomicU64::new(0));
+                let last_reported_bytes = Arc::new(AtomicU64::new(0));
+                let progress_sink_for_stream = progress_sink.clone();
+                let transferred_bytes_for_stream = transferred_bytes.clone();
+                let last_reported_bytes_for_stream = last_reported_bytes.clone();
+
+                let stream = ReaderStream::new(file).inspect_ok(move |chunk| {
+                    let current = transferred_bytes_for_stream
+                        .fetch_add(chunk.len() as u64, Ordering::Relaxed)
+                        + chunk.len() as u64;
+                    let last_reported = last_reported_bytes_for_stream.load(Ordering::Relaxed);
+                    let should_report = current == total_bytes
+                        || current.saturating_sub(last_reported) >= 256 * 1024;
+                    if !should_report {
+                        return;
+                    }
+
+                    last_reported_bytes_for_stream.store(current, Ordering::Relaxed);
+                    let elapsed = started_at.elapsed().as_secs_f64();
+                    let rate = if elapsed > 0.0 {
+                        Some((current as f64 / elapsed).round() as u64)
+                    } else {
+                        Some(0)
+                    };
+                    let remaining = total_bytes.saturating_sub(current);
+                    let eta_seconds = rate.and_then(|speed| {
+                        if speed == 0 {
+                            None
+                        } else {
+                            Some((remaining as f64 / speed as f64).ceil() as u64)
+                        }
+                    });
+                    let snapshot = TransferProgressSnapshot {
+                        progress_percent: Some(calculate_progress_percent(current, Some(total_bytes))),
+                        transferred_bytes: Some(current),
+                        total_bytes: Some(total_bytes),
+                        rate_bytes_per_sec: rate,
+                        eta_seconds,
+                    };
+                    if let Some(sink) = &progress_sink_for_stream {
+                        let sink = sink.clone();
+                        tokio::spawn(async move {
+                            let _ = sink.report(snapshot).await;
+                        });
+                    }
+                });
+                let request_body = Body::wrap(StreamBody::new(stream.map_ok(Frame::data)));
                 form = form.part(
                     "file",
-                    Part::bytes(audio_bytes)
+                    Part::stream(request_body)
                         .file_name(filename.to_string())
                         .mime_str("audio/wav")
                         .map_err(|error| {
@@ -634,6 +813,20 @@ impl PipelineIo for RealPipelineIo {
                     return Err(AppError::External(format!(
                         "上传音频到百炼临时 OSS 失败，HTTP={status}，响应={text}"
                     )));
+                }
+
+                if let Some(sink) = &progress_sink {
+                    sink.report(TransferProgressSnapshot {
+                        progress_percent: Some(100.0),
+                        transferred_bytes: Some(total_bytes),
+                        total_bytes: Some(total_bytes),
+                        rate_bytes_per_sec: Some(
+                            (total_bytes as f64 / started_at.elapsed().as_secs_f64().max(0.001))
+                                .round() as u64,
+                        ),
+                        eta_seconds: Some(0),
+                    })
+                    .await?;
                 }
 
                 Ok(format!("oss://{object_key}"))
@@ -677,6 +870,126 @@ async fn ensure_non_empty_file(path: &Path, error_message: &str) -> AppResult<()
         )));
     }
     Ok(())
+}
+
+async fn read_command_lines<R>(
+    reader: R,
+    is_stderr: bool,
+    sender: mpsc::UnboundedSender<(bool, String)>,
+) -> AppResult<()>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut lines = BufReader::new(reader).lines();
+    while let Some(line) = lines.next_line().await? {
+        let _ = sender.send((is_stderr, line));
+    }
+    Ok(())
+}
+
+fn parse_aria2_progress_line(line: &str) -> Option<TransferProgressSnapshot> {
+    let candidate = line
+        .split('[')
+        .filter_map(|chunk| chunk.split(']').next())
+        .rev()
+        .find(|chunk| chunk.contains("DL:") && chunk.contains('/') && chunk.contains('%'))?;
+    let tokens = candidate.split_whitespace().collect::<Vec<_>>();
+    if tokens.len() < 4 {
+        return None;
+    }
+
+    let progress_token = tokens
+        .iter()
+        .find(|token| token.contains('/') && token.contains('(') && token.contains("%)"))?;
+    let (done_text, total_with_percent) = progress_token.split_once('/')?;
+    let (total_text, percent_with_suffix) = total_with_percent.split_once('(')?;
+    let percent = percent_with_suffix.trim_end_matches("%)").parse::<f64>().ok();
+
+    let transferred_bytes = parse_human_bytes(done_text);
+    let total_bytes = parse_human_bytes(total_text);
+    let rate_bytes_per_sec = tokens
+        .iter()
+        .find_map(|token| token.strip_prefix("DL:"))
+        .and_then(parse_human_bytes);
+    let eta_seconds = tokens
+        .iter()
+        .find_map(|token| token.strip_prefix("ETA:"))
+        .and_then(parse_eta_seconds);
+
+    let computed_percent = match (percent, transferred_bytes, total_bytes) {
+        (Some(value), _, _) => Some(value),
+        (None, Some(transferred), total) => Some(calculate_progress_percent(transferred, total)),
+        (None, None, _) => None,
+    };
+
+    Some(TransferProgressSnapshot {
+        progress_percent: computed_percent,
+        transferred_bytes,
+        total_bytes,
+        rate_bytes_per_sec,
+        eta_seconds,
+    })
+}
+
+fn parse_human_bytes(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let split_index = trimmed
+        .find(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .unwrap_or(trimmed.len());
+    let number_part = trimmed[..split_index].trim();
+    let unit_part = trimmed[split_index..].trim().to_ascii_lowercase();
+    let value = number_part.parse::<f64>().ok()?;
+    let multiplier = match unit_part.as_str() {
+        "" | "b" => 1.0,
+        "kib" | "kb" | "k" => 1024.0,
+        "mib" | "mb" | "m" => 1024.0 * 1024.0,
+        "gib" | "gb" | "g" => 1024.0 * 1024.0 * 1024.0,
+        "tib" | "tb" | "t" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((value * multiplier).round() as u64)
+}
+
+fn parse_eta_seconds(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut buffer = String::new();
+    let mut total_seconds = 0u64;
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            buffer.push(ch);
+            continue;
+        }
+
+        let value = buffer.parse::<u64>().ok()?;
+        buffer.clear();
+        total_seconds += match ch {
+            'h' | 'H' => value * 3600,
+            'm' | 'M' => value * 60,
+            's' | 'S' => value,
+            _ => return None,
+        };
+    }
+
+    if !buffer.is_empty() {
+        total_seconds += buffer.parse::<u64>().ok()?;
+    }
+    Some(total_seconds)
+}
+
+fn calculate_progress_percent(transferred_bytes: u64, total_bytes: Option<u64>) -> f64 {
+    match total_bytes {
+        Some(total) if total > 0 => ((transferred_bytes as f64 / total as f64) * 100.0)
+            .clamp(0.0, 100.0),
+        _ => 0.0,
+    }
 }
 
 fn is_retryable_error(error: &AppError) -> bool {
@@ -772,5 +1085,17 @@ mod tests {
         assert_eq!(result.text_display, "你好世界");
         assert_eq!(result.tokens.len(), 2);
         assert_eq!(result.timestamps, vec![0.0, 0.5]);
+    }
+
+    #[test]
+    fn should_parse_aria2_progress_snapshot() {
+        let line = "[#f0b77a 35MiB/282MiB(12%) CN:6 DL:407KiB ETA:10m8s]";
+        let snapshot = parse_aria2_progress_line(line).expect("应能解析 aria2 进度行");
+
+        assert_eq!(snapshot.progress_percent, Some(12.0));
+        assert_eq!(snapshot.transferred_bytes, Some(35 * 1024 * 1024));
+        assert_eq!(snapshot.total_bytes, Some(282 * 1024 * 1024));
+        assert_eq!(snapshot.rate_bytes_per_sec, Some(407 * 1024));
+        assert_eq!(snapshot.eta_seconds, Some(10 * 60 + 8));
     }
 }

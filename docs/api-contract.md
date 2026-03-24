@@ -72,6 +72,11 @@
 - `start_time`
 - `end_time`
 - `last_error`
+- `progress_percent`
+- `transferred_bytes`
+- `total_bytes`
+- `rate_bytes_per_sec`
+- `eta_seconds`
 - `created_at`
 - `updated_at`
 
@@ -96,6 +101,14 @@
   ]
 }
 ```
+
+其中 `task` 额外会带当前阶段的实时传输字段：
+
+- `progress_percent`
+- `transferred_bytes`
+- `total_bytes`
+- `rate_bytes_per_sec`
+- `eta_seconds`
 
 ## 4. 重试任务
 

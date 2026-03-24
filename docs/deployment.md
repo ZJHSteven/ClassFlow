@@ -66,7 +66,7 @@ npx wrangler whoami
 - Worker 的 `BACKEND_TOKEN` 必须与 `CLASSFLOW_BEARER_TOKEN` 完全一致。
 - `CLASSFLOW_ARTIFACT_PROXY_TOKEN` 是“后端访问 Worker 私有产物接口”使用的单独密钥，不给浏览器、不写进 userscript。
 - 新版本把“上传并发”和“转写并发”拆开了；校园网弱上行环境下，建议先从 `2 / 2` 起步，不要再沿用旧的 `CLASSFLOW_DASHSCOPE_CONCURRENCY=8`。
-- 下载链路现在依赖 `aria2c`，并支持断点续传、自动重试、连接超时和低速退出；推荐直接使用 [env.example](/home/zjhsteven/ClassFlow/apps/backend/env.example) 里的默认稳健参数起步。
+- 下载链路现在依赖 `aria2c`，并支持断点续传、自动重试、连接超时，以及“按需启用”的低速退出；默认配置不会因为网速慢就主动失败，只有显式填写正数 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES` 时才会启用该阈值。推荐直接使用 [env.example](/home/zjhsteven/ClassFlow/apps/backend/env.example) 里的默认稳健参数起步。
 - 如果 userscript 直连后端 Tunnel 域名，那么脚本里的 `Bearer Token` 也必须填这同一个值。
 - 如果 userscript 访问的是 Worker 域名，则推荐让脚本侧 `Bearer Token` 留空，由 Worker 代为补上。
 

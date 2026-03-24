@@ -21,7 +21,18 @@ import {
   listTasks,
   retryTask,
 } from '../api'
+import { downloadWithProgress } from '../downloads'
+import { formatBytes, formatEta, formatPercent, formatSpeed, normalizePercent } from '../progress'
 import type { TaskDetail, TaskStage, TaskStatus, TaskSummary } from '../types'
+
+interface DownloadButtonState {
+  status: 'idle' | 'downloading' | 'succeeded' | 'failed'
+  progressPercent: number | null
+  receivedBytes: number
+  totalBytes: number | null
+  speedBytesPerSec: number | null
+  errorMessage: string
+}
 
 function statusLabel(status: TaskStatus) {
   const labelMap: Record<TaskStatus, string> = {
@@ -78,7 +89,9 @@ export function TaskPanel() {
   const [detailMessage, setDetailMessage] = useState<string>('')
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false)
+  const [isRetrying, setIsRetrying] = useState<boolean>(false)
   const [isDeleting, setIsDeleting] = useState<boolean>(false)
+  const [downloadStates, setDownloadStates] = useState<Record<string, DownloadButtonState>>({})
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
@@ -86,7 +99,11 @@ export function TaskPanel() {
   const shouldReduceMotion = useReducedMotion()
 
   const pressableProps = shouldReduceMotion
-    ? {}
+    ? {
+        whileHover: { scale: 1.008 },
+        whileTap: { scale: 0.992 },
+        transition: { duration: 0.14, ease: 'easeOut' as const },
+      }
     : {
         whileHover: { y: -2, scale: 1.01 },
         whileTap: { y: 0, scale: 0.985 },
@@ -234,11 +251,16 @@ export function TaskPanel() {
       return
     }
 
-    await retryTask(selectedTaskDetail.task.id)
-    await loadTasks({
-      blocking: false,
-      refreshDetail: true,
-    })
+    try {
+      setIsRetrying(true)
+      await retryTask(selectedTaskDetail.task.id)
+      await loadTasks({
+        blocking: false,
+        refreshDetail: true,
+      })
+    } finally {
+      setIsRetrying(false)
+    }
   }
 
   const handleDelete = async () => {
@@ -268,27 +290,106 @@ export function TaskPanel() {
   const taskActions = selectedTaskDetail
     ? [
         {
+          key: 'task.json',
           label: '下载任务快照',
           href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'task.json'),
+          filename: `${selectedTaskDetail.task.course_name}-${selectedTaskDetail.task.date}-task.json`,
         },
         {
+          key: 'events.json',
           label: '下载事件日志',
           href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'events.json'),
+          filename: `${selectedTaskDetail.task.course_name}-${selectedTaskDetail.task.date}-events.json`,
         },
         selectedTaskDetail.task.segment_markdown_path
           ? {
+              key: 'segment.md',
               label: '下载单节 Markdown',
               href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'segment.md'),
+              filename: `${selectedTaskDetail.task.course_name}-${selectedTaskDetail.task.date}-segment.md`,
             }
           : null,
         selectedTaskDetail.task.segment_json_path
           ? {
+              key: 'segment.json',
               label: '下载单节 JSON',
               href: getTaskArtifactUrl(selectedTaskDetail.task.id, 'segment.json'),
+              filename: `${selectedTaskDetail.task.course_name}-${selectedTaskDetail.task.date}-segment.json`,
             }
           : null,
-      ].filter(Boolean) as Array<{ label: string; href: string }>
+      ].filter(Boolean) as Array<{ key: string; label: string; href: string; filename: string }>
     : []
+
+  const transferPercent = normalizePercent(selectedTaskDetail?.task.progress_percent)
+  const shouldShowTransferPanel =
+    !!selectedTaskDetail &&
+    (selectedTaskDetail.task.stage === 'downloading' ||
+      selectedTaskDetail.task.stage === 'uploading_audio' ||
+      selectedTaskDetail.task.progress_percent != null ||
+      selectedTaskDetail.task.transferred_bytes != null ||
+      selectedTaskDetail.task.total_bytes != null)
+
+  const handleTaskDownload = async (action: { key: string; href: string; filename: string }) => {
+    setDownloadStates((current) => ({
+      ...current,
+      [action.key]: {
+        status: 'downloading',
+        progressPercent: 0,
+        receivedBytes: 0,
+        totalBytes: null,
+        speedBytesPerSec: 0,
+        errorMessage: '',
+      },
+    }))
+
+    try {
+      await downloadWithProgress(action.href, action.filename, (snapshot) => {
+        setDownloadStates((current) => ({
+          ...current,
+          [action.key]: {
+            status: 'downloading',
+            progressPercent: snapshot.progressPercent,
+            receivedBytes: snapshot.receivedBytes,
+            totalBytes: snapshot.totalBytes,
+            speedBytesPerSec: snapshot.speedBytesPerSec,
+            errorMessage: '',
+          },
+        }))
+      })
+
+      setDownloadStates((current) => {
+        const nextState = current[action.key]
+        return {
+          ...current,
+          [action.key]: {
+            ...(nextState ?? {
+              progressPercent: 100,
+              receivedBytes: 0,
+              totalBytes: null,
+              speedBytesPerSec: null,
+            }),
+            status: 'succeeded',
+            progressPercent: 100,
+            errorMessage: '',
+          },
+        }
+      })
+    } catch (error) {
+      setDownloadStates((current) => ({
+        ...current,
+        [action.key]: {
+          ...(current[action.key] ?? {
+            progressPercent: null,
+            receivedBytes: 0,
+            totalBytes: null,
+            speedBytesPerSec: null,
+          }),
+          status: 'failed',
+          errorMessage: error instanceof Error ? error.message : '下载失败',
+        },
+      }))
+    }
+  }
 
   return (
     <section className="panel">
@@ -409,8 +510,14 @@ export function TaskPanel() {
             <div className="card__actions card__actions--inline">
               {selectedTaskDetail?.task.status === 'failed' ? (
                 <>
-                  <motion.button type="button" className="buttonSecondary" onClick={() => void handleRetry()} {...pressableProps}>
-                    重试任务
+                  <motion.button
+                    type="button"
+                    className="buttonSecondary"
+                    onClick={() => void handleRetry()}
+                    disabled={isRetrying}
+                    {...pressableProps}
+                  >
+                    {isRetrying ? '重试中...' : '重试任务'}
                   </motion.button>
                   <motion.button
                     type="button"
@@ -445,11 +552,64 @@ export function TaskPanel() {
                 <div className="detailNotice detailNotice--info">这里的按钮会直接下载当前任务已有的 JSON、日志和单节 Markdown 备份。</div>
               )}
 
+              {shouldShowTransferPanel ? (
+                <div className="transferCard">
+                  <div className="transferCard__header">
+                    <strong>{selectedTaskDetail.task.stage === 'uploading_audio' ? '上传进度' : '下载进度'}</strong>
+                    <span>{formatPercent(transferPercent)}</span>
+                  </div>
+                  <div className="transferBar">
+                    <div
+                      className="transferBar__fill"
+                      style={{ width: `${transferPercent ?? 0}%` }}
+                    />
+                  </div>
+                  <div className="transferMeta">
+                    <span>
+                      {formatBytes(selectedTaskDetail.task.transferred_bytes)} / {formatBytes(selectedTaskDetail.task.total_bytes)}
+                    </span>
+                    <span>速率：{formatSpeed(selectedTaskDetail.task.rate_bytes_per_sec)}</span>
+                    <span>ETA：{formatEta(selectedTaskDetail.task.eta_seconds)}</span>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="detailActionGrid">
                 {taskActions.map((action) => (
-                  <motion.a key={action.label} className="artifactPill" href={action.href} download {...pressableProps}>
-                    {action.label}
-                  </motion.a>
+                  <div key={action.key} className="downloadAction">
+                    <motion.button
+                      type="button"
+                      className={
+                        downloadStates[action.key]?.status === 'failed'
+                          ? 'artifactPill artifactPill--error'
+                          : 'artifactPill'
+                      }
+                      onClick={() => void handleTaskDownload(action)}
+                      disabled={downloadStates[action.key]?.status === 'downloading'}
+                      {...pressableProps}
+                    >
+                      {downloadStates[action.key]?.status === 'downloading'
+                        ? `${action.label} · ${formatPercent(downloadStates[action.key]?.progressPercent)}`
+                        : action.label}
+                    </motion.button>
+                    {downloadStates[action.key]?.status === 'downloading' ? (
+                      <div className="downloadAction__meta">
+                        <div className="miniBar">
+                          <div
+                            className="miniBar__fill"
+                            style={{ width: `${normalizePercent(downloadStates[action.key]?.progressPercent) ?? 6}%` }}
+                          />
+                        </div>
+                        <span>
+                          {formatBytes(downloadStates[action.key]?.receivedBytes)} / {formatBytes(downloadStates[action.key]?.totalBytes)}
+                        </span>
+                        <span>{formatSpeed(downloadStates[action.key]?.speedBytesPerSec)}</span>
+                      </div>
+                    ) : null}
+                    {downloadStates[action.key]?.status === 'failed' ? (
+                      <div className="downloadAction__error">{downloadStates[action.key]?.errorMessage}</div>
+                    ) : null}
+                  </div>
                 ))}
               </div>
 
