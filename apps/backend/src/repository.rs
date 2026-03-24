@@ -136,7 +136,11 @@ impl Repository {
         Ok(())
     }
 
-    async fn ensure_optional_task_column(&self, column_name: &str, column_definition: &str) -> AppResult<()> {
+    async fn ensure_optional_task_column(
+        &self,
+        column_name: &str,
+        column_definition: &str,
+    ) -> AppResult<()> {
         let rows = sqlx::query("PRAGMA table_info(tasks)")
             .fetch_all(&self.pool)
             .await?;

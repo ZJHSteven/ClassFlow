@@ -32,8 +32,7 @@ use futures_util::TryStreamExt;
 use http_body::Frame;
 use http_body_util::StreamBody;
 use reqwest::{
-    Body,
-    Client,
+    Body, Client,
     multipart::{Form, Part},
 };
 use serde_json::{Value, json};
@@ -544,24 +543,21 @@ impl PipelineIo for RealPipelineIo {
             .take()
             .ok_or_else(|| AppError::Internal("aria2 stderr 管道获取失败".to_string()))?;
 
-        let (line_tx, mut line_rx) = mpsc::unbounded_channel::<(bool, String)>();
+        let (line_tx, line_rx) = mpsc::unbounded_channel::<(bool, String)>();
         let stdout_handle = tokio::spawn(read_command_lines(stdout, false, line_tx.clone()));
         let stderr_handle = tokio::spawn(read_command_lines(stderr, true, line_tx.clone()));
         drop(line_tx);
 
-        let command_output = collect_command_output_while_running(
-            child.wait(),
-            line_rx,
-            progress_sink.clone(),
-        )
-        .await?;
+        let command_output =
+            collect_command_output_while_running(child.wait(), line_rx, progress_sink.clone())
+                .await?;
 
-        stdout_handle
-            .await
-            .map_err(|error| AppError::Internal(format!("读取 aria2 stdout 任务失败: {error}")))??;
-        stderr_handle
-            .await
-            .map_err(|error| AppError::Internal(format!("读取 aria2 stderr 任务失败: {error}")))??;
+        stdout_handle.await.map_err(|error| {
+            AppError::Internal(format!("读取 aria2 stdout 任务失败: {error}"))
+        })??;
+        stderr_handle.await.map_err(|error| {
+            AppError::Internal(format!("读取 aria2 stderr 任务失败: {error}"))
+        })??;
 
         if !command_output.exit_status.success() {
             let stderr = command_output.stderr_lines.join("\n");
@@ -576,7 +572,10 @@ impl PipelineIo for RealPipelineIo {
 
         ensure_non_empty_file(target_path, "aria2 下载完成后目标文件为空").await?;
         if let Some(sink) = &progress_sink {
-            let completed_bytes = fs::metadata(target_path).await.map(|metadata| metadata.len()).ok();
+            let completed_bytes = fs::metadata(target_path)
+                .await
+                .map(|metadata| metadata.len())
+                .ok();
             sink.report(TransferProgressSnapshot {
                 progress_percent: Some(100.0),
                 transferred_bytes: completed_bytes,
@@ -768,7 +767,10 @@ impl PipelineIo for RealPipelineIo {
                         }
                     });
                     let snapshot = TransferProgressSnapshot {
-                        progress_percent: Some(calculate_progress_percent(current, Some(total_bytes))),
+                        progress_percent: Some(calculate_progress_percent(
+                            current,
+                            Some(total_bytes),
+                        )),
                         transferred_bytes: Some(current),
                         total_bytes: Some(total_bytes),
                         rate_bytes_per_sec: rate,
@@ -981,7 +983,10 @@ fn parse_aria2_progress_line(line: &str) -> Option<TransferProgressSnapshot> {
         .find(|token| token.contains('/') && token.contains('(') && token.contains("%)"))?;
     let (done_text, total_with_percent) = progress_token.split_once('/')?;
     let (total_text, percent_with_suffix) = total_with_percent.split_once('(')?;
-    let percent = percent_with_suffix.trim_end_matches("%)").parse::<f64>().ok();
+    let percent = percent_with_suffix
+        .trim_end_matches("%)")
+        .parse::<f64>()
+        .ok();
 
     let transferred_bytes = parse_human_bytes(done_text);
     let total_bytes = parse_human_bytes(total_text);
@@ -1064,8 +1069,9 @@ fn parse_eta_seconds(raw: &str) -> Option<u64> {
 
 fn calculate_progress_percent(transferred_bytes: u64, total_bytes: Option<u64>) -> f64 {
     match total_bytes {
-        Some(total) if total > 0 => ((transferred_bytes as f64 / total as f64) * 100.0)
-            .clamp(0.0, 100.0),
+        Some(total) if total > 0 => {
+            ((transferred_bytes as f64 / total as f64) * 100.0).clamp(0.0, 100.0)
+        }
         _ => 0.0,
     }
 }
@@ -1241,7 +1247,10 @@ mod tests {
         exit_tx.send(()).expect("测试应能通知子进程退出");
         drop(line_tx);
 
-        let summary = collector.await.expect("收集任务应正常结束").expect("收集逻辑应成功");
+        let summary = collector
+            .await
+            .expect("收集任务应正常结束")
+            .expect("收集逻辑应成功");
         assert!(summary.exit_status.success());
         assert_eq!(summary.latest_progress.progress_percent, Some(12.0));
         assert_eq!(summary.stdout_lines.len(), 1);

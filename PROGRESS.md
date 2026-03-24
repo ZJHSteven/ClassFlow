@@ -30,7 +30,7 @@
 - 已完成：本地代码已补齐“更显著的切页 / 按钮 / 行项交互反馈、长错误文本自动换行、受控下载按钮及浏览器侧下载进度/速率显示、任务详情里的下载/上传阶段进度条”；前端 `npm run lint`、`npm test`、`npm run build` 已再次通过。
 - 已完成：后端任务模型与 SQLite 已补齐 `progress_percent / transferred_bytes / total_bytes / rate_bytes_per_sec / eta_seconds` 五个实时传输字段；音频上传阶段会回写上传进度；此前下载阶段虽然已经接入了解析逻辑，但真实排查后确认仍存在“只在进程退出后统一写库”的时序问题。
 - 已完成：`aria2c` 的低速退出从“默认启用 32 KiB/s 阈值”改为“默认关闭，只有显式配置 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES > 0` 才启用”，避免校园网低速场景被误杀。
-- 正在做：按最终上线口径继续收口前端与后端。前端侧已移除 `useReducedMotion` / `MotionConfig reducedMotion` 相关分支，并把任务台改成“任务执行中自动短周期刷新”；后端侧已定位并修复 `aria2c` 下载进度采集的核心根因：原实现先 `wait()` 再读 stdout/stderr，导致运行中不会持续写库，现在已改为“进程运行中并发读取输出并即时上报进度”，同时补上“退出前已能收到进度快照”的回归测试。
+- 正在做：按最终上线口径继续收口前端与后端。前端侧已移除 `useReducedMotion` / `MotionConfig reducedMotion` 相关分支，并把任务台改成“任务执行中自动短周期刷新”；后端侧已定位并修复 `aria2c` 下载进度采集的核心根因：原实现先 `wait()` 再读 stdout/stderr，导致运行中不会持续写库，现在已改为“进程运行中并发读取输出并即时上报进度”，同时补上“退出前已能收到进度快照”的回归测试；当前 `cargo fmt --check`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml` 已通过。
 - 下一步：重新跑后端/前端自动化测试，重新部署后端和 Worker，再用真实任务验证三件事：1）下载慢但不中断；2）前端能看到任务级下载/上传进度与速率；3）长错误文本不再撑破右侧详情卡片。
 
 ## 关键决策与理由（防止“吃书”）
