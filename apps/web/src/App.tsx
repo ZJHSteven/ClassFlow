@@ -11,7 +11,7 @@
  * 2. 后续如果再增加“系统设置”页，不需要重写现有逻辑。
  */
 
-import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { CoursePanel } from './components/CoursePanel'
 import { TaskPanel } from './components/TaskPanel'
@@ -21,79 +21,69 @@ type ViewMode = 'tasks' | 'courses'
 
 function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('tasks')
-  const shouldReduceMotion = useReducedMotion()
-
-  const tabMotionProps = shouldReduceMotion
-    ? {
-        whileHover: { scale: 1.01 },
-        whileTap: { scale: 0.992 },
-        transition: { duration: 0.16, ease: 'easeOut' as const },
-      }
-    : {
-        whileHover: { y: -2, scale: 1.015 },
-        whileTap: { y: 0, scale: 0.985 },
-        transition: { type: 'spring' as const, stiffness: 420, damping: 24 },
-      }
+  const tabMotionProps = {
+    whileHover: { y: -2, scale: 1.015 },
+    whileTap: { y: 0, scale: 0.985 },
+    transition: { type: 'spring' as const, stiffness: 420, damping: 24 },
+  }
 
   return (
-    <MotionConfig reducedMotion="user">
-      <div className="shell">
-        <motion.header
-          className="hero"
-          initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: 18, filter: 'blur(10px)' }}
-          animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
-          transition={{ duration: 0.42, ease: 'easeOut' }}
-        >
-          <div className="hero__eyebrow">ClassFlow / Worker Console</div>
-          <div className="hero__content">
-            <div>
-              <h1>智慧课堂转写任务台</h1>
-              <p>
-                统一查看油猴脚本推送进来的课程片段，追踪后台转写状态，并在课程库中直接预览合并稿。
-              </p>
-            </div>
-            <div className="hero__badgeList">
-              <span>Rust 后端</span>
-              <span>Cloudflare Worker 代理</span>
-              <span>React 管理台</span>
-            </div>
+    <div className="shell">
+      <motion.header
+        className="hero"
+        initial={{ opacity: 0, y: 18, filter: 'blur(10px)' }}
+        animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+        transition={{ duration: 0.42, ease: 'easeOut' }}
+      >
+        <div className="hero__eyebrow">ClassFlow / Worker Console</div>
+        <div className="hero__content">
+          <div>
+            <h1>智慧课堂转写任务台</h1>
+            <p>
+              统一查看油猴脚本推送进来的课程片段，追踪后台转写状态，并在课程库中直接预览合并稿。
+            </p>
           </div>
-        </motion.header>
+          <div className="hero__badgeList">
+            <span>Rust 后端</span>
+            <span>Cloudflare Worker 代理</span>
+            <span>React 管理台</span>
+          </div>
+        </div>
+      </motion.header>
 
-        <nav className="tabBar" aria-label="主视图切换">
-          <motion.button
-            type="button"
-            className={viewMode === 'tasks' ? 'tabBar__button is-active' : 'tabBar__button'}
-            onClick={() => setViewMode('tasks')}
-            {...tabMotionProps}
-          >
-            任务台
-          </motion.button>
-          <motion.button
-            type="button"
-            className={viewMode === 'courses' ? 'tabBar__button is-active' : 'tabBar__button'}
-            onClick={() => setViewMode('courses')}
-            {...tabMotionProps}
-          >
-            课程库
-          </motion.button>
-        </nav>
+      <nav className="tabBar" aria-label="主视图切换">
+        <motion.button
+          type="button"
+          className={viewMode === 'tasks' ? 'tabBar__button is-active' : 'tabBar__button'}
+          onClick={() => setViewMode('tasks')}
+          {...tabMotionProps}
+        >
+          任务台
+        </motion.button>
+        <motion.button
+          type="button"
+          className={viewMode === 'courses' ? 'tabBar__button is-active' : 'tabBar__button'}
+          onClick={() => setViewMode('courses')}
+          {...tabMotionProps}
+        >
+          课程库
+        </motion.button>
+      </nav>
 
-        <main className="content">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={viewMode}
-              initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, x: 24, filter: 'blur(8px)' }}
-              animate={shouldReduceMotion ? { opacity: 1 } : { opacity: 1, x: 0, filter: 'blur(0px)' }}
-              exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, x: -20, filter: 'blur(6px)' }}
-              transition={{ duration: 0.28, ease: 'easeOut' }}
-            >
-              {viewMode === 'tasks' ? <TaskPanel /> : <CoursePanel />}
-            </motion.div>
-          </AnimatePresence>
-        </main>
-      </div>
-    </MotionConfig>
+      <main className="content">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={viewMode}
+            initial={{ opacity: 0, x: 24, filter: 'blur(8px)' }}
+            animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, x: -20, filter: 'blur(6px)' }}
+            transition={{ duration: 0.28, ease: 'easeOut' }}
+          >
+            {viewMode === 'tasks' ? <TaskPanel /> : <CoursePanel />}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+    </div>
   )
 }
 

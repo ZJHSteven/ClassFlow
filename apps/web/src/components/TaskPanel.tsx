@@ -12,7 +12,7 @@
  * “这个任务到底能导出什么，点哪里拿。”
  */
 
-import { motion, useReducedMotion } from 'motion/react'
+import { motion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import {
   deleteTask,
@@ -96,19 +96,11 @@ export function TaskPanel() {
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedTaskIdRef = useRef<string>('')
-  const shouldReduceMotion = useReducedMotion()
-
-  const pressableProps = shouldReduceMotion
-    ? {
-        whileHover: { scale: 1.008 },
-        whileTap: { scale: 0.992 },
-        transition: { duration: 0.14, ease: 'easeOut' as const },
-      }
-    : {
-        whileHover: { y: -2, scale: 1.01 },
-        whileTap: { y: 0, scale: 0.985 },
-        transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
-      }
+  const pressableProps = {
+    whileHover: { y: -2, scale: 1.01 },
+    whileTap: { y: 0, scale: 0.985 },
+    transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
+  }
 
   useEffect(() => {
     selectedTaskIdRef.current = selectedTaskId
@@ -235,6 +227,29 @@ export function TaskPanel() {
       document.removeEventListener('visibilitychange', syncWhenVisibleAgain)
     }
   }, [loadTasks])
+
+  useEffect(() => {
+    if (document.visibilityState !== 'visible') {
+      return
+    }
+
+    const hasRunningTask = tasks.some((task) => task.status === 'running')
+    const selectedTaskRunning = selectedTaskDetail?.task.status === 'running'
+    if (!hasRunningTask && !selectedTaskRunning) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadTasks({
+        blocking: false,
+        refreshDetail: true,
+      })
+    }, 1200)
+
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [loadTasks, selectedTaskDetail?.task.status, tasks])
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -397,14 +412,14 @@ export function TaskPanel() {
         <motion.div
           className="card card--padded"
           layout
-          initial={shouldReduceMotion ? false : { opacity: 0, x: -10 }}
-          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.24, ease: 'easeOut' }}
         >
           <div className="card__header">
             <div>
               <h2>任务队列</h2>
-              <p>默认不做定时轮询；手动刷新，或切回页面时自动同步一次。</p>
+              <p>任务执行中会自动短周期刷新进度；空闲时仍以手动刷新和回到前台同步为主。</p>
             </div>
             <div className="card__actions">
               <div className="syncHint">最近同步：{formatSyncTime(lastSyncedAt)}</div>
@@ -426,7 +441,7 @@ export function TaskPanel() {
           </div>
 
           <div className="filters">
-            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
+            <motion.div className="field" whileHover={{ y: -1 }}>
               <label htmlFor="task-status">状态</label>
               <select id="task-status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
                 <option value="">全部</option>
@@ -436,11 +451,11 @@ export function TaskPanel() {
                 <option value="failed">失败</option>
               </select>
             </motion.div>
-            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
+            <motion.div className="field" whileHover={{ y: -1 }}>
               <label htmlFor="task-date">日期</label>
               <input id="task-date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} placeholder="2026-03-20" />
             </motion.div>
-            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
+            <motion.div className="field" whileHover={{ y: -1 }}>
               <label htmlFor="task-course">课程名</label>
               <input id="task-course" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)} placeholder="病理学" />
             </motion.div>
@@ -484,7 +499,14 @@ export function TaskPanel() {
                     <td>
                       <span className={`statusPill statusPill--${task.status}`}>{statusLabel(task.status)}</span>
                     </td>
-                    <td>{stageLabel(task.stage)}</td>
+                    <td>
+                      <div>{stageLabel(task.stage)}</div>
+                      {task.status === 'running' && (task.progress_percent != null || task.rate_bytes_per_sec != null) ? (
+                        <small>
+                          {formatPercent(task.progress_percent)} / {formatSpeed(task.rate_bytes_per_sec)}
+                        </small>
+                      ) : null}
+                    </td>
                   </motion.tr>
                 ))}
               </tbody>
@@ -498,8 +520,8 @@ export function TaskPanel() {
         <motion.aside
           className="card card--padded detail"
           layout
-          initial={shouldReduceMotion ? false : { opacity: 0, x: 10 }}
-          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          initial={{ opacity: 0, x: 10 }}
+          animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.24, ease: 'easeOut' }}
         >
           <div className="card__header">

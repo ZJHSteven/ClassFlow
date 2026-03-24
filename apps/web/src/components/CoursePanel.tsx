@@ -14,7 +14,7 @@
  * 3. 课程总稿不存在时，只在右侧详情区说明，不把 404 错误抛回左侧列表区误导用户。
  */
 
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, listCourses } from '../api'
 import { downloadWithProgress } from '../downloads'
@@ -61,19 +61,11 @@ export function CoursePanel() {
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedCourseKeyRef = useRef<string>('')
-  const shouldReduceMotion = useReducedMotion()
-
-  const pressableProps = shouldReduceMotion
-    ? {
-        whileHover: { scale: 1.008 },
-        whileTap: { scale: 0.992 },
-        transition: { duration: 0.14, ease: 'easeOut' as const },
-      }
-    : {
-        whileHover: { y: -2, scale: 1.01 },
-        whileTap: { y: 0, scale: 0.985 },
-        transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
-      }
+  const pressableProps = {
+    whileHover: { y: -2, scale: 1.01 },
+    whileTap: { y: 0, scale: 0.985 },
+    transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
+  }
 
   useEffect(() => {
     selectedCourseKeyRef.current = selectedCourseKey
@@ -335,8 +327,8 @@ export function CoursePanel() {
         <motion.div
           className="card card--padded"
           layout
-          initial={shouldReduceMotion ? false : { opacity: 0, x: -10 }}
-          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.24, ease: 'easeOut' }}
         >
           <div className="card__header">
@@ -364,15 +356,15 @@ export function CoursePanel() {
           </div>
 
           <div className="filters filters--compact">
-            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
+            <motion.div className="field" whileHover={{ y: -1 }}>
               <label htmlFor="course-semester">学期</label>
               <input id="course-semester" value={semesterFilter} onChange={(event) => setSemesterFilter(event.target.value)} placeholder="2025-2026-2" />
             </motion.div>
-            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
+            <motion.div className="field" whileHover={{ y: -1 }}>
               <label htmlFor="course-date">日期</label>
               <input id="course-date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} placeholder="2026-03-20" />
             </motion.div>
-            <motion.div className="field" whileHover={shouldReduceMotion ? undefined : { y: -1 }}>
+            <motion.div className="field" whileHover={{ y: -1 }}>
               <label htmlFor="course-name">课程名</label>
               <input id="course-name" value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)} placeholder="病理学" />
             </motion.div>
@@ -430,8 +422,8 @@ export function CoursePanel() {
         <motion.aside
           className="card card--padded detail"
           layout
-          initial={shouldReduceMotion ? false : { opacity: 0, x: 10 }}
-          animate={shouldReduceMotion ? undefined : { opacity: 1, x: 0 }}
+          initial={{ opacity: 0, x: 10 }}
+          animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.24, ease: 'easeOut' }}
         >
           <div className="card__header">
@@ -509,9 +501,9 @@ export function CoursePanel() {
                   <motion.pre
                     key={markdownPreview ? 'loaded' : isPreviewLoading ? 'loading' : 'empty'}
                     className="markdownPreview"
-                    initial={shouldReduceMotion ? false : { opacity: 0, y: 8 }}
-                    animate={shouldReduceMotion ? undefined : { opacity: 1, y: 0 }}
-                    exit={shouldReduceMotion ? undefined : { opacity: 0, y: -8 }}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
                     transition={{ duration: 0.18, ease: 'easeOut' }}
                   >
                     {isPreviewLoading
