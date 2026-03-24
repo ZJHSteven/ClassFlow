@@ -36,6 +36,7 @@
 - 已完成：真实任务 `a2d54821-60ad-4810-a44d-a74a7747a54a` 已验证通过两段进度链路：下载阶段一度显示 `99% / 471040 B/s / ETA 2s`，随后切到上传阶段显示 `18.90% / 1377435 B/s / ETA 50s`，证明前端现在能够拿到任务运行中的下载/上传进度与速率。
 - 已完成：后端已新增任务摘要 SSE 路由，前端 TaskPanel 已改为 `EventSource` 订阅，Worker 沿用流式透传；右侧详情日志改为“选中加载 + 手动刷新/回到前台同步”兜底，不再跟随高频轮询。
 - 已完成：本轮验证已通过：后端 `cargo fmt`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`；前端 `npm run lint`、`npm test`、`npm run build` 全部通过。
+- 已完成：已重新构建 `release` 后端并重启 `systemd --user` 服务；前端 Worker 已重新发布到 `https://classflow-web.zhangjiahe0830.workers.dev`，本机 `curl` 验证已能收到 `event: tasks_snapshot` 的 SSE 首帧。
 - 下一步：根据你后续真实使用结果，决定是否继续补“详情日志的按需 SSE”或“转写阶段更细粒度状态展示”。
 
 ## 关键决策与理由（防止“吃书”）
