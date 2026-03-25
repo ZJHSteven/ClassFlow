@@ -43,6 +43,8 @@
 - 已完成：本轮新增回归验证已通过：
   - 后端：`cargo test --manifest-path apps/backend/Cargo.toml`
   - 前端：`npm run lint`、`npm test`、`npm run build`
+- 已完成：本轮最新代码已完成部署：后端 `cargo build --release` 后已通过 `systemctl --user restart classflow-backend` 重启；Cloudflare Worker 已重新发布到 `https://classflow-web.zhangjiahe0830.workers.dev`，版本号为 `bd2b5a15-3157-4406-9a38-9b83fdc572eb`。
+- 已完成：部署后抽样验收已通过：`http://127.0.0.1:8787/api/v1/health`、`https://classflow-web.zhangjiahe0830.workers.dev/api/v1/health`、公网 `SSE` 首帧、以及课程总稿公网下载接口均返回正常结果。
 - 下一步：根据你真实使用的屏幕尺寸与操作节奏，再决定是否继续补“面板高度可配置”、“任务详情按需 SSE”或“课程总稿/manifest 的浏览器端缓存持久化”。
 
 ## 关键决策与理由（防止“吃书”）
