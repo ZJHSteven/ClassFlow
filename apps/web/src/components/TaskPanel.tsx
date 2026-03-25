@@ -472,7 +472,7 @@ export function TaskPanel() {
     <section className="panel">
       <div className="panel__grid">
         <motion.div
-          className="card card--padded"
+          className="card card--padded card--panel"
           layout
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
@@ -525,7 +525,7 @@ export function TaskPanel() {
 
           {listErrorMessage ? <div className="detailNotice detailNotice--error">{listErrorMessage}</div> : null}
 
-          <div className="tableWrap">
+          <div className="tableWrap tableWrap--list">
             <table className="table">
               <thead>
                 <tr>
@@ -580,7 +580,7 @@ export function TaskPanel() {
         </motion.div>
 
         <motion.aside
-          className="card card--padded detail"
+          className="card card--padded detail detail--panel"
           layout
           initial={{ opacity: 0, x: 10 }}
           animate={{ opacity: 1, x: 0 }}
@@ -618,7 +618,7 @@ export function TaskPanel() {
           </div>
 
           {selectedTaskDetail ? (
-            <>
+            <div className="detail__body">
               <div className="detail__meta">
                 <div>
                   <strong>{selectedTaskDetail.task.course_name}</strong> / {selectedTaskDetail.task.teacher_name}
@@ -631,7 +631,9 @@ export function TaskPanel() {
               </div>
 
               {selectedTaskDetail.task.last_error ? (
-                <div className="detailNotice detailNotice--error">{selectedTaskDetail.task.last_error}</div>
+                <div className="detailNotice detailNotice--error detailNotice--scrollable">
+                  {selectedTaskDetail.task.last_error}
+                </div>
               ) : (
                 <div className="detailNotice detailNotice--info">这里的按钮会直接下载当前任务已有的 JSON、日志和单节 Markdown 备份。</div>
               )}
@@ -697,7 +699,7 @@ export function TaskPanel() {
                 ))}
               </div>
 
-              <div className="detailSection">
+              <div className="detailSection detailSection--grow">
                 <h4>阶段日志</h4>
                 <div className="detail__events">
                   {selectedTaskDetail.events.map((event) => (
@@ -710,9 +712,11 @@ export function TaskPanel() {
                   ))}
                 </div>
               </div>
-            </>
+            </div>
           ) : (
-            <div className="emptyState">{detailMessage || '从左侧选择一个任务查看详情。'}</div>
+            <div className="detail__body">
+              <div className="emptyState">{detailMessage || '从左侧选择一个任务查看详情。'}</div>
+            </div>
           )}
         </motion.aside>
       </div>

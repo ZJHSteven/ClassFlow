@@ -17,7 +17,7 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, listCourses } from '../api'
-import { downloadWithProgress } from '../downloads'
+import { downloadBlob, downloadWithProgress } from '../downloads'
 import { formatBytes, formatPercent, formatSpeed, normalizePercent } from '../progress'
 import type { CourseDetail, CourseSummary } from '../types'
 
@@ -28,6 +28,11 @@ interface DownloadButtonState {
   totalBytes: number | null
   speedBytesPerSec: number | null
   errorMessage: string
+}
+
+interface CourseMarkdownCacheEntry {
+  markdown: string
+  updatedAt: string
 }
 
 /**
@@ -61,6 +66,7 @@ export function CoursePanel() {
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedCourseKeyRef = useRef<string>('')
+  const markdownCacheRef = useRef<Record<string, CourseMarkdownCacheEntry>>({})
   const pressableProps = {
     whileHover: { y: -2, scale: 1.01 },
     whileTap: { y: 0, scale: 0.985 },
@@ -99,12 +105,22 @@ export function CoursePanel() {
       let nextPreviewMessage = ''
 
       if (detail.merged_markdown_path) {
-        try {
-          nextMarkdownPreview = await getCourseMarkdown(courseKey)
-        } catch (error) {
-          nextPreviewMessage = error instanceof Error ? error.message : '课程总稿加载失败'
+        const cachedEntry = markdownCacheRef.current[courseKey]
+        if (cachedEntry && cachedEntry.updatedAt === detail.updated_at) {
+          nextMarkdownPreview = cachedEntry.markdown
+        } else {
+          try {
+            nextMarkdownPreview = await getCourseMarkdown(courseKey)
+            markdownCacheRef.current[courseKey] = {
+              markdown: nextMarkdownPreview,
+              updatedAt: detail.updated_at,
+            }
+          } catch (error) {
+            nextPreviewMessage = error instanceof Error ? error.message : '课程总稿加载失败'
+          }
         }
       } else {
+        delete markdownCacheRef.current[courseKey]
         nextPreviewMessage = '课程总稿尚未生成。当前课程可能仍在下载、上传、转写或合并中。'
       }
 
@@ -263,6 +279,28 @@ export function CoursePanel() {
     : []
 
   const handleCourseDownload = async (action: { key: string; href: string; filename: string }) => {
+    const cachedMarkdown =
+      action.key === 'course.md' && selectedCourseDetail
+        ? markdownCacheRef.current[selectedCourseDetail.course_key]?.markdown || markdownPreview
+        : ''
+
+    if (action.key === 'course.md' && cachedMarkdown) {
+      const markdownBlob = new Blob([cachedMarkdown], { type: 'text/markdown; charset=utf-8' })
+      downloadBlob(markdownBlob, action.filename)
+      setDownloadStates((current) => ({
+        ...current,
+        [action.key]: {
+          status: 'succeeded',
+          progressPercent: 100,
+          receivedBytes: markdownBlob.size,
+          totalBytes: markdownBlob.size,
+          speedBytesPerSec: null,
+          errorMessage: '',
+        },
+      }))
+      return
+    }
+
     setDownloadStates((current) => ({
       ...current,
       [action.key]: {
@@ -325,7 +363,7 @@ export function CoursePanel() {
     <section className="panel">
       <div className="panel__grid">
         <motion.div
-          className="card card--padded"
+          className="card card--padded card--panel"
           layout
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
@@ -372,7 +410,7 @@ export function CoursePanel() {
 
           {listErrorMessage ? <div className="detailNotice detailNotice--error">{listErrorMessage}</div> : null}
 
-          <div className="tableWrap">
+          <div className="tableWrap tableWrap--list">
             <table className="table">
               <thead>
                 <tr>
@@ -420,7 +458,7 @@ export function CoursePanel() {
         </motion.div>
 
         <motion.aside
-          className="card card--padded detail"
+          className="card card--padded detail detail--panel"
           layout
           initial={{ opacity: 0, x: 10 }}
           animate={{ opacity: 1, x: 0 }}
@@ -434,7 +472,7 @@ export function CoursePanel() {
           </div>
 
           {selectedCourseDetail ? (
-            <>
+            <div className="detail__body">
               <div className="detail__meta">
                 <div>
                   <strong>{selectedCourseDetail.course_name}</strong> / {selectedCourseDetail.teacher_name}
@@ -489,7 +527,7 @@ export function CoursePanel() {
                 ))}
               </div>
 
-              {previewMessage ? <div className="detailNotice detailNotice--warning">{previewMessage}</div> : null}
+              {previewMessage ? <div className="detailNotice detailNotice--warning detailNotice--scrollable">{previewMessage}</div> : null}
 
               <div className="previewShell">
                 <div className="previewShell__header">
@@ -512,9 +550,11 @@ export function CoursePanel() {
                   </motion.pre>
                 </AnimatePresence>
               </div>
-            </>
+            </div>
           ) : (
-            <div className="emptyState">从左侧选择一个课程查看总稿。</div>
+            <div className="detail__body">
+              <div className="emptyState">从左侧选择一个课程查看总稿。</div>
+            </div>
           )}
         </motion.aside>
       </div>

@@ -299,7 +299,7 @@ impl Repository {
             sql.push_str(" AND course_name = ?");
             binds.push(course_name.clone());
         }
-        sql.push_str(" ORDER BY created_at DESC");
+        sql.push_str(" ORDER BY date DESC, start_time DESC, created_at DESC");
 
         let mut built = sqlx::query(&sql);
         for bind in binds {
@@ -662,13 +662,24 @@ impl Repository {
                 .push(task);
         }
 
-        grouped
+        let mut summaries = grouped
             .into_values()
             .map(|mut course_tasks| {
                 sort_tasks_for_course(&mut course_tasks);
                 summarize_course(&course_tasks)
             })
-            .collect()
+            .collect::<AppResult<Vec<_>>>()?;
+
+        summaries.sort_by(|left, right| {
+            right
+                .date
+                .cmp(&left.date)
+                .then_with(|| right.updated_at.cmp(&left.updated_at))
+                .then_with(|| left.course_name.cmp(&right.course_name))
+                .then_with(|| left.teacher_name.cmp(&right.teacher_name))
+        });
+
+        Ok(summaries)
     }
 
     pub async fn get_course_detail(&self, course_key: &str) -> AppResult<CourseDetailResponse> {
@@ -942,5 +953,52 @@ mod tests {
             detail.events.last().map(|event| event.message.as_str()),
             Some("event-4")
         );
+    }
+
+    #[tokio::test]
+    async fn should_sort_tasks_and_courses_by_latest_date_first() {
+        let repo = repo().await;
+
+        let mut older_course_request = demo_request();
+        older_course_request.items[0].date = "2026-03-17".into();
+        older_course_request.items[0].course_name = "生理学".into();
+        older_course_request.items[0].new_id = "older".into();
+        older_course_request.items[0].raw_title = "生理学 王老师".into();
+
+        let mut latest_course_request = demo_request();
+        latest_course_request.items[0].date = "2026-03-23".into();
+        latest_course_request.items[0].start_time = "10:00".into();
+        latest_course_request.items[0].end_time = "10:45".into();
+        latest_course_request.items[0].new_id = "latest".into();
+        latest_course_request.items[0].raw_title = "病理学 王老师 最新".into();
+
+        repo.create_batch_with_tasks(&older_course_request, "2025-2026-2")
+            .await
+            .expect("旧日期课程写入应成功");
+        repo.create_batch_with_tasks(&latest_course_request, "2025-2026-2")
+            .await
+            .expect("新日期课程写入应成功");
+
+        let tasks = repo
+            .list_tasks(&TaskListQuery {
+                status: None,
+                date: None,
+                course_name: None,
+            })
+            .await
+            .expect("任务查询应成功");
+        assert_eq!(tasks[0].date, "2026-03-23");
+        assert_eq!(tasks[1].date, "2026-03-17");
+
+        let courses = repo
+            .list_courses(&CourseListQuery {
+                semester: None,
+                date: None,
+                course_name: None,
+            })
+            .await
+            .expect("课程查询应成功");
+        assert_eq!(courses[0].date, "2026-03-23");
+        assert_eq!(courses[1].date, "2026-03-17");
     }
 }

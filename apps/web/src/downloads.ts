@@ -94,6 +94,16 @@ export async function downloadWithProgress(
   saveBlob(blob, suggestedFilename)
 }
 
+/**
+ * 直接把已经拿到的 Blob 保存到浏览器下载目录。
+ *
+ * 这个能力主要给“预览已经把正文读进内存”的场景复用，
+ * 这样用户点击“下载课程总稿”时，不必再次向后端/Worker 发起同一份文件请求。
+ */
+export function downloadBlob(blob: Blob, filename: string) {
+  saveBlob(blob, filename)
+}
+
 async function readDownloadError(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { error?: string }

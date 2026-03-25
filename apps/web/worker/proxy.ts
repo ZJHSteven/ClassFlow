@@ -41,11 +41,32 @@ export interface WorkerEnv {
   ASSETS: AssetBindingLike
 }
 
+interface TaskArtifactLookupResponse {
+  task: {
+    segment_markdown_path?: string | null
+    segment_json_path?: string | null
+  }
+}
+
+interface CourseArtifactLookupResponse {
+  merged_markdown_path?: string | null
+  manifest_path?: string | null
+}
+
 function jsonResponse(status: number, error: string) {
   return new Response(JSON.stringify({ error }), {
     status,
     headers: {
       'content-type': 'application/json; charset=utf-8',
+    },
+  })
+}
+
+function textResponse(status: number, contentType: string, body: string) {
+  return new Response(body, {
+    status,
+    headers: {
+      'content-type': contentType,
     },
   })
 }
@@ -116,6 +137,108 @@ async function handleArtifactRequest(request: Request, env: WorkerEnv): Promise<
   return jsonResponse(405, `不支持的产物方法: ${request.method}`)
 }
 
+async function fetchBackendJson<T>(pathnameWithQuery: string, env: WorkerEnv): Promise<T | Response> {
+  if (!env.BACKEND_BASE_URL || !env.BACKEND_TOKEN) {
+    return jsonResponse(500, 'Worker 尚未配置 BACKEND_BASE_URL 或 BACKEND_TOKEN。')
+  }
+
+  const backendUrl = new URL(pathnameWithQuery, env.BACKEND_BASE_URL)
+  const response = await fetch(backendUrl.toString(), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${env.BACKEND_TOKEN}`,
+    },
+    redirect: 'manual',
+  })
+
+  if (response.status === 401) {
+    return jsonResponse(502, '后端鉴权失败，请检查 Worker 中配置的 BACKEND_TOKEN。')
+  }
+
+  if (response.status >= 500) {
+    return jsonResponse(502, '后端服务异常，请稍后重试。')
+  }
+
+  if (!response.ok) {
+    return textResponse(
+      response.status,
+      response.headers.get('content-type') ?? 'application/json; charset=utf-8',
+      await response.text(),
+    )
+  }
+
+  return (await response.json()) as T
+}
+
+async function buildStoredObjectResponse(object: R2ObjectLike): Promise<Response> {
+  return new Response(await object.arrayBuffer(), {
+    status: 200,
+    headers: {
+      'content-type': object.httpMetadata?.contentType ?? 'application/octet-stream',
+    },
+  })
+}
+
+async function tryHandlePublicArtifactRequest(request: Request, env: WorkerEnv): Promise<Response | null> {
+  if (request.method !== 'GET' || !env.ARTIFACTS) {
+    return null
+  }
+
+  const { pathname } = new URL(request.url)
+  const taskArtifactMatch = pathname.match(/^\/api\/v1\/tasks\/([^/]+)\/artifacts\/([^/]+)$/)
+  if (taskArtifactMatch) {
+    const [, taskId, artifactName] = taskArtifactMatch
+    if (artifactName !== 'segment.md' && artifactName !== 'segment.json') {
+      return null
+    }
+
+    const lookup = await fetchBackendJson<TaskArtifactLookupResponse>(`/api/v1/tasks/${taskId}`, env)
+    if (lookup instanceof Response) {
+      return lookup
+    }
+
+    const objectKey =
+      artifactName === 'segment.md' ? lookup.task.segment_markdown_path : lookup.task.segment_json_path
+    if (!objectKey) {
+      return jsonResponse(404, `任务产物尚未生成: ${artifactName}`)
+    }
+
+    const object = await env.ARTIFACTS.get(objectKey)
+    if (!object) {
+      return jsonResponse(404, `产物不存在: ${objectKey}`)
+    }
+
+    return buildStoredObjectResponse(object)
+  }
+
+  const courseArtifactMatch = pathname.match(/^\/api\/v1\/courses\/([^/]+)\/artifacts\/([^/]+)$/)
+  if (!courseArtifactMatch) {
+    return null
+  }
+
+  const [, courseKey, artifactName] = courseArtifactMatch
+  if (artifactName !== 'course.md' && artifactName !== 'manifest.json') {
+    return null
+  }
+
+  const lookup = await fetchBackendJson<CourseArtifactLookupResponse>(`/api/v1/courses/${courseKey}`, env)
+  if (lookup instanceof Response) {
+    return lookup
+  }
+
+  const objectKey = artifactName === 'course.md' ? lookup.merged_markdown_path : lookup.manifest_path
+  if (!objectKey) {
+    return jsonResponse(404, `课程产物尚未生成: ${artifactName}`)
+  }
+
+  const object = await env.ARTIFACTS.get(objectKey)
+  if (!object) {
+    return jsonResponse(404, `产物不存在: ${objectKey}`)
+  }
+
+  return buildStoredObjectResponse(object)
+}
+
 export async function proxyApiRequest(request: Request, env: WorkerEnv): Promise<Response> {
   if (!env.BACKEND_BASE_URL || !env.BACKEND_TOKEN) {
     return jsonResponse(500, 'Worker 尚未配置 BACKEND_BASE_URL 或 BACKEND_TOKEN。')
@@ -155,6 +278,11 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
   const url = new URL(request.url)
   if (url.pathname.startsWith('/__classflow/artifacts/')) {
     return handleArtifactRequest(request, env)
+  }
+
+  const publicArtifactResponse = await tryHandlePublicArtifactRequest(request, env)
+  if (publicArtifactResponse) {
+    return publicArtifactResponse
   }
 
   if (url.pathname.startsWith('/api/')) {

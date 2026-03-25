@@ -105,4 +105,42 @@ describe('worker proxy', () => {
     )
     expect(response.status).toBe(401)
   })
+
+  it('应该直接通过 Worker 绑定的 R2 返回课程总稿，避免再次回打私有 Worker 接口', async () => {
+    await defaultEnv.ARTIFACTS?.put(
+      'courses/demo/course.md',
+      new TextEncoder().encode('# cached course').buffer,
+      {
+        httpMetadata: {
+          contentType: 'text/markdown; charset=utf-8',
+        },
+      },
+    )
+
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          merged_markdown_path: 'courses/demo/course.md',
+          manifest_path: 'courses/demo/manifest.json',
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+          },
+        },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await handleWorkerRequest(
+      new Request('https://worker.example.com/api/v1/courses/demo%7Ccourse/artifacts/course.md'),
+      defaultEnv,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('# cached course')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toBe('https://backend.example.com/api/v1/courses/demo%7Ccourse')
+  })
 })

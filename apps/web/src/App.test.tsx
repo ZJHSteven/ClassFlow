@@ -1,9 +1,12 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 const fetchMock = vi.fn()
 const setIntervalSpy = vi.spyOn(window, 'setInterval')
+const anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+const createObjectUrlSpy = vi.fn(() => 'blob:test')
+const revokeObjectUrlSpy = vi.fn()
 
 class MockEventSource {
   static instances: MockEventSource[] = []
@@ -143,13 +146,27 @@ describe('App', () => {
   beforeEach(() => {
     fetchMock.mockReset()
     setIntervalSpy.mockClear()
+    anchorClickSpy.mockClear()
+    createObjectUrlSpy.mockClear()
+    revokeObjectUrlSpy.mockClear()
     MockEventSource.instances.length = 0
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => buildMockResponse(input))
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('EventSource', MockEventSource)
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: createObjectUrlSpy,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      writable: true,
+      value: revokeObjectUrlSpy,
+    })
   })
 
   afterEach(() => {
+    cleanup()
     vi.unstubAllGlobals()
   })
 
@@ -206,5 +223,25 @@ describe('App', () => {
       expect(screen.getByRole('button', { name: '下载任务快照' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '下载事件日志' })).toBeInTheDocument()
     })
+  })
+
+  it('课程总稿已经预览后，再下载不应该重复请求同一份 Markdown', async () => {
+    render(<App />)
+
+    fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByText('已加载')).toBeInTheDocument()
+    })
+
+    fetchMock.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: '下载课程总稿' }))
+
+    await waitFor(() => {
+      expect(anchorClickSpy).toHaveBeenCalled()
+    })
+
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
