@@ -179,7 +179,7 @@ async fn build_test_state(
         download_connections_per_server: 2,
         download_lowest_speed_limit_bytes: 1024,
         dashscope_api_key: String::new(),
-        dashscope_model: "fun-asr".to_string(),
+        dashscope_model: "fun-asr-mtl".to_string(),
         dashscope_submit_url:
             "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription".to_string(),
         dashscope_task_url_template: "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"

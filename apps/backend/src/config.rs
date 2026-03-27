@@ -12,6 +12,13 @@ use std::{env, net::SocketAddr, path::PathBuf, str::FromStr};
 
 use crate::error::{AppError, AppResult};
 
+/// DashScope 录音文件转写的默认模型。
+///
+/// 这里故意提成常量，而不是把字符串散落在 `from_env()` 里，原因有两个：
+/// 1. 以后如果阿里云再次调整推荐模型，只需要改这一处，不容易漏。
+/// 2. review 或排查线上问题时，可以很快看清“代码默认值到底是什么”，避免继续翻长配置构造逻辑。
+const DEFAULT_DASHSCOPE_MODEL: &str = "fun-asr-mtl";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactStoreMode {
     Local,
@@ -135,7 +142,7 @@ impl AppConfig {
                 0,
             )?,
             dashscope_api_key: env::var("DASHSCOPE_API_KEY").unwrap_or_default(),
-            dashscope_model: env_or("CLASSFLOW_DASHSCOPE_MODEL", "fun-asr"),
+            dashscope_model: env_or("CLASSFLOW_DASHSCOPE_MODEL", DEFAULT_DASHSCOPE_MODEL),
             dashscope_submit_url: env_or(
                 "CLASSFLOW_DASHSCOPE_SUBMIT_URL",
                 "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription",

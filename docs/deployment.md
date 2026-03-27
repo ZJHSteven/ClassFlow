@@ -45,6 +45,7 @@ npx wrangler whoami
 2. 至少填好这些关键项：
    - `CLASSFLOW_BEARER_TOKEN`
    - `DASHSCOPE_API_KEY`
+   - `CLASSFLOW_DASHSCOPE_MODEL`
    - `CLASSFLOW_ARTIFACT_STORE_MODE`
    - 下载 / 上传稳健性相关参数至少要确认：
      - `CLASSFLOW_DOWNLOAD_CONCURRENCY`
@@ -64,6 +65,8 @@ npx wrangler whoami
 
 - `CLASSFLOW_BEARER_TOKEN` 是后端真正校验的共享鉴权值。
 - Worker 的 `BACKEND_TOKEN` 必须与 `CLASSFLOW_BEARER_TOKEN` 完全一致。
+- 语音转文字模型名就在 `/etc/classflow/backend.env` 的 `CLASSFLOW_DASHSCOPE_MODEL`。当前仓库默认值是 `fun-asr-mtl`；如果你想换成别的 DashScope 录音文件识别模型，直接改这个环境变量后重启后端即可，不需要改源码。
+- 这个模型值会被后端同时用于两处：`GET /api/v1/uploads?action=getPolicy&model=...` 的临时上传凭证申请，以及 `POST /api/v1/services/audio/asr/transcription` 的异步转写提交。两处必须一致，否则 `oss://` 临时文件即使上传成功，也会在后续转写时失败。
 - `CLASSFLOW_ARTIFACT_PROXY_TOKEN` 是“后端访问 Worker 私有产物接口”使用的单独密钥，不给浏览器、不写进 userscript。
 - 新版本把“上传并发”和“转写并发”拆开了；校园网弱上行环境下，建议先从 `2 / 2` 起步，不要再沿用旧的 `CLASSFLOW_DASHSCOPE_CONCURRENCY=8`。
 - 下载链路现在依赖 `aria2c`，并支持断点续传、自动重试、连接超时，以及“按需启用”的低速退出；默认配置不会因为网速慢就主动失败，只有显式填写正数 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES` 时才会启用该阈值。推荐直接使用 [env.example](/home/zjhsteven/ClassFlow/apps/backend/env.example) 里的默认稳健参数起步。
