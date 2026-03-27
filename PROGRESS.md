@@ -37,6 +37,7 @@
 - 已完成：本轮验证与部署已完成：`cargo fmt --check`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、前端 `npm run lint`、`npm test`、`npm run build` 全部通过；后端 `systemd --user` 服务已重启到新 `release`，Worker 已发布到 `https://classflow-web.zhangjiahe0830.workers.dev`。
 - 已完成：真实任务 `a2d54821-60ad-4810-a44d-a74a7747a54a` 已验证通过两段进度链路：下载阶段一度显示 `99% / 471040 B/s / ETA 2s`，随后切到上传阶段显示 `18.90% / 1377435 B/s / ETA 50s`，证明前端现在能够拿到任务运行中的下载/上传进度与速率。
 - 已完成：后端已新增任务摘要 SSE 路由，前端 TaskPanel 已改为 `EventSource` 订阅，Worker 沿用流式透传；右侧详情日志改为“选中加载 + 手动刷新/回到前台同步”兜底，不再跟随高频轮询。
+- 已完成：在本轮模型修正验证期间，顺手修复了 `stream_tasks` 里的历史 Clippy 阻塞项：把只执行一次的 `loop + break` 等待逻辑改为单次 `recv()` 匹配，保证当前工具链下 `cargo clippy -D warnings` 可继续通过。
 - 已完成：本轮验证已通过：后端 `cargo fmt`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`；前端 `npm run lint`、`npm test`、`npm run build` 全部通过。
 - 已完成：已重新构建 `release` 后端并重启 `systemd --user` 服务；前端 Worker 已重新发布到 `https://classflow-web.zhangjiahe0830.workers.dev`，本机 `curl` 验证已能收到 `event: tasks_snapshot` 的 SSE 首帧。
 - 已完成：前端已把左侧任务/课程列表、右侧任务详情日志、长错误提示、课程总稿预览全部改为“面板内滚动”，并整体压缩了字号、间距、卡片内边距，减少常见笔记本视口里来回滚整页的次数。

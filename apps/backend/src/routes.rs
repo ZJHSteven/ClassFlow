@@ -118,13 +118,12 @@ async fn stream_tasks(
         (true, state, query, receiver),
         |(should_send_initial, state, query, mut receiver)| async move {
             if !should_send_initial {
-                loop {
-                    match receiver.recv().await {
-                        Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            break;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
-                    }
+                // 这里的语义其实只是“等下一次广播信号”。
+                // 旧实现写成了 `loop + break`，逻辑上能工作，但 Clippy 会正确指出：
+                // 这个循环无论如何都只会执行一次，因此直接改成单次 `match` 更清晰。
+                match receiver.recv().await {
+                    Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
                 }
             }
 
