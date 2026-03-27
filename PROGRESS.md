@@ -1,8 +1,11 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
-- 现状：正在核对阿里云百炼录音文件转写模型名；已确认当前仓库默认值仍是 `fun-asr`，而上传凭证与异步转写提交会共同使用 `CLASSFLOW_DASHSCOPE_MODEL`。
-- 正在做：已完成阿里云官方文档与真实 API 冒烟核验，正在把默认模型切到 `fun-asr-mtl`，并把该配置项在环境变量与部署文档中进一步显式暴露。
+- 现状：后端默认录音文件转写模型已从 `fun-asr` 调整为 `fun-asr-mtl`；模型配置入口已明确收口到 `/etc/classflow/backend.env` 中的 `CLASSFLOW_DASHSCOPE_MODEL`，上传凭证申请与异步转写提交会共同使用这一值。
+- 已完成：已核对阿里云 2026-03-27 官方文档与真实 API 冒烟；当前 `fun-asr` 与 `fun-asr-mtl` 都可正常调用，且在“中国内地”价格页里同属 Fun-ASR 录音文件识别模型表。
+- 已完成：已把默认模型改为 `fun-asr-mtl`，并同步更新 `apps/backend/src/config.rs`、`apps/backend/env.example`、`docs/deployment.md`、测试夹具默认值，以及本轮计划/进度文档。
+- 已完成：本轮后端验证已通过：`cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`、`cargo test --manifest-path apps/backend/Cargo.toml`。
+- 正在做：等待你把服务器上的 `/etc/classflow/backend.env` 同步成新的模型值后，再决定是否需要我继续代你执行重启/部署步骤。
 - 现状：主仓库代码、自动化测试、真实 DashScope 冒烟、后端常驻服务、Cloudflare Worker 外网代理均已打通；本轮已进一步收紧前端布局密度、为任务台/课程库补上固定面板高度与内部滚动、把任务/课程列表改成“日期越新越靠前”，并把课程总稿链路优化为“公开 Worker 直读 R2 + 前端预览内容复用到下载”。
 - 已完成：方案已定稿；已确认本机具备 Rust、Node.js 与 ffmpeg；确认 `CapsWriter-Offline` 的百炼实现位于 `feat/bailian-cloud-migration` 分支；已清理 `cargo new` 误生成的子仓库元数据。
 - 已完成：Rust 后端第一轮 `cargo check` 与单元测试已通过，核心骨架可编译。
@@ -51,6 +54,7 @@
 - 下一步：根据你真实使用的屏幕尺寸与操作节奏，再决定是否继续补“面板高度可配置”、“任务详情按需 SSE”或“课程总稿/manifest 的浏览器端缓存持久化”。
 
 ## 关键决策与理由（防止“吃书”）
+- 决策U：本轮把代码默认值切到 `fun-asr-mtl`，但保留 `CLASSFLOW_DASHSCOPE_MODEL` 作为唯一显式覆盖入口，不把模型名再分散到更多配置项里。（原因：当前后端上传凭证与转写提交本来就应该共用同一个模型名；继续拆分只会增加“上传和调用不一致”的出错面。）
 - 决策T：DashScope 临时 `oss://` 上传和后续模型调用必须使用完全一致的模型名，因此若默认模型从 `fun-asr` 调整为 `fun-asr-mtl`，上传凭证请求与转写提交必须一起改，不能只改其中一处。（原因：阿里云官方“临时 URL 上传”文档明确要求“模型一致”，否则会在上传后调用阶段失败。）
 - 决策A：采用单仓结构承载后端与前端。（原因：当前仓库为空，最利于统一测试、部署与文档。）
 - 决策B：前端通过 Cloudflare Worker 代理后端。（原因：避免在浏览器中暴露后端 Bearer Token。）
@@ -86,3 +90,4 @@
 - 坑11：仓库文档里曾写过“前端默认关闭自动轮询”，但当前 `TaskPanel` 实现实际仍保留“运行中每 1.2 秒刷新一次任务列表与详情”的逻辑；做 SSE 改造时必须以代码现状而不是旧文档为准。
 - 坑12：SSE 改造虽然消掉了高频轮询，但右侧详情里的事件日志与产物路径不会再跟着每秒自动补齐；如果需要最新日志，当前设计要求用户手动刷新或切回前台同步一次。
 - 坑13：课程库从“选中课程后再加载详情”改成固定高度面板后，如果测试代码不主动 `cleanup()`，多个 `render()` 结果会残留在同一份 DOM 里，导致“下载按钮找不到”这类假失败；前端测试现已补上清理步骤。
+- 坑14：如果你只把转写提交里的模型改成 `fun-asr-mtl`，却忘了同步修改 `CLASSFLOW_DASHSCOPE_MODEL` 对应的上传凭证模型，那么 `oss://` 临时文件链路会出现“上传成功、转写失败”的假象；DashScope 要求这两处模型名完全一致。

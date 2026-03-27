@@ -82,4 +82,5 @@
 ### 当前状态
 - 已完成：已定位当前默认模型为 `fun-asr`，且上传凭证与转写提交共用同一配置值。
 - 已完成：已核对阿里云官方文档，并完成真实 API 冒烟，确认 `fun-asr` 与 `fun-asr-mtl` 当前都可正常提交并成功转写官方示例音频。
-- 进行中：正在把默认模型调整为 `fun-asr-mtl`，并把配置入口在示例环境变量与部署文档中进一步写清楚。
+- 已完成：已把默认模型调整为 `fun-asr-mtl`，并把配置入口在示例环境变量与部署文档中进一步写清楚。
+- 已完成：后端验证已通过 `cargo fmt --check`、`cargo check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test`。
