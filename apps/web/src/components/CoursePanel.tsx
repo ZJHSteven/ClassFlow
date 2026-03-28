@@ -17,6 +17,7 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, listCourses } from '../api'
+import { buildCourseMarkdownDownloadFilename } from '../courseDownloadFilename'
 import { downloadBlob, downloadWithProgress } from '../downloads'
 import { formatBytes, formatPercent, formatSpeed, normalizePercent } from '../progress'
 import type { CourseDetail, CourseSummary } from '../types'
@@ -262,7 +263,11 @@ export function CoursePanel() {
               key: 'course.md',
               label: '下载课程总稿',
               href: courseMarkdownDownloadUrl,
-              filename: `${selectedCourseDetail.course_name}-${selectedCourseDetail.date}.md`,
+              filename: buildCourseMarkdownDownloadFilename({
+                date: selectedCourseDetail.date,
+                courseName: selectedCourseDetail.course_name,
+                teacherName: selectedCourseDetail.teacher_name,
+              }),
               primary: true,
             }
           : null,

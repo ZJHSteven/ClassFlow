@@ -4,7 +4,10 @@ import App from './App'
 
 const fetchMock = vi.fn()
 const setIntervalSpy = vi.spyOn(window, 'setInterval')
-const anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+const downloadedFilenames: string[] = []
+const anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+  downloadedFilenames.push(this.download)
+})
 const createObjectUrlSpy = vi.fn(() => 'blob:test')
 const revokeObjectUrlSpy = vi.fn()
 
@@ -147,6 +150,7 @@ describe('App', () => {
     fetchMock.mockReset()
     setIntervalSpy.mockClear()
     anchorClickSpy.mockClear()
+    downloadedFilenames.length = 0
     createObjectUrlSpy.mockClear()
     revokeObjectUrlSpy.mockClear()
     MockEventSource.instances.length = 0
@@ -243,5 +247,6 @@ describe('App', () => {
     })
 
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(downloadedFilenames.at(-1)).toBe('3.20-病理学-王老师.md')
   })
 })
