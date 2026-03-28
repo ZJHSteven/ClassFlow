@@ -247,6 +247,6 @@ describe('App', () => {
     })
 
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(downloadedFilenames.at(-1)).toBe('3.20-病理学-王老师.md')
+    expect(downloadedFilenames[downloadedFilenames.length - 1]).toBe('3.20-病理学-王老师.md')
   })
 })
