@@ -100,4 +100,7 @@
 5. 更新 `PROGRESS.md` 记录本轮命名规则变更、测试结果与重新部署状态，并完成前端重新部署。
 
 ### 当前状态
-- 进行中：已定位到 `apps/web/src/components/CoursePanel.tsx` 中的课程级下载文件名仍为 `课程名-完整日期`，与目标规则不一致。
+- 已完成：已把课程总稿下载文件名改为 `月.日-课程名-老师.md`，并保持后端课程日期、课程归组键、产物路径不变。
+- 已完成：前端新增 `courseDownloadFilename` 命名工具与对应单元测试，覆盖标准日期、兼容日期、非法字符清洗、缺省兜底命名。
+- 已完成：前端验证已通过 `npm test`（15 项测试）、`npm run lint`、`npm run build`。
+- 已完成：Cloudflare Worker 已重新部署到 `https://classflow-web.zhangjiahe0830.workers.dev`，版本号 `81191b71-ac36-4b71-ba66-5b2591d49fc4`；线上抽样验收的首页与 `/api/v1/health` 均返回正常。
