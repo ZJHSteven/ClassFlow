@@ -122,6 +122,9 @@
 6. 运行必要验证命令，确认迁移后服务可持续运行；完成后提交本轮修改。
 
 ### 当前状态
-- 进行中：已确认当前线上后端实际运行于 `~/.config/systemd/user/classflow-backend.service`，并且用户未开启 `linger`，这是“VS Code 断开后后端跟着消失”的直接原因。
-- 已完成：已确认真实环境变量文件位于 `/home/zjhsteven/.config/classflow/backend.env`，真实数据库位于 `/home/zjhsteven/.local/state/classflow/data/classflow.db`，临时目录位于 `/home/zjhsteven/.local/state/classflow/tmp`，本地产物目录位于 `/home/zjhsteven/.local/state/classflow/artifacts`。
-- 已完成：已确认 `cloudflared.service` 当前由系统级 `systemd` 正常托管并已启用，后续只需把后端迁到同一层级即可。
+- 已完成：已确认当前线上后端此前实际运行于 `~/.config/systemd/user/classflow-backend.service`，并且用户未开启 `linger`，这正是“VS Code 断开后后端跟着消失”的直接原因。
+- 已完成：已确认真实环境变量文件原始来源位于 `/home/zjhsteven/.config/classflow/backend.env`，并已复制到系统级路径 `/etc/classflow/backend.env`；真实数据库位于 `/home/zjhsteven/.local/state/classflow/data/classflow.db`，临时目录位于 `/home/zjhsteven/.local/state/classflow/tmp`，本地产物目录位于 `/home/zjhsteven/.local/state/classflow/artifacts`。
+- 已完成：已确认 `cloudflared.service` 当前由系统级 `systemd` 正常托管并已启用。
+- 已完成：系统级 `/etc/systemd/system/classflow-backend.service` 已安装并 `enable --now`，当前以后端二进制 `/home/zjhsteven/ClassFlow/target/release/backend` 运行于 `/system.slice/classflow-backend.service`。
+- 已完成：旧的用户级 `classflow-backend.service` 已 `disable --now`，当前 `http://127.0.0.1:8787/api/v1/health` 与 `https://classflow-backend.zjhstudio.com/api/v1/health` 验证均通过。
+- 已完成：已在 `docs/deployment.md` 中补充当前校园机的真实部署路径、系统级托管方式、以及 Cloudflare Access / Service Token 的配置步骤。

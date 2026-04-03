@@ -1,6 +1,11 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：后端常驻方式已从 `systemd --user` 迁移为真正的系统级 `systemd` 服务；当前单元文件位于 `/etc/systemd/system/classflow-backend.service`，环境变量位于 `/etc/classflow/backend.env`，进程已归属 `/system.slice/classflow-backend.service`，不再依赖 SSH / VS Code Remote 会话存活。
+- 已完成：旧的用户级单元 `~/.config/systemd/user/classflow-backend.service` 已 `disable --now`，新的系统级 `classflow-backend.service` 已 `enable --now`；本机 `http://127.0.0.1:8787/api/v1/health` 与公网 `https://classflow-backend.zjhstudio.com/api/v1/health` 已再次验证通过。
+- 已完成：已确认当前这台校园机的真实运行目录与状态目录：仓库 `/home/zjhsteven/ClassFlow`，后端二进制 `/home/zjhsteven/ClassFlow/target/release/backend`，数据库 `/home/zjhsteven/.local/state/classflow/data/classflow.db`，临时目录 `/home/zjhsteven/.local/state/classflow/tmp`，本地产物目录 `/home/zjhsteven/.local/state/classflow/artifacts`。
+- 已完成：已补充部署文档，写清当前机器真实路径、系统级 systemd 托管方式、Cloudflare Access / Service Token 的 Dashboard 配置步骤，以及后续收口 `workers.dev` 前必须先完成的准备项。
+- 正在做：等待你按文档去 Zero Trust Dashboard 创建 Access 应用和 Service Token；等你把 token 建好后，我再把 Worker 代理补成“可带 Access 头访问受保护后端”的最终形态。
 - 现状：前端“下载课程总稿”文件名已调整为 `月.日-课程名-老师.md`，例如 `3.10-心理危机干预与预防-赵朋.md`；这次只改浏览器下载显示名，不改后端原始日期、课程归组键或 R2 产物路径。
 - 已完成：新增前端命名工具 `apps/web/src/courseDownloadFilename.ts`，并补上 4 条单元测试，覆盖标准日期、斜杠日期、非法文件名字符清洗、日期/老师缺失兜底。
 - 已完成：前端本轮验证已通过 `npm test`（共 `15` 项测试）、`npm run lint`、`npm run build`。
@@ -59,6 +64,9 @@
 - 下一步：根据你真实使用的屏幕尺寸与操作节奏，再决定是否继续补“面板高度可配置”、“任务详情按需 SSE”或“课程总稿/manifest 的浏览器端缓存持久化”。
 
 ## 关键决策与理由（防止“吃书”）
+- 决策W：这台校园机的后端常驻方式正式改为系统级 `systemd`，不再继续依赖 `systemd --user + linger` 作为最终方案。（原因：项目目标是“开机即在线、与 SSH / VS Code 会话彻底解耦”，系统级服务更符合守护进程的长期形态。）
+- 决策X：当前系统级服务先继续以 `zjhsteven` 身份运行，并沿用既有的 `/home/zjhsteven/ClassFlow` 与 `/home/zjhsteven/.local/state/classflow/*` 路径，不额外迁移到 `/opt/classflow` 或单独 `classflow` 用户。（原因：本轮重点是先消除用户会话耦合风险；沿用现有数据目录可以把迁移风险压到最低。）
+- 决策Y：Cloudflare Access 的收口顺序采用“先给前端入口和自动化准备好 Service Token，再考虑把后端 Tunnel 域名也纳入 Access”的渐进式方案。（原因：当前 Worker 还只会带应用自己的 Bearer Token，如果后端域名先被 Access 挡住，前端代理会立刻失效。）
 - 决策U：本轮把代码默认值切到 `fun-asr-mtl`，但保留 `CLASSFLOW_DASHSCOPE_MODEL` 作为唯一显式覆盖入口，不把模型名再分散到更多配置项里。（原因：当前后端上传凭证与转写提交本来就应该共用同一个模型名；继续拆分只会增加“上传和调用不一致”的出错面。）
 - 决策T：DashScope 临时 `oss://` 上传和后续模型调用必须使用完全一致的模型名，因此若默认模型从 `fun-asr` 调整为 `fun-asr-mtl`，上传凭证请求与转写提交必须一起改，不能只改其中一处。（原因：阿里云官方“临时 URL 上传”文档明确要求“模型一致”，否则会在上传后调用阶段失败。）
 - 决策V：课程总稿下载名只在前端浏览器落盘时改成 `月.日-课程名-老师.md`，不去修改后端 `date` 原值、课程归组键与产物路径。（原因：用户要改的是“下载目录里的可读性”，而排序、筛选、去重、存储仍然依赖完整日期与稳定键。）
@@ -83,6 +91,8 @@
 - 决策S：任务台与课程库都改为“固定面板高度 + 内部滚动”布局，而不是任由列表、报错、日志把整页无限拉长。（原因：用户要求在常见笔记本视口中尽量一屏看到主要操作按钮，减少无意义滚整页。）
 
 ## 常见坑 / 复现方法
+- 坑16：如果后端只是跑在 `systemd --user`，但当前用户又没有开启 `linger`，那么一旦 SSH / VS Code Remote 会话全断，`user@UID.service` 会被回收，后端也会一起消失；外部表现通常就是 `cloudflared` 回源 `127.0.0.1:8787` 时得到 `connect refused`，前端出现 `502`。
+- 坑17：就算自定义域名已经接入 Cloudflare Access，只要 `workers.dev` 入口还没一起收口，它依然可能成为匿名可访问的公开入口；正式关闭前必须先把 Access Service Token 的自动化访问链路补齐。
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
 - 坑2：旧的 `tsc -p tsconfig.worker.json` 曾把 `worker/*.js` 直接输出到源码目录，Vitest 会把这些残留文件当成重复测试执行；现已改成 `noEmit`，但拉起测试前仍要避免目录里残留旧产物。
 - 坑3：Tampermonkey 若只写 `@connect 127.0.0.1`，切到 Cloudflare Tunnel 域名后会直接跨域失败；双模式版本必须放宽到可访问后端实际域名。
