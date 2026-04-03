@@ -104,3 +104,24 @@
 - 已完成：前端新增 `courseDownloadFilename` 命名工具与对应单元测试，覆盖标准日期、兼容日期、非法字符清洗、缺省兜底命名。
 - 已完成：前端验证已通过 `npm test`（15 项测试）、`npm run lint`、`npm run build`。
 - 已完成：Cloudflare Worker 已重新部署到 `https://classflow-web.zhangjiahe0830.workers.dev`，版本号 `81191b71-ac36-4b71-ba66-5b2591d49fc4`；线上抽样验收的首页与 `/api/v1/health` 均返回正常。
+
+## 2026-04-03 系统级托管与 Access 收口 ExecPlan
+
+### 目标
+- 把当前依赖 `systemd --user` 的后端常驻方式迁移为真正的系统级 `systemd` 服务，彻底消除“SSH / VS Code 会话断开后后端消失”的风险。
+- 迁移时继续沿用现有真实数据目录与环境变量文件，避免改动数据库、缓存、临时目录与产物目录造成额外风险。
+- 梳理当前前端、Worker、后端 Tunnel、自定义域名与 `workers.dev` 的访问关系，为后续接入 Cloudflare Access Service Token 做准备。
+- 把当前机器上的真实部署路径、systemd 单元位置、数据目录位置与 Access 配置步骤补进文档，方便后续维护与自动化测试。
+
+### 执行步骤
+1. 审查当前用户级 `classflow-backend.service`、真实 `backend.env`、数据库路径、临时目录、产物目录与 `cloudflared` 状态，确认迁移边界。
+2. 在不迁移数据目录的前提下，生成并安装系统级 `classflow-backend.service`，让它以当前账号 `zjhsteven` 身份运行，但由系统级 `systemd` 在开机阶段托管。
+3. 停用用户级 `classflow-backend.service`，启动系统级服务，并验证本机 `127.0.0.1:8787`、Tunnel 外网健康检查与当前进程归属。
+4. 梳理仓库与现网中所有依赖 `workers.dev`、后端 Tunnel 域名、`BACKEND_BASE_URL`、`BACKEND_TOKEN` 的位置，明确后续 Access 收口时必须同步修改的点。
+5. 更新 `docs/deployment.md`、`PLANS.md`、`PROGRESS.md`，记录真实部署路径、目录清单、系统级托管方案，以及 Cloudflare Access / Service Token 的配置步骤。
+6. 运行必要验证命令，确认迁移后服务可持续运行；完成后提交本轮修改。
+
+### 当前状态
+- 进行中：已确认当前线上后端实际运行于 `~/.config/systemd/user/classflow-backend.service`，并且用户未开启 `linger`，这是“VS Code 断开后后端跟着消失”的直接原因。
+- 已完成：已确认真实环境变量文件位于 `/home/zjhsteven/.config/classflow/backend.env`，真实数据库位于 `/home/zjhsteven/.local/state/classflow/data/classflow.db`，临时目录位于 `/home/zjhsteven/.local/state/classflow/tmp`，本地产物目录位于 `/home/zjhsteven/.local/state/classflow/artifacts`。
+- 已完成：已确认 `cloudflared.service` 当前由系统级 `systemd` 正常托管并已启用，后续只需把后端迁到同一层级即可。
