@@ -2,6 +2,29 @@
 
 本文档按“校园机后端 + Cloudflare Worker 前端代理 + cloudflared Tunnel 暴露后端”的目标环境来写。
 
+## 0. 当前这台校园机的真实部署位置
+
+以下路径是 2026-04-03 这台校园机已经验证过、当前正在使用的真实位置，后续排障优先以这里为准：
+
+- 仓库根目录：`/home/zjhsteven/ClassFlow`
+- 后端可执行文件：`/home/zjhsteven/ClassFlow/target/release/backend`
+- 系统级 systemd 单元：`/etc/systemd/system/classflow-backend.service`
+- 后端环境变量文件：`/etc/classflow/backend.env`
+- 当前后端监听地址：`127.0.0.1:8787`
+- SQLite 数据库：`/home/zjhsteven/.local/state/classflow/data/classflow.db`
+- 临时工作根目录：`/home/zjhsteven/.local/state/classflow/tmp`
+- 任务临时工作目录：`/home/zjhsteven/.local/state/classflow/tmp/jobs`
+- 本地产物目录：`/home/zjhsteven/.local/state/classflow/artifacts`
+- cloudflared 系统级单元：`/etc/systemd/system/cloudflared.service`
+- 旧的用户级后端单元：`/home/zjhsteven/.config/systemd/user/classflow-backend.service`
+
+说明：
+
+- 旧的用户级单元现在已经 `disable --now`，保留文件只是为了排查历史，不再参与开机托管。
+- 当前系统级后端服务以 `zjhsteven` 用户身份运行，但由 PID 1 管理，因此不再依赖 SSH / VS Code Remote 会话是否在线。
+- 当前机器上的数据库、临时目录、产物目录都继续沿用用户目录下的既有真实路径，没有因为切换到系统级托管而迁库。
+- 查看后端日志请优先使用 `journalctl -u classflow-backend.service`；查看 Tunnel 日志请使用 `journalctl -u cloudflared.service`。
+
 ## 1. 目录与角色
 
 - `apps/backend`
@@ -112,6 +135,50 @@ sudo systemctl status classflow-backend.service
 sudo systemctl status classflow-cleanup.timer
 ```
 
+### 当前这台机器已经落地的系统级单元
+
+本机当前安装的是系统级单元 `/etc/systemd/system/classflow-backend.service`，内容等价于：
+
+```ini
+[Unit]
+Description=ClassFlow Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zjhsteven
+Group=zjhsteven
+WorkingDirectory=/home/zjhsteven/ClassFlow
+EnvironmentFile=/etc/classflow/backend.env
+ExecStart=/home/zjhsteven/ClassFlow/target/release/backend
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+与仓库模板的差异：
+
+- 仓库模板假设使用 `/opt/classflow` 与独立 `classflow` 用户，更适合全新机器的标准化部署。
+- 当前校园机为了最快止损，先继续沿用既有仓库目录 `/home/zjhsteven/ClassFlow` 与既有数据目录 `/home/zjhsteven/.local/state/classflow/*`。
+- 这样做的核心好处是“不迁数据库、不迁临时目录、不改 Worker / Tunnel 配置”，只把后端进程的托管层级从 `systemd --user` 改成系统级 `systemd`。
+
+当前机器可直接使用的运维命令：
+
+```bash
+sudo systemctl status classflow-backend.service
+sudo systemctl restart classflow-backend.service
+sudo systemctl stop classflow-backend.service
+sudo systemctl disable classflow-backend.service
+journalctl -u classflow-backend.service -n 200 --no-pager
+curl http://127.0.0.1:8787/api/v1/health
+curl https://classflow-backend.zjhstudio.com/api/v1/health
+```
+
 ## 6. 配置 cloudflared Tunnel
 
 示例见 [config.example.yml](/home/zjhsteven/ClassFlow/deploy/cloudflared/config.example.yml)。
@@ -191,6 +258,88 @@ npx wrangler deploy
 - React 前端天然就是访问 Worker，所以浏览器侧不需要知道后端真实 token。
 - userscript 也推荐把“ClassFlow 后端地址”填成 Worker 域名，例如 `https://classflow-web.<your-subdomain>.workers.dev` 或你绑定的前端域名。
 - 当 userscript 走 Worker 时，脚本里的 `Bearer Token` 可以留空；只有脚本直连后端 Tunnel 域名时，才需要手工填写 `CLASSFLOW_BEARER_TOKEN`。
+
+## 8.1 Cloudflare Access 收口步骤
+
+当前现网状态需要特别注意：
+
+- `classflow.zjhstudio.com` 已经被 Cloudflare Access 保护，未登录访问会跳转到 Access 登录页。
+- `classflow-web.zhangjiahe0830.workers.dev` 当前仍可匿名访问，因此它现在仍然是公开入口。
+- `classflow-backend.zjhstudio.com` 当前没有被 Access 挡在最外层，实际保护依赖的是应用自己的 `CLASSFLOW_BEARER_TOKEN`。
+
+建议的收口顺序不是“立刻关域名”，而是先把自动化访问路径搭好，再逐步收紧：
+
+### A. 在 Zero Trust 里准备两个 Access 应用
+
+1. 打开 Cloudflare Zero Trust Dashboard。
+2. 进入 `Access -> Applications`。
+3. 新建第一个 `Self-hosted` 应用：
+   - 应用名可填：`ClassFlow Frontend`
+   - 域名填：`classflow.zjhstudio.com`
+   - Path 留空，表示整站都受保护。
+4. 如果你准备连 `workers.dev` 也一起保护，再新建第二个 `Self-hosted` 应用：
+   - 应用名可填：`ClassFlow WorkersDev`
+   - 域名填：`classflow-web.zhangjiahe0830.workers.dev`
+   - Path 留空。
+5. 如果你准备把后端 Tunnel 域名也纳入 Access，再新建第三个 `Self-hosted` 应用：
+   - 应用名可填：`ClassFlow Backend`
+   - 域名填：`classflow-backend.zjhstudio.com`
+   - Path 留空。
+
+### B. 给“人访问”配置正常登录策略
+
+在每个 Access 应用里增加一条浏览器用策略：
+
+- Action：`Allow`
+- Rules：按你的常用登录方式选择，例如邮箱、GitHub、Google、One-time PIN 等
+
+这条策略是给你自己在浏览器里正常登录看的。
+
+### C. 给“Worker / 自动化 / AI 测试”配置 Service Token
+
+1. 在 Zero Trust Dashboard 进入 `Access -> Service Auth -> Service Tokens`。
+2. 创建一个新的 Service Token，例如命名为 `classflow-automation`。
+3. 记下两项值：
+   - `Client ID`
+   - `Client Secret`
+4. 回到刚才的 Access 应用，在策略里新增一条自动化策略：
+   - Action：`Service Auth`
+   - Include：选择刚刚创建的 `classflow-automation`
+
+之后，自动化请求访问受 Access 保护的域名时，要额外带这两个头：
+
+```text
+CF-Access-Client-Id: <client-id>
+CF-Access-Client-Secret: <client-secret>
+```
+
+### D. 在 ClassFlow 架构里怎么落地
+
+推荐分成两步，不要一步到位同时改三层：
+
+1. 先保护前端入口：
+   - 先把 `classflow.zjhstudio.com` 与 `classflow-web.zhangjiahe0830.workers.dev` 都接入 Access。
+   - 浏览器通过正常登录访问。
+   - AI / curl / 自动化测试通过 Service Token 访问。
+2. 再保护后端 Tunnel 域名：
+   - 给 `classflow-backend.zjhstudio.com` 加 Access。
+   - 但在 Worker 里增加对 `CF-Access-Client-Id` / `CF-Access-Client-Secret` 的转发支持后，再正式启用。
+   - 否则 Worker 当前只会带 `Authorization: Bearer <BACKEND_TOKEN>`，一旦后端域名被 Access 拦住，前端代理会直接失效。
+
+### E. 测试与自动化阶段的建议
+
+- 浏览器人工测试：
+  - 直接登录 Access。
+- 本机开发测试：
+  - 优先测 `http://127.0.0.1:8787` 或 `wrangler dev`，不经过 Access。
+- 远端自动化测试：
+  - 统一走 Access Service Token。
+  - 不建议继续依赖“留一个裸奔入口”作为长期方案。
+
+### F. 后续准备关闭 `workers.dev` 时
+
+- 需要先确认你的自定义前端域名与自动化 Service Token 路径都可用。
+- 然后在 `wrangler.toml` 里显式加入 `workers_dev = false`，避免只在面板里关闭却被后续部署重新打开。
 
 ## 9. R2 目录约定
 
