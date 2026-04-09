@@ -150,4 +150,5 @@
 - 已完成：已确认当前 `mihomo` DNS 模式为 `redir-host`，并非 `fake-ip`，因此现阶段不再把 `fake-ip` 作为主嫌疑。
 - 已完成：已从 `mihomo` 日志中抓到 `2026-04-04 23:02:25 +0800`、`23:09:51 +0800`、`23:20:10 +0800` 对 `classflow-web.zhangjiahe0830.workers.dev:443` 的 `dial Kuromis ... i/o timeout` 直接证据。
 - 已完成：已复现前端层面的一个近似问题：并发触发 `tasks` / `courses` / `tasks/stream` 时，普通列表请求常可返回 `200`，但 `SSE` 首连会间歇性在 TLS 层失败，这与“首屏首次加载常报 502、刷新后恢复”的现象一致。
+- 已完成：已再次核对线上真实环境变量文件，确认 `/etc/classflow/backend.env` 仍保留旧值 `CLASSFLOW_DASHSCOPE_MODEL=fun-asr`，这与仓库里已切到 `fun-asr-mtl` 的默认值不一致，必须在本轮一并纠正，避免继续按旧模型计费。
 - 正在做：准备先改 `mihomo` 精确规则，再在线上重试 `11` 个失败任务，以判断代理链路是否为当前阻塞主因。
