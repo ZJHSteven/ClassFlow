@@ -206,4 +206,7 @@
 - 已完成：已用 Context7 与 Cloudflare 官方文档核对 Service Token 的标准请求头为 `CF-Access-Client-Id` 与 `CF-Access-Client-Secret`。
 - 已完成：已确认当前前端浏览器访问 `classflow.zjhstudio.com` 走的是“人类登录 Access”路径，不应把 Service Token 发到浏览器端。
 - 已完成：已确认当前仓库中的 Worker 代理尚未向后端回源请求附带 Access Service Token，因此一旦后端 Tunnel 域名也被 Access 保护，现有 Worker 会直接失效。
-- 正在做：修改 Worker 代理与测试，并补充“浏览器 / Worker / smartclass 脚本”三类调用方的使用边界说明。
+- 已完成：已修改 Worker 代理与测试，并补充“浏览器 / Worker / smartclass 脚本”三类调用方的使用边界说明；前端本地验证已通过 `npm test`（17 项）、`npm run lint`、`npm run build`。
+- 已完成：已把新的 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` 写入 Worker secret，并重新部署到 `https://classflow-web.zhangjiahe0830.workers.dev`，当前版本号 `fe03c7e2-42ff-4a06-9e6d-93996c9db66c`。
+- 已完成：现网探针已确认 `classflow-web.zhangjiahe0830.workers.dev` 现在也会被 Cloudflare Access 重定向到登录页，说明 `workers.dev` 入口已不再匿名裸奔。
+- 已完成：带真实 Service Token 访问 `classflow.zjhstudio.com` 与 `classflow-web.zhangjiahe0830.workers.dev` 仍返回 `302`，且返回元数据里 `service_token_status=false`；这说明 Token 虽已创建，但尚未被挂到对应 Access 应用的 `Service Auth` 策略中，或挂到了错误应用。
