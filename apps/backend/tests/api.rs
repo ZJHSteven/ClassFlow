@@ -200,6 +200,10 @@ async fn build_test_state(
         r2_region: "auto".to_string(),
         artifact_proxy_base_url: String::new(),
         artifact_proxy_token: String::new(),
+        artifact_proxy_connect_timeout_secs: 10.0,
+        artifact_proxy_timeout_secs: 30.0,
+        artifact_proxy_retry_attempts: 2,
+        artifact_proxy_retry_wait_secs: 0.1,
         task_event_retention_days: 30,
         task_event_retention_rows_per_task: 200,
     };

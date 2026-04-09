@@ -84,6 +84,10 @@ pub struct AppConfig {
     pub r2_region: String,
     pub artifact_proxy_base_url: String,
     pub artifact_proxy_token: String,
+    pub artifact_proxy_connect_timeout_secs: f64,
+    pub artifact_proxy_timeout_secs: f64,
+    pub artifact_proxy_retry_attempts: u32,
+    pub artifact_proxy_retry_wait_secs: f64,
     pub task_event_retention_days: u64,
     pub task_event_retention_rows_per_task: u64,
 }
@@ -186,6 +190,22 @@ impl AppConfig {
             artifact_proxy_base_url: env::var("CLASSFLOW_ARTIFACT_PROXY_BASE_URL")
                 .unwrap_or_default(),
             artifact_proxy_token: env::var("CLASSFLOW_ARTIFACT_PROXY_TOKEN").unwrap_or_default(),
+            artifact_proxy_connect_timeout_secs: env_or_parse(
+                "CLASSFLOW_ARTIFACT_PROXY_CONNECT_TIMEOUT_SECS",
+                10.0,
+            )?,
+            artifact_proxy_timeout_secs: env_or_parse(
+                "CLASSFLOW_ARTIFACT_PROXY_TIMEOUT_SECS",
+                30.0,
+            )?,
+            artifact_proxy_retry_attempts: env_or_parse(
+                "CLASSFLOW_ARTIFACT_PROXY_RETRY_ATTEMPTS",
+                3,
+            )?,
+            artifact_proxy_retry_wait_secs: env_or_parse(
+                "CLASSFLOW_ARTIFACT_PROXY_RETRY_WAIT_SECS",
+                1.0,
+            )?,
             task_event_retention_days: env_or_parse("CLASSFLOW_TASK_EVENT_RETENTION_DAYS", 30)?,
             task_event_retention_rows_per_task: env_or_parse(
                 "CLASSFLOW_TASK_EVENT_RETENTION_ROWS_PER_TASK",

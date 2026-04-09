@@ -151,4 +151,9 @@
 - 已完成：已从 `mihomo` 日志中抓到 `2026-04-04 23:02:25 +0800`、`23:09:51 +0800`、`23:20:10 +0800` 对 `classflow-web.zhangjiahe0830.workers.dev:443` 的 `dial Kuromis ... i/o timeout` 直接证据。
 - 已完成：已复现前端层面的一个近似问题：并发触发 `tasks` / `courses` / `tasks/stream` 时，普通列表请求常可返回 `200`，但 `SSE` 首连会间歇性在 TLS 层失败，这与“首屏首次加载常报 502、刷新后恢复”的现象一致。
 - 已完成：已再次核对线上真实环境变量文件，确认 `/etc/classflow/backend.env` 仍保留旧值 `CLASSFLOW_DASHSCOPE_MODEL=fun-asr`，这与仓库里已切到 `fun-asr-mtl` 的默认值不一致，必须在本轮一并纠正，避免继续按旧模型计费。
-- 正在做：准备先改 `mihomo` 精确规则，再在线上重试 `11` 个失败任务，以判断代理链路是否为当前阻塞主因。
+- 已完成：已把线上 `/etc/classflow/backend.env` 的 `CLASSFLOW_DASHSCOPE_MODEL` 改为 `fun-asr-mtl`，并在无运行任务窗口重启系统级后端；随后已验证真实进程环境变量确实变为 `CLASSFLOW_DASHSCOPE_MODEL=fun-asr-mtl`。
+- 已完成：已实测 `classflow-web.zhangjiahe0830.workers.dev -> DIRECT` 在这台机子上不可用；`curl` 直接打 Worker 会触发 TLS 失败，而 `mihomo` 记录到 `dial tcp 199.96.63.163:443: i/o timeout`。
+- 已完成：已临时把 `classflow-web.zhangjiahe0830.workers.dev` 切到 `Exflux` 做对照实验；代表任务 `3a0da4ba-12c3-4b3e-8df3-21b5e179848f` 以及其余 `8` 条 `storing_artifacts` 失败任务均已重试成功，说明“最后一步写 Worker 产物失败”与链路选择高度相关。
+- 已完成：按用户要求，线上 `mihomo` 现已把 `classflow-web.zhangjiahe0830.workers.dev` 的精确规则改回 `Kuromis` 主组，不再继续使用 `Exflux` 作为长期规则。
+- 已完成：仓库代码已补强 `WorkerArtifactStore`：新增独立连接超时/总超时/有限重试/更完整错误上下文，并新增 URL 规范化与临时 `5xx` 自动重试测试；`cargo test -p backend` 已全绿。
+- 正在做：保留 `3` 条 `uploading_audio` 失败任务与 `1` 条 `ASR_RESPONSE_HAVE_NO_WORDS` 失败任务作为线上样本，继续把“DashScope 上传慢 / 易失败”和“前端首屏 502 + 详情切换慢”作为下一阶段排查重点。

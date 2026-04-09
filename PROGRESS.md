@@ -1,6 +1,12 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：`2026-04-09` 这批“卡在 `storing_artifacts`、报 `error sending request for url (https://classflow-web...workers.dev/__classflow/artifacts/...)`”的故障已在线上完成归因与止血：`DIRECT` 不可用，`Exflux` 对照实验可恢复，说明 Worker 回源链路选择会直接决定最后一步产物写入是否成功。
+- 已完成：线上 `/etc/classflow/backend.env` 已从 `CLASSFLOW_DASHSCOPE_MODEL=fun-asr` 修正为 `CLASSFLOW_DASHSCOPE_MODEL=fun-asr-mtl`，并已在系统级 `classflow-backend.service` 重启后确认真实进程环境变量生效，避免继续按旧模型计费。
+- 已完成：以代表任务 `3a0da4ba-12c3-4b3e-8df3-21b5e179848f` 为样本验证后，原先 `9` 条 `storing_artifacts` 失败任务均已在线重试成功并转为 `succeeded`。
+- 已完成：仓库后端已补强 `WorkerArtifactStore` 的连接超时、总超时、有限重试、错误上下文与 URL 规范化，并新增 `WorkerArtifactStore` 单元测试；本轮 `cargo test -p backend` 共 `14` 个单元测试与 `8` 个集成测试全部通过。
+- 现状：按用户当前偏好，线上 `mihomo` 对 `classflow-web.zhangjiahe0830.workers.dev` 的精确规则已改回 `Kuromis` 主组，不再继续挂在 `Exflux` 兼容组。
+- 正在做：保留 `3` 条 `uploading_audio` 失败任务和 `1` 条百炼 `ASR_RESPONSE_HAVE_NO_WORDS` 失败任务作为活样本，下一步继续排查 DashScope 上传阶段的慢网 / 失败，以及前端首屏 `502`、`SSE` 首连不稳、详情切换慢的问题。
 - 现状：后端常驻方式已从 `systemd --user` 迁移为真正的系统级 `systemd` 服务；当前单元文件位于 `/etc/systemd/system/classflow-backend.service`，环境变量位于 `/etc/classflow/backend.env`，进程已归属 `/system.slice/classflow-backend.service`，不再依赖 SSH / VS Code Remote 会话存活。
 - 已完成：旧的用户级单元 `~/.config/systemd/user/classflow-backend.service` 已 `disable --now`，新的系统级 `classflow-backend.service` 已 `enable --now`；本机 `http://127.0.0.1:8787/api/v1/health` 与公网 `https://classflow-backend.zjhstudio.com/api/v1/health` 已再次验证通过。
 - 已完成：已确认当前这台校园机的真实运行目录与状态目录：仓库 `/home/zjhsteven/ClassFlow`，后端二进制 `/home/zjhsteven/ClassFlow/target/release/backend`，数据库 `/home/zjhsteven/.local/state/classflow/data/classflow.db`，临时目录 `/home/zjhsteven/.local/state/classflow/tmp`，本地产物目录 `/home/zjhsteven/.local/state/classflow/artifacts`。
@@ -64,6 +70,7 @@
 - 下一步：根据你真实使用的屏幕尺寸与操作节奏，再决定是否继续补“面板高度可配置”、“任务详情按需 SSE”或“课程总稿/manifest 的浏览器端缓存持久化”。
 
 ## 关键决策与理由（防止“吃书”）
+- 决策Z：`classflow-web.zhangjiahe0830.workers.dev` 这条 Worker 回源链路必须单独观察和单独切规则，不能再简单跟随“大一统代理组”的默认命中结果。（原因：`2026-04-09` 已经实证 `DIRECT` 不通、`Exflux` 可恢复，而历史 `Kuromis` 还曾直接出现 `i/o timeout`；这说明该域名对线路选择非常敏感。）
 - 决策W：这台校园机的后端常驻方式正式改为系统级 `systemd`，不再继续依赖 `systemd --user + linger` 作为最终方案。（原因：项目目标是“开机即在线、与 SSH / VS Code 会话彻底解耦”，系统级服务更符合守护进程的长期形态。）
 - 决策X：当前系统级服务先继续以 `zjhsteven` 身份运行，并沿用既有的 `/home/zjhsteven/ClassFlow` 与 `/home/zjhsteven/.local/state/classflow/*` 路径，不额外迁移到 `/opt/classflow` 或单独 `classflow` 用户。（原因：本轮重点是先消除用户会话耦合风险；沿用现有数据目录可以把迁移风险压到最低。）
 - 决策Y：Cloudflare Access 的收口顺序采用“先给前端入口和自动化准备好 Service Token，再考虑把后端 Tunnel 域名也纳入 Access”的渐进式方案。（原因：当前 Worker 还只会带应用自己的 Bearer Token，如果后端域名先被 Access 挡住，前端代理会立刻失效。）
@@ -91,6 +98,7 @@
 - 决策S：任务台与课程库都改为“固定面板高度 + 内部滚动”布局，而不是任由列表、报错、日志把整页无限拉长。（原因：用户要求在常见笔记本视口中尽量一屏看到主要操作按钮，减少无意义滚整页。）
 
 ## 常见坑 / 复现方法
+- 坑18：`classflow-web.zhangjiahe0830.workers.dev` 在这台机子上并不是“随便给个规则都行”；`DIRECT` 已被实测证伪，而某些代理组曾能恢复、某些组又会超时，所以排查 Worker 写产物失败时，必须把命中策略组一起记下来。
 - 坑16：如果后端只是跑在 `systemd --user`，但当前用户又没有开启 `linger`，那么一旦 SSH / VS Code Remote 会话全断，`user@UID.service` 会被回收，后端也会一起消失；外部表现通常就是 `cloudflared` 回源 `127.0.0.1:8787` 时得到 `connect refused`，前端出现 `502`。
 - 坑17：就算自定义域名已经接入 Cloudflare Access，只要 `workers.dev` 入口还没一起收口，它依然可能成为匿名可访问的公开入口；正式关闭前必须先把 Access Service Token 的自动化访问链路补齐。
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。
