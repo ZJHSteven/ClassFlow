@@ -1,6 +1,9 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：`2026-04-09` 已把 Worker 代理补成“可选携带 Cloudflare Access Service Token 回源后端”的形态；当后端 Tunnel 域名接入 Access 后，Worker 可以在继续附带 `BACKEND_TOKEN` 的同时，再附带 `CF-Access-Client-Id` / `CF-Access-Client-Secret`。
+- 已完成：已确认“谁需要 Service Token”的边界：浏览器前端不需要，仍走人类登录 Access；Worker 需要，因为它要回源受 Access 保护的后端；`smartclass` 脚本若走 Worker / 前端域名，也不建议持有 Service Token，应复用浏览器登录态。
+- 已完成：Worker 已新增“Access 头要么成对配置、要么都不配置”的显式校验，避免只填一半时出现难排查的 `401 / 302`。
 - 现状：`2026-04-09` 已再次用现网探针确认当前真正裸奔的主入口不是 `classflow-backend.zjhstudio.com`，而是 `classflow-web.zhangjiahe0830.workers.dev`。该域名匿名访问 `GET /api/v1/tasks` 会直接返回完整任务列表，因为 Worker 会自动补上后端 Bearer Token。
 - 已完成：已确认当前至少存在 3 个明确公网入口：`classflow.zjhstudio.com`（前端自定义域名）、`classflow-web.zhangjiahe0830.workers.dev`（Worker 默认域名）、`classflow-backend.zjhstudio.com`（cloudflared Tunnel 后端域名）。
 - 已完成：现网探针已确认 `https://classflow.zjhstudio.com/` 与 `https://classflow.zjhstudio.com/api/v1/tasks` 当前都会 `302` 到 Cloudflare Access 登录页，说明自定义前端域名已经被 Access 保护。

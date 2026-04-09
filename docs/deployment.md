@@ -220,6 +220,8 @@ npx wrangler dev
 ```bash
 npx wrangler secret put BACKEND_BASE_URL
 npx wrangler secret put BACKEND_TOKEN
+npx wrangler secret put CF_ACCESS_CLIENT_ID
+npx wrangler secret put CF_ACCESS_CLIENT_SECRET
 npx wrangler secret put ARTIFACT_PROXY_TOKEN
 ```
 
@@ -231,6 +233,9 @@ npx wrangler secret put ARTIFACT_PROXY_TOKEN
   - 必须与后端环境变量 `CLASSFLOW_BEARER_TOKEN` 完全一致
 - `ARTIFACT_PROXY_TOKEN`
   - 必须与后端环境变量 `CLASSFLOW_ARTIFACT_PROXY_TOKEN` 完全一致
+- `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`
+  - 只有当 `BACKEND_BASE_URL` 指向的后端 Tunnel 域名已经被 Cloudflare Access 保护时才需要填写
+  - 它们只应该存在于 Worker secret 中，不应该发给浏览器或 userscript
 
 另外，`wrangler.toml` 里需要把 `ARTIFACTS` 绑定到真实的 R2 bucket。当前仓库里提供的是 `binding` 名称和示例 bucket 名，正式部署前请改成你自己的 bucket。
 
@@ -256,8 +261,10 @@ npx wrangler deploy
 补充建议：
 
 - React 前端天然就是访问 Worker，所以浏览器侧不需要知道后端真实 token。
+- 如果后端 Tunnel 又额外接入了 Access，也只需要让 Worker 持有 Access Service Token；浏览器仍不应该看到这两个值。
 - userscript 也推荐把“ClassFlow 后端地址”填成 Worker 域名，例如 `https://classflow-web.<your-subdomain>.workers.dev` 或你绑定的前端域名。
 - 当 userscript 走 Worker 时，脚本里的 `Bearer Token` 可以留空；只有脚本直连后端 Tunnel 域名时，才需要手工填写 `CLASSFLOW_BEARER_TOKEN`。
+- 不建议把 Cloudflare Access Service Token 写进 userscript。若脚本访问的是受 Access 保护的 Worker / 前端域名，应优先复用浏览器已登录的 Access 会话。
 
 ## 8.1 Cloudflare Access 收口步骤
 

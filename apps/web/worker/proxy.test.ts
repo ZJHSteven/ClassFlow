@@ -56,6 +56,34 @@ describe('worker proxy', () => {
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer secret-token')
   })
 
+  it('应该在配置了 Access Service Token 时一并追加回源请求头', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await proxyApiRequest(new Request('https://worker.example.com/api/v1/tasks'), {
+      ...defaultEnv,
+      CF_ACCESS_CLIENT_ID: 'client-id',
+      CF_ACCESS_CLIENT_SECRET: 'client-secret',
+    })
+
+    expect(response.status).toBe(200)
+    const firstCall = fetchMock.mock.calls[0]
+    const init = (firstCall?.[1] ?? {}) as RequestInit
+    expect((init.headers as Headers).get('CF-Access-Client-Id')).toBe('client-id')
+    expect((init.headers as Headers).get('CF-Access-Client-Secret')).toBe('client-secret')
+  })
+
+  it('应该拒绝只配置了一半的 Access Service Token', async () => {
+    const response = await proxyApiRequest(new Request('https://worker.example.com/api/v1/tasks'), {
+      ...defaultEnv,
+      CF_ACCESS_CLIENT_ID: 'client-id',
+    })
+
+    expect(response.status).toBe(500)
+    const body = await response.json()
+    expect(body.error).toContain('CF_ACCESS_CLIENT_ID')
+  })
+
   it('应该在非 API 请求时回退到静态资源绑定', async () => {
     const response = await handleWorkerRequest(new Request('https://worker.example.com/'), defaultEnv)
     expect(response.status).toBe(200)

@@ -4,7 +4,8 @@
  * 约束很明确：
  *
  * 1. 浏览器只能访问 Worker，自身不持有后端密钥。
- * 2. `/api/*` 请求由 Worker 自动追加 Bearer Token 再转发到后端。
+ * 2. `/api/*` 请求由 Worker 自动追加 Bearer Token；若后端 Tunnel 还接入了
+ *    Cloudflare Access，则再额外追加 Service Token 请求头后转发到后端。
  * 3. 非 `/api/*` 请求直接回退到静态资源绑定 `ASSETS.fetch()`。
  */
 
@@ -36,6 +37,8 @@ export interface R2BucketLike {
 export interface WorkerEnv {
   BACKEND_BASE_URL: string
   BACKEND_TOKEN: string
+  CF_ACCESS_CLIENT_ID?: string
+  CF_ACCESS_CLIENT_SECRET?: string
   ARTIFACT_PROXY_TOKEN?: string
   ARTIFACTS?: R2BucketLike
   ASSETS: AssetBindingLike
@@ -73,6 +76,41 @@ function textResponse(status: number, contentType: string, body: string) {
 
 function unauthorizedArtifactResponse() {
   return jsonResponse(401, '未通过 Worker 产物接口鉴权。')
+}
+
+/**
+ * 统一组装“Worker -> 后端”请求的鉴权头。
+ *
+ * 这里把两层鉴权放在一起处理：
+ *
+ * 1. `Authorization` 负责应用自己的 Bearer Token。
+ * 2. `CF-Access-*` 负责通过 Cloudflare Access 保护后的 Tunnel 域名。
+ * 3. Access 的 `Client ID / Secret` 必须成对出现，防止半配置造成难排查的 401。
+ */
+function buildBackendAuthHeaders(env: WorkerEnv, baseHeaders?: HeadersInit): Headers | Response {
+  if (!env.BACKEND_BASE_URL || !env.BACKEND_TOKEN) {
+    return jsonResponse(500, 'Worker 尚未配置 BACKEND_BASE_URL 或 BACKEND_TOKEN。')
+  }
+
+  const headers = new Headers(baseHeaders)
+  headers.set('Authorization', `Bearer ${env.BACKEND_TOKEN}`)
+  headers.delete('host')
+
+  const hasAccessClientId = Boolean(env.CF_ACCESS_CLIENT_ID?.trim())
+  const hasAccessClientSecret = Boolean(env.CF_ACCESS_CLIENT_SECRET?.trim())
+  if (hasAccessClientId !== hasAccessClientSecret) {
+    return jsonResponse(
+      500,
+      'Worker 的 Cloudflare Access Service Token 配置不完整，CF_ACCESS_CLIENT_ID 与 CF_ACCESS_CLIENT_SECRET 必须同时存在。',
+    )
+  }
+
+  if (hasAccessClientId && hasAccessClientSecret) {
+    headers.set('CF-Access-Client-Id', env.CF_ACCESS_CLIENT_ID!.trim())
+    headers.set('CF-Access-Client-Secret', env.CF_ACCESS_CLIENT_SECRET!.trim())
+  }
+
+  return headers
 }
 
 function readArtifactKeyFromPath(pathname: string): string {
@@ -138,16 +176,15 @@ async function handleArtifactRequest(request: Request, env: WorkerEnv): Promise<
 }
 
 async function fetchBackendJson<T>(pathnameWithQuery: string, env: WorkerEnv): Promise<T | Response> {
-  if (!env.BACKEND_BASE_URL || !env.BACKEND_TOKEN) {
-    return jsonResponse(500, 'Worker 尚未配置 BACKEND_BASE_URL 或 BACKEND_TOKEN。')
+  const backendUrl = new URL(pathnameWithQuery, env.BACKEND_BASE_URL)
+  const headers = buildBackendAuthHeaders(env)
+  if (headers instanceof Response) {
+    return headers
   }
 
-  const backendUrl = new URL(pathnameWithQuery, env.BACKEND_BASE_URL)
   const response = await fetch(backendUrl.toString(), {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${env.BACKEND_TOKEN}`,
-    },
+    headers,
     redirect: 'manual',
   })
 
@@ -240,16 +277,13 @@ async function tryHandlePublicArtifactRequest(request: Request, env: WorkerEnv):
 }
 
 export async function proxyApiRequest(request: Request, env: WorkerEnv): Promise<Response> {
-  if (!env.BACKEND_BASE_URL || !env.BACKEND_TOKEN) {
-    return jsonResponse(500, 'Worker 尚未配置 BACKEND_BASE_URL 或 BACKEND_TOKEN。')
-  }
-
   const incomingUrl = new URL(request.url)
   const backendUrl = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, env.BACKEND_BASE_URL)
 
-  const headers = new Headers(request.headers)
-  headers.set('Authorization', `Bearer ${env.BACKEND_TOKEN}`)
-  headers.delete('host')
+  const headers = buildBackendAuthHeaders(env, request.headers)
+  if (headers instanceof Response) {
+    return headers
+  }
 
   const body =
     request.method === 'GET' || request.method === 'HEAD'
