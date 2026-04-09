@@ -204,7 +204,8 @@ async fn get_task_artifact(
                 .into_response())
         }
         "task.json" => {
-            let bytes = serde_json::to_vec_pretty(&detail.task)
+            let task = state.repo.get_task(&task_id).await?;
+            let bytes = serde_json::to_vec_pretty(&task)
                 .map_err(|error| AppError::Internal(format!("序列化任务详情失败: {error}")))?;
             Ok((
                 [(

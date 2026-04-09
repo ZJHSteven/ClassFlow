@@ -784,3 +784,114 @@ async fn retry_should_resume_from_transcript_checkpoint_after_artifact_failure()
         "产物写入失败后再次重试不应重新调用转写"
     );
 }
+
+#[tokio::test]
+async fn task_detail_should_not_inline_transcript_payload_but_task_json_should_keep_it() {
+    let (state, _temp, _counters) = build_test_state(false, false).await;
+
+    let intake_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/intake/batches")
+                .header("Authorization", "Bearer test-token")
+                .header("Content-Type", "application/json")
+                .body(Body::from(intake_request_json().to_string()))
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("intake 应返回响应");
+    assert_eq!(intake_response.status(), StatusCode::ACCEPTED);
+
+    let payload: Value = serde_json::from_slice(
+        &intake_response
+            .into_body()
+            .collect()
+            .await
+            .expect("响应体应可读取")
+            .to_bytes(),
+    )
+    .expect("响应体应是合法 JSON");
+    let task_id = payload["task_ids"][0]
+        .as_str()
+        .expect("应返回 task_id")
+        .to_string();
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let state = state.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            state
+                .repo
+                .get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Succeeded)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    let detail_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/tasks/{task_id}"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("详情请求应返回响应");
+    assert_eq!(detail_response.status(), StatusCode::OK);
+
+    let detail_json: Value = serde_json::from_slice(
+        &detail_response
+            .into_body()
+            .collect()
+            .await
+            .expect("详情响应应可读取")
+            .to_bytes(),
+    )
+    .expect("详情响应应是合法 JSON");
+
+    assert!(
+        detail_json["task"].get("transcript_json").is_none(),
+        "前端详情接口不应再内联 transcript_json"
+    );
+    assert!(
+        detail_json["task"].get("transcript_text").is_none(),
+        "前端详情接口不应再内联 transcript_text"
+    );
+
+    let task_json_response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/tasks/{task_id}/artifacts/task.json"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("task.json 请求应返回响应");
+    assert_eq!(task_json_response.status(), StatusCode::OK);
+
+    let task_json: Value = serde_json::from_slice(
+        &task_json_response
+            .into_body()
+            .collect()
+            .await
+            .expect("task.json 响应应可读取")
+            .to_bytes(),
+    )
+    .expect("task.json 响应应是合法 JSON");
+
+    assert!(
+        task_json.get("transcript_json").is_some(),
+        "任务快照下载仍应保留完整 transcript_json"
+    );
+    assert!(
+        task_json.get("transcript_text").is_some(),
+        "任务快照下载仍应保留完整 transcript_text"
+    );
+}

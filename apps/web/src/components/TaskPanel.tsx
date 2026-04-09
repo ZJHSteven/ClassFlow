@@ -35,6 +35,11 @@ interface DownloadButtonState {
   errorMessage: string
 }
 
+interface TaskDetailCacheEntry {
+  updatedAt: string
+  detail: TaskDetail
+}
+
 function statusLabel(status: TaskStatus) {
   const labelMap: Record<TaskStatus, string> = {
     pending: '等待中',
@@ -119,6 +124,12 @@ function mergeTaskSummaryIntoDetail(detail: TaskDetail | null, summary: TaskSumm
   }
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
+}
+
 export function TaskPanel() {
   const [tasks, setTasks] = useState<TaskSummary[]>([])
   const [selectedTaskId, setSelectedTaskId] = useState<string>('')
@@ -135,9 +146,11 @@ export function TaskPanel() {
   const [downloadStates, setDownloadStates] = useState<Record<string, DownloadButtonState>>({})
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
   const [isPageVisible, setIsPageVisible] = useState<boolean>(document.visibilityState === 'visible')
+  const [hasLoadedInitialList, setHasLoadedInitialList] = useState<boolean>(false)
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedTaskIdRef = useRef<string>('')
+  const taskDetailCacheRef = useRef<Record<string, TaskDetailCacheEntry>>({})
   const pressableProps = {
     whileHover: { y: -2, scale: 1.01 },
     whileTap: { y: 0, scale: 0.985 },
@@ -168,6 +181,15 @@ export function TaskPanel() {
   const loadTaskDetail = useCallback(async (taskId: string) => {
     const requestId = detailRequestIdRef.current + 1
     detailRequestIdRef.current = requestId
+    const taskSummary = tasks.find((task) => task.id === taskId)
+    const cachedEntry = taskDetailCacheRef.current[taskId]
+    if (cachedEntry && taskSummary && cachedEntry.updatedAt === taskSummary.updated_at) {
+      startTransition(() => {
+        setSelectedTaskDetail(cachedEntry.detail)
+        setDetailMessage('')
+      })
+      return
+    }
 
     try {
       const detail = await getTaskDetail(taskId)
@@ -175,6 +197,10 @@ export function TaskPanel() {
         return
       }
 
+      taskDetailCacheRef.current[taskId] = {
+        updatedAt: detail.task.updated_at,
+        detail,
+      }
       startTransition(() => {
         setSelectedTaskDetail(detail)
         setDetailMessage('')
@@ -187,7 +213,7 @@ export function TaskPanel() {
         })
       }
     }
-  }, [])
+  }, [tasks])
 
   /**
    * 刷新任务列表，并在必要时同步当前选中任务的详情。
@@ -202,48 +228,62 @@ export function TaskPanel() {
     const { blocking = false, refreshDetail = false } = options ?? {}
     const requestId = listRequestIdRef.current + 1
     listRequestIdRef.current = requestId
+    const maxAttempts = blocking ? 3 : 2
+
+    if (blocking) {
+      setIsLoading(true)
+    } else {
+      setIsRefreshing(true)
+    }
 
     try {
-      if (blocking) {
-        setIsLoading(true)
-      } else {
-        setIsRefreshing(true)
-      }
-
-      const nextTasks = await listTasks({
-        status: statusFilter || undefined,
-        date: dateFilter || undefined,
-        course_name: courseFilter || undefined,
-      })
-
-      if (listRequestIdRef.current !== requestId) {
-        return
-      }
-
-      const nextSelectedTaskId = nextTasks.some((task) => task.id === selectedTaskIdRef.current)
-        ? selectedTaskIdRef.current
-        : nextTasks[0]?.id ?? ''
-
-      startTransition(() => {
-        setTasks(nextTasks)
-        setSelectedTaskId(nextSelectedTaskId)
-        setListErrorMessage('')
-        setLastSyncedAt(new Date().toISOString())
-      })
-
-      if (refreshDetail) {
-        if (nextSelectedTaskId && nextSelectedTaskId === selectedTaskIdRef.current) {
-          await loadTaskDetail(nextSelectedTaskId)
-        } else {
-          startTransition(() => {
-            setSelectedTaskDetail(null)
-            setDetailMessage('')
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const nextTasks = await listTasks({
+            status: statusFilter || undefined,
+            date: dateFilter || undefined,
+            course_name: courseFilter || undefined,
           })
+
+          if (listRequestIdRef.current !== requestId) {
+            return
+          }
+
+          const nextSelectedTaskId = nextTasks.some((task) => task.id === selectedTaskIdRef.current)
+            ? selectedTaskIdRef.current
+            : nextTasks[0]?.id ?? ''
+
+          startTransition(() => {
+            setTasks(nextTasks)
+            setSelectedTaskId(nextSelectedTaskId)
+            setListErrorMessage('')
+            setLastSyncedAt(new Date().toISOString())
+            setHasLoadedInitialList(true)
+          })
+
+          if (refreshDetail) {
+            if (nextSelectedTaskId && nextSelectedTaskId === selectedTaskIdRef.current) {
+              await loadTaskDetail(nextSelectedTaskId)
+            } else {
+              startTransition(() => {
+                setSelectedTaskDetail(null)
+                setDetailMessage('')
+              })
+            }
+          }
+          return
+        } catch (error) {
+          if (listRequestIdRef.current !== requestId) {
+            return
+          }
+
+          if (attempt === maxAttempts) {
+            setListErrorMessage(error instanceof Error ? error.message : '任务列表加载失败')
+            return
+          }
+
+          await wait(blocking ? 700 : 450)
         }
-      }
-    } catch (error) {
-      if (listRequestIdRef.current === requestId) {
-        setListErrorMessage(error instanceof Error ? error.message : '任务列表加载失败')
       }
     } finally {
       if (listRequestIdRef.current === requestId) {
@@ -282,7 +322,7 @@ export function TaskPanel() {
   }, [loadTasks])
 
   useEffect(() => {
-    if (!isPageVisible) {
+    if (!isPageVisible || !hasLoadedInitialList) {
       return
     }
 
@@ -311,7 +351,7 @@ export function TaskPanel() {
         setListErrorMessage(message)
       },
     )
-  }, [courseFilter, dateFilter, isPageVisible, statusFilter])
+  }, [courseFilter, dateFilter, hasLoadedInitialList, isPageVisible, statusFilter])
 
   useEffect(() => {
     if (!selectedTaskId) {

@@ -156,4 +156,8 @@
 - 已完成：已临时把 `classflow-web.zhangjiahe0830.workers.dev` 切到 `Exflux` 做对照实验；代表任务 `3a0da4ba-12c3-4b3e-8df3-21b5e179848f` 以及其余 `8` 条 `storing_artifacts` 失败任务均已重试成功，说明“最后一步写 Worker 产物失败”与链路选择高度相关。
 - 已完成：按用户要求，线上 `mihomo` 现已把 `classflow-web.zhangjiahe0830.workers.dev` 的精确规则改回 `Kuromis` 主组，不再继续使用 `Exflux` 作为长期规则。
 - 已完成：仓库代码已补强 `WorkerArtifactStore`：新增独立连接超时/总超时/有限重试/更完整错误上下文，并新增 URL 规范化与临时 `5xx` 自动重试测试；`cargo test -p backend` 已全绿。
-- 正在做：保留 `3` 条 `uploading_audio` 失败任务与 `1` 条 `ASR_RESPONSE_HAVE_NO_WORDS` 失败任务作为线上样本，继续把“DashScope 上传慢 / 易失败”和“前端首屏 502 + 详情切换慢”作为下一阶段排查重点。
+- 已完成：已量化前端慢点来源。任务台首屏默认会并发触发 `GET /api/v1/tasks` 与 `GET /api/v1/tasks/stream`，随后再补 `GET /api/v1/tasks/{id}`；课程库则是 `GET /api/v1/courses` 之后串行触发 `GET /api/v1/courses/{key}` 与 `GET /api/v1/courses/{key}/artifacts/course.md`。
+- 已完成：已定位“点任务详情特别慢”的硬根因之一：后端原先把 `transcript_json` / `transcript_text` 整包内联进 `/api/v1/tasks/{id}`，代表任务详情从后端返回时高达 `238466` 字节，其中 `transcript_json` 单独就占 `206697` 字节，而前端其实完全没用这两项。
+- 已完成：已把任务详情接口改为“前端瘦身响应 + task.json 下载仍保留完整快照”，并重新部署系统级后端。重详情样本现已从 `238466 B / 2.18s` 降到 `5795 B / 0.52s`。
+- 已完成：已对前端 `TaskPanel` 做两项直接缓解修复并重新部署 Worker：首次阻塞加载增加短重试，且首屏拿到首个列表成功前不再抢先建立 SSE；另外新增按 `updated_at` 命中的任务详情本地缓存，减少来回切换任务时的重复等待。
+- 正在做：保留 `3` 条 `uploading_audio` 失败任务与 `1` 条 `ASR_RESPONSE_HAVE_NO_WORDS` 失败任务作为线上样本，继续把“DashScope 上传慢 / 易失败”和“前端首屏 502 是否已被缓解、SSE 首连是否仍偶发失败”作为下一阶段排查重点。

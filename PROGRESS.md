@@ -6,7 +6,11 @@
 - 已完成：以代表任务 `3a0da4ba-12c3-4b3e-8df3-21b5e179848f` 为样本验证后，原先 `9` 条 `storing_artifacts` 失败任务均已在线重试成功并转为 `succeeded`。
 - 已完成：仓库后端已补强 `WorkerArtifactStore` 的连接超时、总超时、有限重试、错误上下文与 URL 规范化，并新增 `WorkerArtifactStore` 单元测试；本轮 `cargo test -p backend` 共 `14` 个单元测试与 `8` 个集成测试全部通过。
 - 现状：按用户当前偏好，线上 `mihomo` 对 `classflow-web.zhangjiahe0830.workers.dev` 的精确规则已改回 `Kuromis` 主组，不再继续挂在 `Exflux` 兼容组。
-- 正在做：保留 `3` 条 `uploading_audio` 失败任务和 `1` 条百炼 `ASR_RESPONSE_HAVE_NO_WORDS` 失败任务作为活样本，下一步继续排查 DashScope 上传阶段的慢网 / 失败，以及前端首屏 `502`、`SSE` 首连不稳、详情切换慢的问题。
+- 已完成：已把前端请求形态拆清楚。任务台默认是“`/api/v1/tasks` 列表 HTTP + `/api/v1/tasks/stream` SSE 并发启动，随后再请求 `/api/v1/tasks/{id}` 详情”；课程库是“`/api/v1/courses` 列表 HTTP，随后串行请求 `/api/v1/courses/{key}` 与 `/api/v1/courses/{key}/artifacts/course.md`”。
+- 已完成：已量化 Worker 链路与本机后端的时延差。当前本机直连后端 `GET /api/v1/tasks` 约 `49ms`，经 Worker 后约 `557ms`；本机直连后端 `GET /api/v1/tasks/stream` 首字节约 `0.4ms`，经 Worker 后约 `384ms`。这说明前端基础 RTT 的主要成本不在 Rust 后端，而在 `浏览器/本机 -> Worker -> Tunnel -> 后端` 这段链路。
+- 已完成：已定位任务详情膨胀问题并修复。原先重详情接口样本为 `238466 B / 2.18s`，其中前端根本不用的 `transcript_json` 就占 `206697 B`；新版本详情响应已瘦到 `5795 B / 0.52s`，而下载用的 `task.json` 仍保留完整原始快照。
+- 已完成：前端任务台已新增“首次列表短重试、首个列表成功后再建立 SSE、按 `updated_at` 命中的详情缓存”三项缓解改动；前端验证已再次通过 `npm run lint`、`npm test`（15 项）、`npm run build`，Worker 已重新发布到 `https://classflow-web.zhangjiahe0830.workers.dev`，版本号 `cbcd60b1-dbbc-4613-b5ea-b1a82d40d291`。
+- 正在做：保留 `3` 条 `uploading_audio` 失败任务和 `1` 条百炼 `ASR_RESPONSE_HAVE_NO_WORDS` 失败任务作为活样本，下一步继续排查 DashScope 上传阶段的慢网 / 失败，以及前端首屏 `502`、`SSE` 首连不稳是否还需要进一步兜底。
 - 现状：后端常驻方式已从 `systemd --user` 迁移为真正的系统级 `systemd` 服务；当前单元文件位于 `/etc/systemd/system/classflow-backend.service`，环境变量位于 `/etc/classflow/backend.env`，进程已归属 `/system.slice/classflow-backend.service`，不再依赖 SSH / VS Code Remote 会话存活。
 - 已完成：旧的用户级单元 `~/.config/systemd/user/classflow-backend.service` 已 `disable --now`，新的系统级 `classflow-backend.service` 已 `enable --now`；本机 `http://127.0.0.1:8787/api/v1/health` 与公网 `https://classflow-backend.zjhstudio.com/api/v1/health` 已再次验证通过。
 - 已完成：已确认当前这台校园机的真实运行目录与状态目录：仓库 `/home/zjhsteven/ClassFlow`，后端二进制 `/home/zjhsteven/ClassFlow/target/release/backend`，数据库 `/home/zjhsteven/.local/state/classflow/data/classflow.db`，临时目录 `/home/zjhsteven/.local/state/classflow/tmp`，本地产物目录 `/home/zjhsteven/.local/state/classflow/artifacts`。
@@ -71,6 +75,8 @@
 
 ## 关键决策与理由（防止“吃书”）
 - 决策Z：`classflow-web.zhangjiahe0830.workers.dev` 这条 Worker 回源链路必须单独观察和单独切规则，不能再简单跟随“大一统代理组”的默认命中结果。（原因：`2026-04-09` 已经实证 `DIRECT` 不通、`Exflux` 可恢复，而历史 `Kuromis` 还曾直接出现 `i/o timeout`；这说明该域名对线路选择非常敏感。）
+- 决策AA：任务详情接口不再把 `transcript_json` / `transcript_text` 这类前端当前不用的大字段内联回浏览器，但 `task.json` 下载快照仍继续保留完整原始任务记录。（原因：真实样本已证明这两个字段会把一次详情请求膨胀到 200KB 级别，直接拖慢点击详情；而下载快照仍需要保真。）
+- 决策AB：任务台首屏应先把列表稳稳拿下来，再补建 SSE，而不是首帧就让“列表 HTTP + SSE”同时抢链路；列表首次失败也不应立刻把页面打成最终错误态，而要先做有限次短重试。（原因：现网首屏 502 与 SSE 首连偶发失败都集中出现在首次打开页面的几秒内，这个时段最值得优先减压与加兜底。）
 - 决策W：这台校园机的后端常驻方式正式改为系统级 `systemd`，不再继续依赖 `systemd --user + linger` 作为最终方案。（原因：项目目标是“开机即在线、与 SSH / VS Code 会话彻底解耦”，系统级服务更符合守护进程的长期形态。）
 - 决策X：当前系统级服务先继续以 `zjhsteven` 身份运行，并沿用既有的 `/home/zjhsteven/ClassFlow` 与 `/home/zjhsteven/.local/state/classflow/*` 路径，不额外迁移到 `/opt/classflow` 或单独 `classflow` 用户。（原因：本轮重点是先消除用户会话耦合风险；沿用现有数据目录可以把迁移风险压到最低。）
 - 决策Y：Cloudflare Access 的收口顺序采用“先给前端入口和自动化准备好 Service Token，再考虑把后端 Tunnel 域名也纳入 Access”的渐进式方案。（原因：当前 Worker 还只会带应用自己的 Bearer Token，如果后端域名先被 Access 挡住，前端代理会立刻失效。）
@@ -99,6 +105,7 @@
 
 ## 常见坑 / 复现方法
 - 坑18：`classflow-web.zhangjiahe0830.workers.dev` 在这台机子上并不是“随便给个规则都行”；`DIRECT` 已被实测证伪，而某些代理组曾能恢复、某些组又会超时，所以排查 Worker 写产物失败时，必须把命中策略组一起记下来。
+- 坑19：`/api/v1/tasks/{id}` 旧实现会把 `transcript_json` 和 `transcript_text` 整包返回给前端，即使前端类型根本没用它们；在真实样本里，这会把一次详情点击膨胀到 `238466` 字节，导致“点一下详情要等很久”的错觉被放大。
 - 坑16：如果后端只是跑在 `systemd --user`，但当前用户又没有开启 `linger`，那么一旦 SSH / VS Code Remote 会话全断，`user@UID.service` 会被回收，后端也会一起消失；外部表现通常就是 `cloudflared` 回源 `127.0.0.1:8787` 时得到 `connect refused`，前端出现 `502`。
 - 坑17：就算自定义域名已经接入 Cloudflare Access，只要 `workers.dev` 入口还没一起收口，它依然可能成为匿名可访问的公开入口；正式关闭前必须先把 Access Service Token 的自动化访问链路补齐。
 - 坑1：`CapsWriter-Offline` 默认分支看不到云转写实现；需要切到 `feat/bailian-cloud-migration` 分支参考 `dashscope_rest_client.py` 与 `file_upload_resolver.py`。

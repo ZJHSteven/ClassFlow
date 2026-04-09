@@ -170,8 +170,38 @@ pub struct TaskSummaryResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct TaskDetailTaskResponse {
+    pub id: String,
+    pub batch_id: String,
+    pub status: TaskStatus,
+    pub stage: TaskStage,
+    pub semester: String,
+    pub course_key: String,
+    pub course_name: String,
+    pub teacher_name: String,
+    pub date: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub new_id: String,
+    pub page_url: String,
+    pub mp4_url: String,
+    pub last_error: Option<String>,
+    pub progress_percent: Option<f64>,
+    pub transferred_bytes: Option<i64>,
+    pub total_bytes: Option<i64>,
+    pub rate_bytes_per_sec: Option<i64>,
+    pub eta_seconds: Option<i64>,
+    pub segment_markdown_path: Option<String>,
+    pub segment_json_path: Option<String>,
+    pub course_manifest_path: Option<String>,
+    pub merged_markdown_path: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TaskDetailResponse {
-    pub task: TaskRecord,
+    pub task: TaskDetailTaskResponse,
     pub events: Vec<TaskEventRecord>,
 }
 
@@ -248,6 +278,39 @@ impl From<&TaskRecord> for TaskSummaryResponse {
             total_bytes: task.total_bytes,
             rate_bytes_per_sec: task.rate_bytes_per_sec,
             eta_seconds: task.eta_seconds,
+            created_at: task.created_at,
+            updated_at: task.updated_at,
+        }
+    }
+}
+
+impl From<&TaskRecord> for TaskDetailTaskResponse {
+    fn from(task: &TaskRecord) -> Self {
+        Self {
+            id: task.id.clone(),
+            batch_id: task.batch_id.clone(),
+            status: task.status.clone(),
+            stage: task.stage.clone(),
+            semester: task.semester.clone(),
+            course_key: task.course_key.clone(),
+            course_name: task.course_name.clone(),
+            teacher_name: task.teacher_name.clone(),
+            date: task.date.clone(),
+            start_time: task.start_time.clone(),
+            end_time: task.end_time.clone(),
+            new_id: task.new_id.clone(),
+            page_url: task.page_url.clone(),
+            mp4_url: task.mp4_url.clone(),
+            last_error: task.last_error.clone(),
+            progress_percent: task.progress_percent,
+            transferred_bytes: task.transferred_bytes,
+            total_bytes: task.total_bytes,
+            rate_bytes_per_sec: task.rate_bytes_per_sec,
+            eta_seconds: task.eta_seconds,
+            segment_markdown_path: task.segment_markdown_path.clone(),
+            segment_json_path: task.segment_json_path.clone(),
+            course_manifest_path: task.course_manifest_path.clone(),
+            merged_markdown_path: task.merged_markdown_path.clone(),
             created_at: task.created_at,
             updated_at: task.updated_at,
         }

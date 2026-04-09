@@ -16,8 +16,8 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         CourseDetailResponse, CourseListQuery, CourseSummaryResponse, IntakeBatchRequest,
-        IntakeBatchResponse, TaskDetailResponse, TaskEventRecord, TaskListQuery, TaskRecord,
-        TaskStage, TaskStatus,
+        IntakeBatchResponse, TaskDetailResponse, TaskDetailTaskResponse, TaskEventRecord,
+        TaskListQuery, TaskRecord, TaskStage, TaskStatus,
     },
 };
 
@@ -333,7 +333,10 @@ impl Repository {
             })
             .collect::<AppResult<Vec<_>>>()?;
 
-        Ok(TaskDetailResponse { task, events })
+        Ok(TaskDetailResponse {
+            task: TaskDetailTaskResponse::from(&task),
+            events,
+        })
     }
 
     pub async fn mark_task_running(&self, task_id: &str, stage: TaskStage) -> AppResult<()> {
