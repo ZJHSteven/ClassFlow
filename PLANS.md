@@ -128,3 +128,26 @@
 - 已完成：系统级 `/etc/systemd/system/classflow-backend.service` 已安装并 `enable --now`，当前以后端二进制 `/home/zjhsteven/ClassFlow/target/release/backend` 运行于 `/system.slice/classflow-backend.service`。
 - 已完成：旧的用户级 `classflow-backend.service` 已 `disable --now`，当前 `http://127.0.0.1:8787/api/v1/health` 与 `https://classflow-backend.zjhstudio.com/api/v1/health` 验证均通过。
 - 已完成：已在 `docs/deployment.md` 中补充当前校园机的真实部署路径、系统级托管方式、以及 Cloudflare Access / Service Token 的配置步骤。
+
+## 2026-04-09 Worker 回源与前端卡顿排查 ExecPlan
+
+### 目标
+- 先验证 `classflow-web.zhangjiahe0830.workers.dev` 走代理节点是否是当前 `storing_artifacts` 失败的直接诱因。
+- 在线上环境最小化改动 `mihomo` 规则，把该域名单独切到 `DIRECT`，然后立刻重试当前 `11` 个失败任务，确认任务是否能从“只差最后写产物”恢复成功。
+- 若代理切换后故障仍存在，再继续收缩到后端 `WorkerArtifactStore` 传输策略与前端首屏 / 详情面板卡顿问题。
+- 同步记录“系统级 service 但仍按 `uid=1000` 进入 TUN”的现网事实，避免后续继续把问题归因到错误方向。
+
+### 执行步骤
+1. 审查并备份当前 `/etc/mihomo/config.yaml`，确认 `tun.include-uid`、`redir-host`、规则顺序与 `classflow-web.zhangjiahe0830.workers.dev` 当前命中策略组。
+2. 在 `rules:` 顶部附近新增对 `classflow-web.zhangjiahe0830.workers.dev` 的精确 `DIRECT` 规则，重载 `mihomo`，并确认新连接命中 `DIRECT` 而非 `Kuromis`。
+3. 统计当前失败任务列表，在线上后端逐个调用重试接口，观察是否仍卡死在 `storing_artifacts`，并同步检查 `mihomo` / `journalctl` / 数据库状态。
+4. 如果重试成功，继续补做后端最小健壮性修复：Worker 产物请求的超时、重试、错误展开与 URL 双斜杠清理。
+5. 独立排查前端体验问题：首屏 `502`、`SSE` 首连易断、详情切换慢、课程面板串行请求重；先用现网探针复现，再决定是先改前端请求编排还是先改后端查询结构。
+6. 更新 `PROGRESS.md` 记录本轮验证结果与最终结论，并按仓库要求提交。
+
+### 当前状态
+- 已完成：已确认 `classflow-backend.service` 虽由系统级 `systemd` 托管，但服务实际用户仍是 `zjhsteven`，而 `/etc/mihomo/config.yaml` 使用 `tun.include-uid: [1000]`，因此后端网络流量仍会进入 TUN，不会因“system 级托管”自动绕过代理。
+- 已完成：已确认当前 `mihomo` DNS 模式为 `redir-host`，并非 `fake-ip`，因此现阶段不再把 `fake-ip` 作为主嫌疑。
+- 已完成：已从 `mihomo` 日志中抓到 `2026-04-04 23:02:25 +0800`、`23:09:51 +0800`、`23:20:10 +0800` 对 `classflow-web.zhangjiahe0830.workers.dev:443` 的 `dial Kuromis ... i/o timeout` 直接证据。
+- 已完成：已复现前端层面的一个近似问题：并发触发 `tasks` / `courses` / `tasks/stream` 时，普通列表请求常可返回 `200`，但 `SSE` 首连会间歇性在 TLS 层失败，这与“首屏首次加载常报 502、刷新后恢复”的现象一致。
+- 正在做：准备先改 `mihomo` 精确规则，再在线上重试 `11` 个失败任务，以判断代理链路是否为当前阻塞主因。
