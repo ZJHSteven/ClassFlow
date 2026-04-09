@@ -185,3 +185,25 @@
 - 已完成：已确认当前仓库的 [wrangler.toml](/home/zjhsteven/ClassFlow/apps/web/wrangler.toml) 里尚未显式声明 `workers_dev = false`，因此后续如果只在面板里手关 `workers.dev`，再次 `wrangler deploy` 时存在被重新打开的风险。
 - 已完成：已通过 `npx wrangler versions list` 与 `npx wrangler deployments list` 确认当前 Worker 仍处于持续部署状态，需要把配置文件作为唯一事实源一并收口。
 - 正在做：整理最终对外说明与落地步骤，明确“先封 `workers.dev`，再让 Worker 带 Access Service Token 回源后端 Tunnel”的安全收口方案。
+
+## 2026-04-09 Access Service Token 接入与验证 ExecPlan
+
+### 目标
+- 把 Cloudflare Access Service Token 正确接入到 Worker 回源链路，确保后端 Tunnel 域名在接入 Access 后，前端代理仍能正常工作。
+- 明确回答“前端浏览器、Worker、smartclass 脚本”这三类调用方各自是否需要携带 Service Token，避免把自动化凭证错误地下发到浏览器或脚本侧。
+- 通过本地单元测试、现网 `curl` 探针与 Worker 重新部署，验证新链路已经可用。
+- 同步更新部署文档、进度记录与计划状态，确保后续关停 `workers.dev` 时不会再丢上下文。
+
+### 执行步骤
+1. 查阅 Cloudflare 官方文档，核对 Service Token 的请求头格式、Worker 回源 Access 受保护源站的推荐做法，以及 `workers_dev` / `preview_urls` 的配置项。
+2. 审查当前 Worker 代理与测试，设计最小改动：为后端回源请求增加可选的 `CF-Access-Client-Id` / `CF-Access-Client-Secret` 透传能力，但不把凭证暴露给浏览器。
+3. 修改 Worker 代码、测试与示例环境变量；同时更新 README / 部署文档，明确哪些调用方需要凭证、哪些不需要。
+4. 运行前端 `npm test`、`npm run lint`、`npm run build`，确认改动没有打断现有代理、静态资源与 R2 产物逻辑。
+5. 使用真实 Service Token 对现网受 Access 保护入口做最小化 `curl` 验证；若回源配置已就绪，再重新部署 Worker 并做线上探针。
+6. 更新 `PROGRESS.md` 记录结论与注意事项，并按仓库要求提交。
+
+### 当前状态
+- 已完成：已用 Context7 与 Cloudflare 官方文档核对 Service Token 的标准请求头为 `CF-Access-Client-Id` 与 `CF-Access-Client-Secret`。
+- 已完成：已确认当前前端浏览器访问 `classflow.zjhstudio.com` 走的是“人类登录 Access”路径，不应把 Service Token 发到浏览器端。
+- 已完成：已确认当前仓库中的 Worker 代理尚未向后端回源请求附带 Access Service Token，因此一旦后端 Tunnel 域名也被 Access 保护，现有 Worker 会直接失效。
+- 正在做：修改 Worker 代理与测试，并补充“浏览器 / Worker / smartclass 脚本”三类调用方的使用边界说明。
