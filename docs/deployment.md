@@ -215,7 +215,7 @@ npm run build
 npx wrangler dev
 ```
 
-发布前，把 Worker 需要的三个变量写成 secret：
+发布前，把 Worker 需要的 secret 写进去：
 
 ```bash
 npx wrangler secret put BACKEND_BASE_URL
@@ -271,7 +271,7 @@ npx wrangler deploy
 当前现网状态需要特别注意：
 
 - `classflow.zjhstudio.com` 已经被 Cloudflare Access 保护，未登录访问会跳转到 Access 登录页。
-- `classflow-web.zhangjiahe0830.workers.dev` 当前仍可匿名访问，因此它现在仍然是公开入口。
+- `classflow-web.zhangjiahe0830.workers.dev` 现已被 Cloudflare Access 保护，未登录访问同样会跳转到 Access 登录页。
 - `classflow-backend.zjhstudio.com` 当前没有被 Access 挡在最外层，实际保护依赖的是应用自己的 `CLASSFLOW_BEARER_TOKEN`。
 
 建议的收口顺序不是“立刻关域名”，而是先把自动化访问路径搭好，再逐步收紧：
