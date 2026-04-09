@@ -1,6 +1,12 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：`2026-04-09` 已再次用现网探针确认当前真正裸奔的主入口不是 `classflow-backend.zjhstudio.com`，而是 `classflow-web.zhangjiahe0830.workers.dev`。该域名匿名访问 `GET /api/v1/tasks` 会直接返回完整任务列表，因为 Worker 会自动补上后端 Bearer Token。
+- 已完成：已确认当前至少存在 3 个明确公网入口：`classflow.zjhstudio.com`（前端自定义域名）、`classflow-web.zhangjiahe0830.workers.dev`（Worker 默认域名）、`classflow-backend.zjhstudio.com`（cloudflared Tunnel 后端域名）。
+- 已完成：现网探针已确认 `https://classflow.zjhstudio.com/` 与 `https://classflow.zjhstudio.com/api/v1/tasks` 当前都会 `302` 到 Cloudflare Access 登录页，说明自定义前端域名已经被 Access 保护。
+- 已完成：现网探针已确认 `https://classflow-backend.zjhstudio.com/api/v1/health` 当前可匿名访问，而 `https://classflow-backend.zjhstudio.com/api/v1/tasks` 未带 Bearer Token 时会返回 `401`；这说明后端业务 API 目前主要依赖应用层 `CLASSFLOW_BEARER_TOKEN`，最外层并未接入 Access。
+- 已完成：已确认 [apps/web/wrangler.toml](/home/zjhsteven/ClassFlow/apps/web/wrangler.toml) 目前尚未显式写入 `workers_dev = false`；后续若只在面板里关闭默认域名而不回写配置，下次 `wrangler deploy` 存在把 `workers.dev` 重新打开的风险。
+- 正在做：按“先给 `workers.dev` 和自定义前端域名统一接入 Access，再让 Worker 通过 Access Service Token 回源受保护后端，最后显式关闭 `workers.dev`”的顺序整理最终收口方案。
 - 现状：`2026-04-09` 这批“卡在 `storing_artifacts`、报 `error sending request for url (https://classflow-web...workers.dev/__classflow/artifacts/...)`”的故障已在线上完成归因与止血：`DIRECT` 不可用，`Exflux` 对照实验可恢复，说明 Worker 回源链路选择会直接决定最后一步产物写入是否成功。
 - 已完成：线上 `/etc/classflow/backend.env` 已从 `CLASSFLOW_DASHSCOPE_MODEL=fun-asr` 修正为 `CLASSFLOW_DASHSCOPE_MODEL=fun-asr-mtl`，并已在系统级 `classflow-backend.service` 重启后确认真实进程环境变量生效，避免继续按旧模型计费。
 - 已完成：以代表任务 `3a0da4ba-12c3-4b3e-8df3-21b5e179848f` 为样本验证后，原先 `9` 条 `storing_artifacts` 失败任务均已在线重试成功并转为 `succeeded`。

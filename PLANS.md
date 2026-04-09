@@ -161,3 +161,27 @@
 - 已完成：已把任务详情接口改为“前端瘦身响应 + task.json 下载仍保留完整快照”，并重新部署系统级后端。重详情样本现已从 `238466 B / 2.18s` 降到 `5795 B / 0.52s`。
 - 已完成：已对前端 `TaskPanel` 做两项直接缓解修复并重新部署 Worker：首次阻塞加载增加短重试，且首屏拿到首个列表成功前不再抢先建立 SSE；另外新增按 `updated_at` 命中的任务详情本地缓存，减少来回切换任务时的重复等待。
 - 正在做：保留 `3` 条 `uploading_audio` 失败任务与 `1` 条 `ASR_RESPONSE_HAVE_NO_WORDS` 失败任务作为线上样本，继续把“DashScope 上传慢 / 易失败”和“前端首屏 502 是否已被缓解、SSE 首连是否仍偶发失败”作为下一阶段排查重点。
+
+## 2026-04-09 Cloudflare Access 收口复核 ExecPlan
+
+### 目标
+- 把当前 `ClassFlow` 实际对公网暴露的前端、Worker 默认域名、后端 Tunnel 域名逐一核实清楚，避免只盯着自定义域名而漏掉旁路入口。
+- 用“仓库代码 + 现网探针”双重证据确认：哪些入口已经被 Cloudflare Access 挡住，哪些入口仍能匿名访问，哪些入口虽然需要应用层 Bearer Token，但最外层仍未接入 Access。
+- 输出一套可直接照着执行的收口顺序，优先先堵住真正能匿名读业务数据的入口，再处理后端 Tunnel 域名与自动化 Token。
+- 将本轮结论固化到仓库记忆，避免后续再次误判“真正裸奔的到底是哪一个域名”。
+
+### 执行步骤
+1. 审查仓库内 `wrangler.toml`、Worker 代理代码、后端鉴权中间件与部署文档，定位所有公开访问入口与鉴权边界。
+2. 对当前已知公网入口执行最小化在线探针，请求首页、健康检查与受保护业务 API，确认真实返回是 `200`、`401` 还是 `302 Access`。
+3. 结合 Cloudflare 官方文档，核对 Access Service Token 的创建方式、请求头格式、`workers_dev = false` 与 Preview URL 的默认行为。
+4. 整理“当前真实暴露面 -> 风险等级 -> 建议收口动作 -> 收口前置条件”的矩阵，明确先后顺序。
+5. 更新 `PROGRESS.md` / `PLANS.md` 记录本轮事实与下一步操作建议，并提交。
+
+### 当前状态
+- 已完成：已确认仓库与文档中当前明确出现的公网入口至少有 `classflow.zjhstudio.com`、`classflow-web.zhangjiahe0830.workers.dev`、`classflow-backend.zjhstudio.com` 三个。
+- 已完成：现网探针已确认 `https://classflow.zjhstudio.com/` 与 `https://classflow.zjhstudio.com/api/v1/tasks` 当前都会被 Cloudflare Access 重定向到登录页。
+- 已完成：现网探针已确认 `https://classflow-backend.zjhstudio.com/api/v1/health` 当前可匿名访问，而 `https://classflow-backend.zjhstudio.com/api/v1/tasks` 在未带 Bearer Token 时会返回 `401`，说明它最外层尚未接入 Access，当前主要依赖应用层 `CLASSFLOW_BEARER_TOKEN`。
+- 已完成：现网探针已确认 `https://classflow-web.zhangjiahe0830.workers.dev/api/v1/tasks` 当前可匿名返回完整任务列表；这说明真正的高风险公开入口是 `workers.dev` 默认域名，因为 Worker 会自动补上后端 Bearer Token。
+- 已完成：已确认当前仓库的 [wrangler.toml](/home/zjhsteven/ClassFlow/apps/web/wrangler.toml) 里尚未显式声明 `workers_dev = false`，因此后续如果只在面板里手关 `workers.dev`，再次 `wrangler deploy` 时存在被重新打开的风险。
+- 已完成：已通过 `npx wrangler versions list` 与 `npx wrangler deployments list` 确认当前 Worker 仍处于持续部署状态，需要把配置文件作为唯一事实源一并收口。
+- 正在做：整理最终对外说明与落地步骤，明确“先封 `workers.dev`，再让 Worker 带 Access Service Token 回源后端 Tunnel”的安全收口方案。
