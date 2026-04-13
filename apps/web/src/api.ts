@@ -54,6 +54,11 @@ export interface TaskStreamSnapshotPayload {
   generated_at: string
 }
 
+export interface TaskStreamLifecycleCallbacks {
+  onOpen?: () => void
+  onConnectionError?: () => void
+}
+
 export interface CourseFilters {
   semester?: string
   date?: string
@@ -95,6 +100,7 @@ export function subscribeTaskStream(
   filters: TaskFilters,
   onSnapshot: (payload: TaskStreamSnapshotPayload) => void,
   onStreamError: (message: string) => void,
+  lifecycleCallbacks?: TaskStreamLifecycleCallbacks,
 ): () => void {
   if (typeof EventSource === 'undefined') {
     onStreamError('当前环境不支持 SSE，已回退到手动刷新。')
@@ -128,10 +134,20 @@ export function subscribeTaskStream(
     }
   }
 
+  eventSource.onopen = () => {
+    lifecycleCallbacks?.onOpen?.()
+  }
+
+  eventSource.onerror = () => {
+    lifecycleCallbacks?.onConnectionError?.()
+  }
+
   eventSource.addEventListener('tasks_snapshot', handleSnapshot)
   eventSource.addEventListener('tasks_error', handleErrorMessage)
 
   return () => {
+    eventSource.onopen = null
+    eventSource.onerror = null
     eventSource.removeEventListener('tasks_snapshot', handleSnapshot)
     eventSource.removeEventListener('tasks_error', handleErrorMessage)
     eventSource.close()

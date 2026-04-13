@@ -2,7 +2,8 @@
 
 ## 当前结论（必须最新）
 - 现状：`2026-04-13` 正在修复任务台请求风暴；已定位根因为前端 `TaskPanel` 的 `tasks -> loadTaskDetail -> loadTasks -> useEffect` 依赖链导致列表更新后反复触发阻塞式 `/api/v1/tasks` 加载，而不是后端 SSE 主动轮询。
-- 正在做：按“任务状态刷新以 SSE 为主、HTTP 只做首屏/失败兜底和用户命令/下载/详情按需请求”的方向重构任务台，并补回归测试防止再次出现 Worker 请求风暴。
+- 已完成：已把任务台改为“任务列表首屏优先等待 SSE 首帧，SSE 不可用/首帧超时才退回 HTTP 列表兜底”；同时用 `tasksRef` 打断 `tasks -> loadTaskDetail -> loadTasks` 的回调依赖循环，手动按钮改为“重连任务流”。
+- 已完成：前端验证已通过 `npm run lint`、`npm test`（19 项）、`npm run build`；新增回归测试确认 SSE 首帧成功时不会额外请求普通 `/api/v1/tasks`，且 SSE 不可用时只退回一次 HTTP 列表兜底。
 - 现状：`2026-04-09` 已完成 Worker 的 Access 回源能力接入，并已重新部署到 `https://classflow-web.zhangjiahe0830.workers.dev`；当前版本号为 `fe03c7e2-42ff-4a06-9e6d-93996c9db66c`。
 - 已完成：前端本轮验证已通过 `npm test`（17 项测试）、`npm run lint`、`npm run build`；新增测试覆盖了“Worker 回源时同时追加 `CF-Access-Client-Id` / `CF-Access-Client-Secret`”以及“只配置一半 Access 凭证时报显式错误”。
 - 已完成：已把 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` 写入 Worker secret；Worker 现在可以在回源后端时同时携带应用 Bearer Token 与 Cloudflare Access Service Token。

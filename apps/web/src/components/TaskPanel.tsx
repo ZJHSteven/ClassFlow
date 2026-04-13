@@ -40,6 +40,15 @@ interface TaskDetailCacheEntry {
   detail: TaskDetail
 }
 
+/**
+ * SSE 首帧兜底等待时间。
+ *
+ * 正常情况下后端 `/tasks/stream` 会在连接建立后立即推一帧完整任务摘要；
+ * 如果这段时间内还没收到，通常说明 Worker / Tunnel / 浏览器 SSE 链路出了问题，
+ * 这时才允许退回一次普通 HTTP 列表请求，避免页面首屏长期空白。
+ */
+const TASK_STREAM_FIRST_SNAPSHOT_TIMEOUT_MS = 4500
+
 function statusLabel(status: TaskStatus) {
   const labelMap: Record<TaskStatus, string> = {
     pending: '等待中',
@@ -146,10 +155,11 @@ export function TaskPanel() {
   const [downloadStates, setDownloadStates] = useState<Record<string, DownloadButtonState>>({})
   const [lastSyncedAt, setLastSyncedAt] = useState<string>('')
   const [isPageVisible, setIsPageVisible] = useState<boolean>(document.visibilityState === 'visible')
-  const [hasLoadedInitialList, setHasLoadedInitialList] = useState<boolean>(false)
+  const [streamResetKey, setStreamResetKey] = useState<number>(0)
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedTaskIdRef = useRef<string>('')
+  const tasksRef = useRef<TaskSummary[]>([])
   const taskDetailCacheRef = useRef<Record<string, TaskDetailCacheEntry>>({})
   const pressableProps = {
     whileHover: { y: -2, scale: 1.01 },
@@ -160,6 +170,22 @@ export function TaskPanel() {
   useEffect(() => {
     selectedTaskIdRef.current = selectedTaskId
   }, [selectedTaskId])
+
+  /**
+   * 统一写入任务列表状态。
+   *
+   * 这里同时维护 `tasks` 和 `tasksRef`：
+   *
+   * 1. `tasks` 用于触发界面重新渲染。
+   * 2. `tasksRef` 用于给异步回调读取“最新任务摘要”，但不会让这些回调因为列表变化而重新创建。
+   *
+   * 这正是本次修复的关键点：详情缓存判断需要读最新列表，但不能把 `tasks`
+   * 放进 `loadTaskDetail` 依赖里，否则会再次形成“列表更新 -> 回调重建 -> 首屏加载 effect 重跑”的循环。
+   */
+  const updateTasks = useCallback((nextTasks: TaskSummary[]) => {
+    tasksRef.current = nextTasks
+    setTasks(nextTasks)
+  }, [])
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -181,7 +207,7 @@ export function TaskPanel() {
   const loadTaskDetail = useCallback(async (taskId: string) => {
     const requestId = detailRequestIdRef.current + 1
     detailRequestIdRef.current = requestId
-    const taskSummary = tasks.find((task) => task.id === taskId)
+    const taskSummary = tasksRef.current.find((task) => task.id === taskId)
     const cachedEntry = taskDetailCacheRef.current[taskId]
     if (cachedEntry && taskSummary && cachedEntry.updatedAt === taskSummary.updated_at) {
       startTransition(() => {
@@ -213,7 +239,7 @@ export function TaskPanel() {
         })
       }
     }
-  }, [tasks])
+  }, [])
 
   /**
    * 刷新任务列表，并在必要时同步当前选中任务的详情。
@@ -254,11 +280,10 @@ export function TaskPanel() {
             : nextTasks[0]?.id ?? ''
 
           startTransition(() => {
-            setTasks(nextTasks)
+            updateTasks(nextTasks)
             setSelectedTaskId(nextSelectedTaskId)
             setListErrorMessage('')
             setLastSyncedAt(new Date().toISOString())
-            setHasLoadedInitialList(true)
           })
 
           if (refreshDetail) {
@@ -291,48 +316,55 @@ export function TaskPanel() {
         setIsRefreshing(false)
       }
     }
-  }, [courseFilter, dateFilter, loadTaskDetail, statusFilter])
+  }, [courseFilter, dateFilter, loadTaskDetail, statusFilter, updateTasks])
 
   useEffect(() => {
-    void loadTasks({
-      blocking: true,
-      refreshDetail: true,
-    })
-  }, [loadTasks])
+    if (!isPageVisible) {
+      return
+    }
 
-  useEffect(() => {
-    const syncWhenVisibleAgain = () => {
-      if (document.visibilityState !== 'visible') {
+    let isDisposed = false
+    let hasReceivedSnapshot = false
+    let hasStartedHttpFallback = false
+
+    if (tasksRef.current.length === 0) {
+      setIsLoading(true)
+    } else {
+      setIsRefreshing(true)
+    }
+    setListErrorMessage('')
+
+    const runHttpFallback = (message: string) => {
+      if (isDisposed || hasReceivedSnapshot || hasStartedHttpFallback) {
         return
       }
 
+      hasStartedHttpFallback = true
+      window.clearTimeout(firstSnapshotFallbackTimer)
+      setListErrorMessage(message)
       void loadTasks({
-        blocking: false,
+        blocking: tasksRef.current.length === 0,
         refreshDetail: true,
       })
     }
 
-    window.addEventListener('focus', syncWhenVisibleAgain)
-    document.addEventListener('visibilitychange', syncWhenVisibleAgain)
+    const firstSnapshotFallbackTimer = window.setTimeout(() => {
+      runHttpFallback('任务 SSE 首帧等待超时，已临时退回 HTTP 同步。')
+    }, TASK_STREAM_FIRST_SNAPSHOT_TIMEOUT_MS)
 
-    return () => {
-      window.removeEventListener('focus', syncWhenVisibleAgain)
-      document.removeEventListener('visibilitychange', syncWhenVisibleAgain)
-    }
-  }, [loadTasks])
-
-  useEffect(() => {
-    if (!isPageVisible || !hasLoadedInitialList) {
-      return
-    }
-
-    return subscribeTaskStream(
+    const unsubscribe = subscribeTaskStream(
       {
         status: statusFilter || undefined,
         date: dateFilter || undefined,
         course_name: courseFilter || undefined,
       },
       (payload) => {
+        if (isDisposed) {
+          return
+        }
+
+        hasReceivedSnapshot = true
+        window.clearTimeout(firstSnapshotFallbackTimer)
         const nextTasks = payload.tasks
         const nextSelectedTaskId = nextTasks.some((task) => task.id === selectedTaskIdRef.current)
           ? selectedTaskIdRef.current
@@ -340,18 +372,38 @@ export function TaskPanel() {
         const nextSelectedSummary = nextTasks.find((task) => task.id === nextSelectedTaskId)
 
         startTransition(() => {
-          setTasks(nextTasks)
+          updateTasks(nextTasks)
           setSelectedTaskId(nextSelectedTaskId)
           setSelectedTaskDetail((current) => mergeTaskSummaryIntoDetail(current, nextSelectedSummary))
           setListErrorMessage('')
           setLastSyncedAt(payload.generated_at || new Date().toISOString())
+          setIsLoading(false)
+          setIsRefreshing(false)
         })
       },
       (message) => {
-        setListErrorMessage(message)
+        runHttpFallback(message)
+      },
+      {
+        onOpen: () => {
+          if (!isDisposed && tasksRef.current.length > 0) {
+            setIsRefreshing(false)
+          }
+        },
+        onConnectionError: () => {
+          if (!hasReceivedSnapshot) {
+            runHttpFallback('任务 SSE 连接失败，已临时退回 HTTP 同步。')
+          }
+        },
       },
     )
-  }, [courseFilter, dateFilter, hasLoadedInitialList, isPageVisible, statusFilter])
+
+    return () => {
+      isDisposed = true
+      window.clearTimeout(firstSnapshotFallbackTimer)
+      unsubscribe()
+    }
+  }, [courseFilter, dateFilter, isPageVisible, loadTasks, statusFilter, streamResetKey, updateTasks])
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -529,15 +581,12 @@ export function TaskPanel() {
                 type="button"
                 className="buttonSecondary"
                 onClick={() =>
-                  void loadTasks({
-                    blocking: false,
-                    refreshDetail: true,
-                  })
+                  setStreamResetKey((current) => current + 1)
                 }
                 disabled={isRefreshing}
                 {...pressableProps}
               >
-                {isRefreshing ? '同步中...' : '刷新列表'}
+                {isRefreshing ? '重连中...' : '重连任务流'}
               </motion.button>
             </div>
           </div>

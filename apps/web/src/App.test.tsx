@@ -16,6 +16,9 @@ class MockEventSource {
 
   readonly url: string
   readonly listeners = new Map<string, Set<(event: Event) => void>>()
+  onopen: ((event: Event) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  isClosed = false
 
   constructor(url: string | URL) {
     this.url = String(url)
@@ -32,8 +35,23 @@ class MockEventSource {
     this.listeners.get(type)?.delete(listener)
   }
 
+  emitOpen() {
+    this.onopen?.(new Event('open'))
+  }
+
+  emitError() {
+    this.onerror?.(new Event('error'))
+  }
+
+  emitJson(type: string, payload: unknown) {
+    const event = new MessageEvent(type, {
+      data: JSON.stringify(payload),
+    })
+    this.listeners.get(type)?.forEach((listener) => listener(event))
+  }
+
   close() {
-    // 测试里不需要额外行为，保留空实现即可。
+    this.isClosed = true
   }
 }
 
@@ -112,6 +130,21 @@ const courseDetailPayload = {
   updated_at: '2026-03-22T00:00:00Z',
 }
 
+function emitTaskSnapshot(instance = MockEventSource.instances[MockEventSource.instances.length - 1]) {
+  instance.emitOpen()
+  instance.emitJson('tasks_snapshot', {
+    tasks: taskListPayload,
+    generated_at: '2026-03-22T00:00:01Z',
+  })
+}
+
+function countTaskListRequests() {
+  return fetchMock.mock.calls.filter(([input]) => {
+    const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+    return requestUrl === '/api/v1/tasks'
+  }).length
+}
+
 /**
  * 按 URL 分发假响应，避免使用“第几次 fetch 返回什么”的脆弱写法。
  *
@@ -178,6 +211,11 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
+      expect(MockEventSource.instances.length).toBeGreaterThan(0)
+    })
+    emitTaskSnapshot()
+
+    await waitFor(() => {
       expect(screen.getAllByText('病理学').length).toBeGreaterThan(0)
     })
 
@@ -192,7 +230,12 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: '刷新列表' }).length).toBeGreaterThan(0)
+      expect(MockEventSource.instances.length).toBeGreaterThan(0)
+    })
+    emitTaskSnapshot()
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: '重连任务流' }).length).toBeGreaterThan(0)
     })
 
     expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 5000)
@@ -224,9 +267,50 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
+      expect(MockEventSource.instances.length).toBeGreaterThan(0)
+    })
+    emitTaskSnapshot()
+
+    await waitFor(() => {
       expect(screen.getByRole('button', { name: '下载任务快照' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '下载事件日志' })).toBeInTheDocument()
     })
+  })
+
+  it('任务台应该以 SSE 首帧加载列表，不应该额外请求普通任务列表', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(MockEventSource.instances.length).toBe(1)
+    })
+    emitTaskSnapshot()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '下载任务快照' })).toBeInTheDocument()
+    })
+
+    expect(countTaskListRequests()).toBe(0)
+
+    fireEvent.click(screen.getByRole('button', { name: '重连任务流' }))
+
+    await waitFor(() => {
+      expect(MockEventSource.instances.length).toBe(2)
+    })
+    emitTaskSnapshot()
+
+    expect(countTaskListRequests()).toBe(0)
+  })
+
+  it('任务台在 SSE 不可用时应该只退回一次 HTTP 列表兜底', async () => {
+    vi.stubGlobal('EventSource', undefined)
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '下载任务快照' })).toBeInTheDocument()
+    })
+
+    expect(countTaskListRequests()).toBe(1)
   })
 
   it('课程总稿已经预览后，再下载不应该重复请求同一份 Markdown', async () => {
