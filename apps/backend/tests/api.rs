@@ -633,7 +633,10 @@ async fn retry_should_reupload_expired_temporary_oss_checkpoint() {
     })
     .await;
 
-    let retried_task = repo.get_task(&task_id).await.expect("重试后任务应能查询成功");
+    let retried_task = repo
+        .get_task(&task_id)
+        .await
+        .expect("重试后任务应能查询成功");
     assert_eq!(retried_task.status, TaskStatus::Succeeded);
     assert_eq!(
         counters.upload_calls.load(Ordering::SeqCst),

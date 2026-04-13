@@ -541,13 +541,13 @@ mod tests {
         time::Duration,
     };
 
-        use axum::{
-            Router,
-            body::Bytes,
-            extract::{Path, State},
-            http::{HeaderMap, StatusCode, header::LOCATION},
-            routing::put,
-        };
+    use axum::{
+        Router,
+        body::Bytes,
+        extract::{Path, State},
+        http::{HeaderMap, StatusCode, header::LOCATION},
+        routing::put,
+    };
     use tokio::net::TcpListener;
 
     use super::*;
@@ -699,7 +699,9 @@ mod tests {
 
     #[tokio::test]
     async fn worker_artifact_put_should_send_access_headers_and_stop_at_redirect() {
-        async fn handle_put(headers: HeaderMap) -> (StatusCode, [(axum::http::HeaderName, &'static str); 1]) {
+        async fn handle_put(
+            headers: HeaderMap,
+        ) -> (StatusCode, [(axum::http::HeaderName, &'static str); 1]) {
             assert_eq!(
                 headers
                     .get("authorization")
