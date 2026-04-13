@@ -541,13 +541,13 @@ mod tests {
         time::Duration,
     };
 
-    use axum::{
-        Router,
-        body::Bytes,
-        extract::{Path, State},
-        http::{HeaderMap, StatusCode},
-        routing::put,
-    };
+        use axum::{
+            Router,
+            body::Bytes,
+            extract::{Path, State},
+            http::{HeaderMap, StatusCode, header::LOCATION},
+            routing::put,
+        };
     use tokio::net::TcpListener;
 
     use super::*;
@@ -596,6 +596,8 @@ mod tests {
             r2_region: "auto".to_string(),
             artifact_proxy_base_url: base_url.to_string(),
             artifact_proxy_token: "proxy-token".to_string(),
+            artifact_proxy_access_client_id: String::new(),
+            artifact_proxy_access_client_secret: String::new(),
             artifact_proxy_connect_timeout_secs: 5.0,
             artifact_proxy_timeout_secs: 5.0,
             artifact_proxy_retry_attempts: 2,
@@ -691,6 +693,66 @@ mod tests {
             2,
             "首次 502 后应自动重试一次"
         );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn worker_artifact_put_should_send_access_headers_and_stop_at_redirect() {
+        async fn handle_put(headers: HeaderMap) -> (StatusCode, [(axum::http::HeaderName, &'static str); 1]) {
+            assert_eq!(
+                headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer proxy-token")
+            );
+            assert_eq!(
+                headers
+                    .get("cf-access-client-id")
+                    .and_then(|value| value.to_str().ok()),
+                Some("client-id")
+            );
+            assert_eq!(
+                headers
+                    .get("cf-access-client-secret")
+                    .and_then(|value| value.to_str().ok()),
+                Some("client-secret")
+            );
+
+            (StatusCode::FOUND, [(LOCATION, "/cdn-cgi/access/login")])
+        }
+
+        let app = Router::new().route("/__classflow/artifacts/{*path}", put(handle_put));
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("测试监听器应启动成功");
+        let addr = listener.local_addr().expect("监听地址应能读取成功");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("测试 HTTP 服务应运行成功");
+        });
+
+        let mut config = test_config(&format!("http://{addr}/"));
+        config.artifact_proxy_access_client_id = "client-id".to_string();
+        config.artifact_proxy_access_client_secret = "client-secret".to_string();
+        let store = WorkerArtifactStore::new(&config).expect("Worker store 应构造成功");
+
+        let error = store
+            .put_bytes(
+                "semester/course/segment.md",
+                "text/markdown; charset=utf-8",
+                b"hello worker".to_vec(),
+            )
+            .await
+            .expect_err("302 重定向应被保留下来并作为可诊断错误返回")
+            .to_string();
+
+        assert!(error.contains("HTTP=302"));
+        assert!(error.contains("Location=/cdn-cgi/access/login"));
+        assert!(error.contains("path=semester/course/segment.md"));
+        assert!(error.contains("/__classflow/artifacts/semester/course/segment.md"));
 
         server.abort();
     }

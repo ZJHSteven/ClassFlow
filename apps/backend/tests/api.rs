@@ -28,11 +28,12 @@ use backend::{
     artifacts::{ArtifactStore, LocalArtifactStore},
     config::ArtifactStoreMode,
     error::AppResult,
-    models::{NormalizedTranscript, TaskListQuery, TaskStatus},
+    models::{NormalizedTranscript, TaskListQuery, TaskStage, TaskStatus},
     pipeline::{PipelineIo, ProgressSink},
     repository::Repository,
     worker::{detached_queue, spawn_workers},
 };
+use chrono::{Duration as ChronoDuration, Utc};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -200,6 +201,8 @@ async fn build_test_state(
         r2_region: "auto".to_string(),
         artifact_proxy_base_url: String::new(),
         artifact_proxy_token: String::new(),
+        artifact_proxy_access_client_id: String::new(),
+        artifact_proxy_access_client_secret: String::new(),
         artifact_proxy_connect_timeout_secs: 10.0,
         artifact_proxy_timeout_secs: 30.0,
         artifact_proxy_retry_attempts: 2,
@@ -494,6 +497,10 @@ async fn retry_should_requeue_failed_task() {
         "上传成功后应立刻持久化上传检查点"
     );
     assert!(
+        failed_task.uploaded_source_url_saved_at.is_some(),
+        "上传检查点必须同时记录保存时间，后续才能判断临时 OSS 是否过期"
+    );
+    assert!(
         failed_task.transcript_json.is_none(),
         "转写失败前不应提前写入转写检查点"
     );
@@ -542,6 +549,113 @@ async fn retry_should_requeue_failed_task() {
         counters.transcribe_calls.load(Ordering::SeqCst),
         2,
         "转写失败后再次重试只应再次触发转写阶段"
+    );
+}
+
+#[tokio::test]
+async fn retry_should_reupload_expired_temporary_oss_checkpoint() {
+    let (state, _temp, counters) = build_test_state(true, false).await;
+    let repo = state.repo.clone();
+
+    let intake_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/intake/batches")
+                .header("Authorization", "Bearer test-token")
+                .header("Content-Type", "application/json")
+                .body(Body::from(intake_request_json().to_string()))
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("intake 应返回响应");
+    assert_eq!(intake_response.status(), StatusCode::ACCEPTED);
+
+    let payload: Value = serde_json::from_slice(
+        &intake_response
+            .into_body()
+            .collect()
+            .await
+            .expect("响应体应可读取")
+            .to_bytes(),
+    )
+    .expect("响应体应是合法 JSON");
+    let task_id = payload["task_ids"][0]
+        .as_str()
+        .expect("应返回 task_id")
+        .to_string();
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Failed)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    let stale_saved_at = (Utc::now() - ChronoDuration::hours(49)).to_rfc3339();
+    sqlx::query(
+        "UPDATE tasks SET uploaded_source_url = ?, uploaded_source_url_saved_at = ? WHERE id = ?",
+    )
+    .bind("oss://mock/audio.wav")
+    .bind(stale_saved_at)
+    .bind(&task_id)
+    .execute(repo.pool())
+    .await
+    .expect("测试应能模拟过期上传检查点");
+
+    let retry_response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/tasks/{task_id}/retry"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("重试请求应返回响应");
+    assert_eq!(retry_response.status(), StatusCode::ACCEPTED);
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Succeeded)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    let retried_task = repo.get_task(&task_id).await.expect("重试后任务应能查询成功");
+    assert_eq!(retried_task.status, TaskStatus::Succeeded);
+    assert_eq!(
+        counters.upload_calls.load(Ordering::SeqCst),
+        2,
+        "临时 oss:// 上传检查点超过安全窗口后，重试必须重新上传音频"
+    );
+    assert_eq!(
+        counters.transcribe_calls.load(Ordering::SeqCst),
+        2,
+        "重新上传后仍应继续执行转写阶段"
+    );
+
+    let detail = repo
+        .get_task_detail(&task_id)
+        .await
+        .expect("任务详情应能查询成功");
+    assert!(
+        detail.events.iter().any(|event| {
+            event.stage == TaskStage::UploadingAudio.as_str()
+                && event.message.contains("重新上传音频")
+        }),
+        "事件日志应解释为什么这次没有继续复用旧 oss:// 检查点"
     );
 }
 
