@@ -1,6 +1,8 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：`2026-04-13` 正在排查两个线上失败问题：一是“医学人文英语”历史任务重试时因为数据库仍有 `uploaded_source_url=oss://...` 而跳过上传，但临时 OSS 文件可能已经过期，导致后续转写报 `audio.wav not exist`；二是最近三节“毛泽东思想”任务在 `storing_artifacts` 阶段写 Worker/R2 产物失败，日志短码为 `HGP404`。
+- 正在做：已新建本轮 ExecPlan，当前先审查后端上传检查点、转写检查点、Worker 产物写入错误传播与真实数据库/日志，随后补代码与测试。
 - 现状：`2026-04-13` 正在修复任务台请求风暴；已定位根因为前端 `TaskPanel` 的 `tasks -> loadTaskDetail -> loadTasks -> useEffect` 依赖链导致列表更新后反复触发阻塞式 `/api/v1/tasks` 加载，而不是后端 SSE 主动轮询。
 - 已完成：已把任务台改为“任务列表首屏优先等待 SSE 首帧，SSE 不可用/首帧超时才退回 HTTP 列表兜底”；同时用 `tasksRef` 打断 `tasks -> loadTaskDetail -> loadTasks` 的回调依赖循环，手动按钮改为“重连任务流”。
 - 已完成：前端验证已通过 `npm run lint`、`npm test`（19 项）、`npm run build`；新增回归测试确认 SSE 首帧成功时不会额外请求普通 `/api/v1/tasks`，且 SSE 不可用时只退回一次 HTTP 列表兜底。
