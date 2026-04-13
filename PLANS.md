@@ -71,12 +71,15 @@
 3. 已完成：修改重试策略：如果失败阶段在转写及之前，且保存的是 `oss://` 临时 URL，就不能跨多天盲跳上传；超过 47 小时安全复用窗口或缺少保存时间时会重新上传音频。
 4. 已完成：增强 Worker 产物写入 404 / Access 重定向的错误上下文，包含产物路径、HTTP 状态、响应体、请求 URL 与 `Location`，避免只显示无法定位来源的短码。
 5. 已完成：新增后端测试，覆盖临时 OSS 过期重试、未过期重试仍可复用上传检查点、产物写入遇到 Cloudflare Access 重定向时不自动跟随到空体 404。
-6. 正在做：后端格式化、编译与测试已通过；下一步继续跑 Clippy、更新真实后端环境变量、构建 release、重启系统级 `classflow-backend.service` 与真实任务重试验收。
+6. 已完成：后端格式化、编译、测试、Clippy、release 构建、系统级 `classflow-backend.service` 重启与真实任务重试验收均已执行。
 
 ### 当前状态
 - 已完成：医学人文综合英语失败任务 `498d9a22-0968-4929-89ed-b8336c8d1999` 的旧 `oss://` 上传路径来自 `2026-04-04`，在 `2026-04-13` 重试时百炼返回 `BadRequest.ResourceNotExist`，根因是临时 OSS 对象已过期但后端仍跳过上传。
 - 已完成：三条毛泽东思想失败任务 `bbcd053e-e4a5-4de9-880b-09a8f2c74a77`、`c81a5111-e0b3-4a22-9a5a-8b39404f1fb0`、`fa6c16b3-7125-4fae-8ac8-78f119cd7d99` 都已有转写检查点，失败点在写 Worker 私有产物；真实探针证明后端请求先被 Cloudflare Access 拦成 `302`，旧 `reqwest` 自动跟随重定向后最终表现为空体 `404`。
-- 已完成：本地后端验证已通过 `cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`。
+- 已完成：本地后端验证已通过 `cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、`cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`。
+- 已完成：真实系统级后端环境文件已补齐产物代理访问 Worker 所需的 Cloudflare Access Service Token 变量，release 后端已重新构建并重启，健康检查返回 `200 OK`，后端私有产物接口 `PUT + DELETE` 探针均返回 `204`。
+- 已完成：三条“毛泽东思想”真实失败任务已重试成功并转为 `succeeded`。
+- 已完成：医学人文综合英语任务已按新策略重新上传音频并提交百炼，已不再报旧的 `BadRequest.ResourceNotExist`；当前剩余失败为百炼内容类结果 `SUCCESS_WITH_NO_VALID_FRAGMENT`，与旧的 `ASR_RESPONSE_HAVE_NO_WORDS` 同类，说明它已经越过临时 OSS 过期问题，剩下要判断原始音频是否无有效可识别语音。
 
 ## 2026-03-25 本轮 ExecPlan
 

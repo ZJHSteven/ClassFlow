@@ -5,8 +5,11 @@
 - 已完成：已确认“医学人文综合英语”任务 `498d9a22-0968-4929-89ed-b8336c8d1999` 的旧 `oss://` 上传路径来自 `2026-04-04`，到 `2026-04-13` 重试时百炼返回 `BadRequest.ResourceNotExist`；后端已新增 `uploaded_source_url_saved_at`，对百炼临时 `oss://` 使用 47 小时安全复用窗口，过期或历史缺时间戳时会重新上传音频。
 - 已完成：已确认三条“毛泽东思想”失败任务 `bbcd053e-e4a5-4de9-880b-09a8f2c74a77`、`c81a5111-e0b3-4a22-9a5a-8b39404f1fb0`、`fa6c16b3-7125-4fae-8ac8-78f119cd7d99` 都已有转写检查点，失败点是后端写 Worker 私有产物；真实探针证明请求被 Cloudflare Access 先拦成 `302`，旧 `reqwest` 自动跟随重定向后变成空体 `404`。
 - 已完成：后端 `WorkerArtifactStore` 已支持为“后端 -> Worker 私有产物接口”追加 `CF-Access-Client-Id` / `CF-Access-Client-Secret` 同类 Service Token 头，并禁用自动跟随重定向；错误信息现在会带 `path/url/HTTP/Location/响应体`。
-- 已完成：本地后端验证已通过 `cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`；新增回归测试覆盖临时 OSS 过期重试、未过期检查点复用、Worker Access 重定向诊断。
-- 正在做：下一步把后端 Access Service Token 环境变量补到真实系统级服务环境里，构建 release 后重启 `classflow-backend.service`，再对这 4 条失败任务做受控重试验收。
+- 已完成：本地后端验证已通过 `cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、`cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`；新增回归测试覆盖临时 OSS 过期重试、未过期检查点复用、Worker Access 重定向诊断。
+- 已完成：真实系统级后端环境文件 `/etc/classflow/backend.env` 已补齐“后端访问 Worker 私有产物接口”所需的 Access Service Token 变量；release 后端已重新构建并重启，健康检查返回 `200 OK`，私有产物接口 `PUT + DELETE` 探针均返回 `204`。
+- 已完成：三条“毛泽东思想”真实失败任务已经重试成功并转为 `succeeded`：`bbcd053e-e4a5-4de9-880b-09a8f2c74a77`、`c81a5111-e0b3-4a22-9a5a-8b39404f1fb0`、`fa6c16b3-7125-4fae-8ac8-78f119cd7d99`。
+- 已完成：医学人文综合英语任务 `498d9a22-0968-4929-89ed-b8336c8d1999` 已按新策略重新上传音频并提交百炼，证明旧临时 OSS 跳过上传的问题已修复；当前它仍失败在百炼内容类结果 `SUCCESS_WITH_NO_VALID_FRAGMENT`，不再是 `BadRequest.ResourceNotExist`。
+- 下一步：若要继续处理医学人文综合英语，需要抽查该任务重新生成的 `audio.wav` 是否有有效人声、音量/声道是否异常，或改用更合适的转写参数/人工标记为无有效语音。
 - 现状：`2026-04-13` 正在修复任务台请求风暴；已定位根因为前端 `TaskPanel` 的 `tasks -> loadTaskDetail -> loadTasks -> useEffect` 依赖链导致列表更新后反复触发阻塞式 `/api/v1/tasks` 加载，而不是后端 SSE 主动轮询。
 - 已完成：已把任务台改为“任务列表首屏优先等待 SSE 首帧，SSE 不可用/首帧超时才退回 HTTP 列表兜底”；同时用 `tasksRef` 打断 `tasks -> loadTaskDetail -> loadTasks` 的回调依赖循环，手动按钮改为“重连任务流”。
 - 已完成：前端验证已通过 `npm run lint`、`npm test`（19 项）、`npm run build`；新增回归测试确认 SSE 首帧成功时不会额外请求普通 `/api/v1/tasks`，且 SSE 不可用时只退回一次 HTTP 列表兜底。
