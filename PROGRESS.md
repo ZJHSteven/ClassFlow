@@ -2,7 +2,11 @@
 
 ## 当前结论（必须最新）
 - 现状：`2026-04-13` 正在排查两个线上失败问题：一是“医学人文英语”历史任务重试时因为数据库仍有 `uploaded_source_url=oss://...` 而跳过上传，但临时 OSS 文件可能已经过期，导致后续转写报 `audio.wav not exist`；二是最近三节“毛泽东思想”任务在 `storing_artifacts` 阶段写 Worker/R2 产物失败，日志短码为 `HGP404`。
-- 正在做：已新建本轮 ExecPlan，当前先审查后端上传检查点、转写检查点、Worker 产物写入错误传播与真实数据库/日志，随后补代码与测试。
+- 已完成：已确认“医学人文综合英语”任务 `498d9a22-0968-4929-89ed-b8336c8d1999` 的旧 `oss://` 上传路径来自 `2026-04-04`，到 `2026-04-13` 重试时百炼返回 `BadRequest.ResourceNotExist`；后端已新增 `uploaded_source_url_saved_at`，对百炼临时 `oss://` 使用 47 小时安全复用窗口，过期或历史缺时间戳时会重新上传音频。
+- 已完成：已确认三条“毛泽东思想”失败任务 `bbcd053e-e4a5-4de9-880b-09a8f2c74a77`、`c81a5111-e0b3-4a22-9a5a-8b39404f1fb0`、`fa6c16b3-7125-4fae-8ac8-78f119cd7d99` 都已有转写检查点，失败点是后端写 Worker 私有产物；真实探针证明请求被 Cloudflare Access 先拦成 `302`，旧 `reqwest` 自动跟随重定向后变成空体 `404`。
+- 已完成：后端 `WorkerArtifactStore` 已支持为“后端 -> Worker 私有产物接口”追加 `CF-Access-Client-Id` / `CF-Access-Client-Secret` 同类 Service Token 头，并禁用自动跟随重定向；错误信息现在会带 `path/url/HTTP/Location/响应体`。
+- 已完成：本地后端验证已通过 `cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`；新增回归测试覆盖临时 OSS 过期重试、未过期检查点复用、Worker Access 重定向诊断。
+- 正在做：下一步把后端 Access Service Token 环境变量补到真实系统级服务环境里，构建 release 后重启 `classflow-backend.service`，再对这 4 条失败任务做受控重试验收。
 - 现状：`2026-04-13` 正在修复任务台请求风暴；已定位根因为前端 `TaskPanel` 的 `tasks -> loadTaskDetail -> loadTasks -> useEffect` 依赖链导致列表更新后反复触发阻塞式 `/api/v1/tasks` 加载，而不是后端 SSE 主动轮询。
 - 已完成：已把任务台改为“任务列表首屏优先等待 SSE 首帧，SSE 不可用/首帧超时才退回 HTTP 列表兜底”；同时用 `tasksRef` 打断 `tasks -> loadTaskDetail -> loadTasks` 的回调依赖循环，手动按钮改为“重连任务流”。
 - 已完成：前端验证已通过 `npm run lint`、`npm test`（19 项）、`npm run build`；新增回归测试确认 SSE 首帧成功时不会额外请求普通 `/api/v1/tasks`，且 SSE 不可用时只退回一次 HTTP 列表兜底。

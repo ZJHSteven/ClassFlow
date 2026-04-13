@@ -78,6 +78,7 @@ npx wrangler whoami
    - 若使用 `worker` 模式，则还要填：
      - `CLASSFLOW_ARTIFACT_PROXY_BASE_URL`
      - `CLASSFLOW_ARTIFACT_PROXY_TOKEN`
+     - 如果这个 Worker 域名已经被 Cloudflare Access 保护，还要填 `CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_ID` / `CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_SECRET`
    - 若使用 `r2` 直连模式，则还要填：
      - `CLASSFLOW_R2_BUCKET`
      - `CLASSFLOW_R2_ENDPOINT`
@@ -91,6 +92,8 @@ npx wrangler whoami
 - 语音转文字模型名就在 `/etc/classflow/backend.env` 的 `CLASSFLOW_DASHSCOPE_MODEL`。当前仓库默认值是 `fun-asr-mtl`；如果你想换成别的 DashScope 录音文件识别模型，直接改这个环境变量后重启后端即可，不需要改源码。
 - 这个模型值会被后端同时用于两处：`GET /api/v1/uploads?action=getPolicy&model=...` 的临时上传凭证申请，以及 `POST /api/v1/services/audio/asr/transcription` 的异步转写提交。两处必须一致，否则 `oss://` 临时文件即使上传成功，也会在后续转写时失败。
 - `CLASSFLOW_ARTIFACT_PROXY_TOKEN` 是“后端访问 Worker 私有产物接口”使用的单独密钥，不给浏览器、不写进 userscript。
+- `CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_ID` / `CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_SECRET` 是“后端访问受 Cloudflare Access 保护的 Worker 私有产物接口”时使用的 Service Token。它们与 Worker 回源后端使用的 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` 是同类凭证，但方向不同：前者是后端打 Worker，后者是 Worker 打后端。若你想少配一组变量名，后端也会兼容读取 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`。
+- 百炼官方临时 `oss://` 上传对象有效期为 48 小时；后端会用 47 小时作为安全复用窗口。超过窗口或历史数据缺少保存时间时，重试会重新上传音频，避免继续拿已过期的临时对象提交转写。
 - 新版本把“上传并发”和“转写并发”拆开了；校园网弱上行环境下，建议先从 `2 / 2` 起步，不要再沿用旧的 `CLASSFLOW_DASHSCOPE_CONCURRENCY=8`。
 - 下载链路现在依赖 `aria2c`，并支持断点续传、自动重试、连接超时，以及“按需启用”的低速退出；默认配置不会因为网速慢就主动失败，只有显式填写正数 `CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES` 时才会启用该阈值。推荐直接使用 [env.example](/home/zjhsteven/ClassFlow/apps/backend/env.example) 里的默认稳健参数起步。
 - 如果 userscript 直连后端 Tunnel 域名，那么脚本里的 `Bearer Token` 也必须填这同一个值。
