@@ -15,6 +15,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use chrono::{Duration as ChronoDuration, Utc};
 use tokio::{fs, sync::mpsc};
 use tracing::{error, info};
 
@@ -29,6 +30,8 @@ use crate::{
     pipeline::{ProgressSink, TransferProgressSnapshot},
     repository::{TaskSuccessUpdate, TaskTransferUpdate},
 };
+
+const TEMP_OSS_UPLOAD_REUSE_MAX_AGE_HOURS: i64 = 47;
 
 #[derive(Clone)]
 pub struct TaskQueue {
@@ -182,21 +185,28 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         )
         .await?;
     state.notify_task_list_changed();
-    let uploaded_source_url = if let Some(saved_url) = task
-        .uploaded_source_url
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-    {
+    let uploaded_source_url = if let Some(saved_url) = reusable_uploaded_source_url(&task) {
         state
             .repo
             .update_task_stage(
                 task_id,
                 TaskStage::UploadingAudio,
-                "检测到历史上传检查点，跳过重复上传音频",
+                "检测到仍在有效期内的历史上传检查点，跳过重复上传音频",
             )
             .await?;
         saved_url
     } else {
+        if should_report_expired_uploaded_source_url(&task) {
+            state
+                .repo
+                .update_task_stage(
+                    task_id,
+                    TaskStage::UploadingAudio,
+                    "历史百炼临时 OSS 上传检查点缺少保存时间或已超过安全复用窗口，重新上传音频",
+                )
+                .await?;
+        }
+
         match state
             .pipeline
             .upload_audio_for_transcription(&extracted_audio, Some(upload_progress_sink))
@@ -365,6 +375,47 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
     state.notify_task_list_changed();
 
     Ok(())
+}
+
+/**
+ * 判断数据库里的上传检查点是否还能复用。
+ *
+ * `http/https` 这类外部长期 URL 不由 ClassFlow 控制生命周期，沿用原来的复用策略。
+ * `oss://` 是百炼 `getPolicy` 生成的临时对象，官方有效期为 48 小时；这里用 47 小时作为安全窗口，
+ * 避免卡在边界时“刚判断可用，提交转写时已经过期”。
+ *
+ * 旧版本数据库没有 `uploaded_source_url_saved_at`，这类历史 `oss://` 检查点一律视为不可复用。
+ */
+fn reusable_uploaded_source_url(task: &TaskRecord) -> Option<String> {
+    let saved_url = task
+        .uploaded_source_url
+        .clone()
+        .filter(|value| !value.trim().is_empty())?;
+
+    if !saved_url.trim_start().starts_with("oss://") {
+        return Some(saved_url);
+    }
+
+    let saved_at = task.uploaded_source_url_saved_at?;
+    let max_age = ChronoDuration::hours(TEMP_OSS_UPLOAD_REUSE_MAX_AGE_HOURS);
+    if Utc::now().signed_duration_since(saved_at) < max_age {
+        return Some(saved_url);
+    }
+
+    None
+}
+
+/**
+ * 判断是否需要给事件日志写一条“为什么没有复用上传检查点”的解释。
+ *
+ * 这个函数只负责展示原因，不改变数据库字段。后续真正上传成功时，
+ * `save_uploaded_source_url()` 会用新的 `oss://` 和新的保存时间覆盖旧检查点。
+ */
+fn should_report_expired_uploaded_source_url(task: &TaskRecord) -> bool {
+    task.uploaded_source_url
+        .as_deref()
+        .map(|value| value.trim_start().starts_with("oss://"))
+        .unwrap_or(false)
 }
 
 #[derive(Clone)]

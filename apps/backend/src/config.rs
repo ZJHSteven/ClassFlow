@@ -84,6 +84,8 @@ pub struct AppConfig {
     pub r2_region: String,
     pub artifact_proxy_base_url: String,
     pub artifact_proxy_token: String,
+    pub artifact_proxy_access_client_id: String,
+    pub artifact_proxy_access_client_secret: String,
     pub artifact_proxy_connect_timeout_secs: f64,
     pub artifact_proxy_timeout_secs: f64,
     pub artifact_proxy_retry_attempts: u32,
@@ -190,6 +192,20 @@ impl AppConfig {
             artifact_proxy_base_url: env::var("CLASSFLOW_ARTIFACT_PROXY_BASE_URL")
                 .unwrap_or_default(),
             artifact_proxy_token: env::var("CLASSFLOW_ARTIFACT_PROXY_TOKEN").unwrap_or_default(),
+            artifact_proxy_access_client_id: env_or_any(
+                &[
+                    "CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_ID",
+                    "CF_ACCESS_CLIENT_ID",
+                ],
+                "",
+            ),
+            artifact_proxy_access_client_secret: env_or_any(
+                &[
+                    "CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_SECRET",
+                    "CF_ACCESS_CLIENT_SECRET",
+                ],
+                "",
+            ),
             artifact_proxy_connect_timeout_secs: env_or_parse(
                 "CLASSFLOW_ARTIFACT_PROXY_CONNECT_TIMEOUT_SECS",
                 10.0,

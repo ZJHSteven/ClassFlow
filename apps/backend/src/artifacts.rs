@@ -18,7 +18,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::{Client as S3Client, primitives::ByteStream};
-use reqwest::{Client as HttpClient, Url};
+use reqwest::{Client as HttpClient, Url, redirect::Policy};
 use tokio::{fs, sync::Semaphore};
 use tracing::warn;
 
@@ -225,6 +225,8 @@ pub struct WorkerArtifactStore {
     client: HttpClient,
     base_url: Url,
     token: String,
+    access_client_id: Option<String>,
+    access_client_secret: Option<String>,
     retry_attempts: u32,
     retry_wait: Duration,
 }
@@ -247,8 +249,18 @@ impl WorkerArtifactStore {
             ))
         })?;
 
+        let access_client_id = non_empty_string(&config.artifact_proxy_access_client_id);
+        let access_client_secret = non_empty_string(&config.artifact_proxy_access_client_secret);
+        if access_client_id.is_some() != access_client_secret.is_some() {
+            return Err(AppError::Config(
+                "Worker 产物代理的 Cloudflare Access Service Token 配置不完整，CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_ID 与 CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_SECRET 必须同时存在"
+                    .to_string(),
+            ));
+        }
+
         Ok(Self {
             client: HttpClient::builder()
+                .redirect(Policy::none())
                 .connect_timeout(Duration::from_secs_f64(
                     config.artifact_proxy_connect_timeout_secs.max(1.0),
                 ))
@@ -259,6 +271,8 @@ impl WorkerArtifactStore {
                 .unwrap_or_else(|_| HttpClient::new()),
             base_url,
             token: config.artifact_proxy_token.clone(),
+            access_client_id,
+            access_client_secret,
             retry_attempts: config.artifact_proxy_retry_attempts.max(1),
             retry_wait: Duration::from_secs_f64(config.artifact_proxy_retry_wait_secs.max(0.0)),
         })
@@ -281,6 +295,23 @@ impl WorkerArtifactStore {
             }
         }
         Ok(url)
+    }
+
+    /**
+     * 给“后端 -> Worker 私有产物接口”的请求统一追加鉴权头。
+     *
+     * 这里有两层鉴权：
+     * 1. `Authorization: Bearer ...` 是 ClassFlow 自己的私有产物接口 token。
+     * 2. `CF-Access-Client-*` 是 Cloudflare Access 保护 `workers.dev` 或自定义域名时需要的服务令牌。
+     */
+    fn apply_auth_headers(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let request = request.bearer_auth(&self.token);
+        match (&self.access_client_id, &self.access_client_secret) {
+            (Some(client_id), Some(client_secret)) => request
+                .header("CF-Access-Client-Id", client_id)
+                .header("CF-Access-Client-Secret", client_secret),
+            _ => request,
+        }
     }
 
     async fn send_with_retry<Builder>(
@@ -344,31 +375,41 @@ impl WorkerArtifactStore {
 #[async_trait]
 impl ArtifactStore for WorkerArtifactStore {
     async fn put_bytes(&self, path: &str, content_type: &str, bytes: Vec<u8>) -> AppResult<()> {
+        let request_url = self.build_object_url(path)?;
         let response = self
             .send_with_retry("写入", path, |url| {
-                self.client
-                    .put(url)
-                    .bearer_auth(&self.token)
+                self.apply_auth_headers(self.client.put(url))
                     .header("Content-Type", content_type)
                     .body(bytes.clone())
             })
             .await?;
 
         let status = response.status().as_u16();
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         let body = response.text().await.unwrap_or_default();
         if !(200..300).contains(&status) {
-            return Err(AppError::External(format!(
-                "Worker 产物写入失败，HTTP={status}，响应={body}"
-            )));
+            return Err(worker_response_error(
+                "写入",
+                path,
+                request_url.as_str(),
+                status,
+                location.as_deref(),
+                &body,
+            ));
         }
 
         Ok(())
     }
 
     async fn get_bytes(&self, path: &str) -> AppResult<StoredObject> {
+        let request_url = self.build_object_url(path)?;
         let response = self
             .send_with_retry("读取", path, |url| {
-                self.client.get(url).bearer_auth(&self.token)
+                self.apply_auth_headers(self.client.get(url))
             })
             .await?;
 
@@ -378,10 +419,20 @@ impl ArtifactStore for WorkerArtifactStore {
         }
 
         if !(200..300).contains(&status) {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
             let body = response.text().await.unwrap_or_default();
-            return Err(AppError::External(format!(
-                "Worker 产物读取失败，HTTP={status}，响应={body}"
-            )));
+            return Err(worker_response_error(
+                "读取",
+                path,
+                request_url.as_str(),
+                status,
+                location.as_deref(),
+                &body,
+            ));
         }
 
         let content_type = response
@@ -399,9 +450,10 @@ impl ArtifactStore for WorkerArtifactStore {
     }
 
     async fn delete(&self, path: &str) -> AppResult<()> {
+        let request_url = self.build_object_url(path)?;
         let response = self
             .send_with_retry("删除", path, |url| {
-                self.client.delete(url).bearer_auth(&self.token)
+                self.apply_auth_headers(self.client.delete(url))
             })
             .await?;
 
@@ -410,11 +462,47 @@ impl ArtifactStore for WorkerArtifactStore {
             return Ok(());
         }
 
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         let body = response.text().await.unwrap_or_default();
-        Err(AppError::External(format!(
-            "Worker 产物删除失败，HTTP={status}，响应={body}"
-        )))
+        Err(worker_response_error(
+            "删除",
+            path,
+            request_url.as_str(),
+            status,
+            location.as_deref(),
+            &body,
+        ))
     }
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn worker_response_error(
+    operation: &str,
+    path: &str,
+    url: &str,
+    status: u16,
+    location: Option<&str>,
+    body: &str,
+) -> AppError {
+    let location_detail = location
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("，Location={value}"))
+        .unwrap_or_default();
+    AppError::External(format!(
+        "Worker 产物{operation}失败，path={path}，url={url}，HTTP={status}{location_detail}，响应={body}"
+    ))
 }
 
 fn should_retry_status(status: reqwest::StatusCode) -> bool {

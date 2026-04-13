@@ -132,6 +132,8 @@ impl Repository {
             .await?;
         self.ensure_optional_task_column("eta_seconds", "INTEGER")
             .await?;
+        self.ensure_optional_task_column("uploaded_source_url_saved_at", "TEXT")
+            .await?;
 
         Ok(())
     }
@@ -429,8 +431,11 @@ impl Repository {
     /**
      * 保存“上传阶段已经完成”的断点信息。
      *
-     * 一旦 `uploaded_source_url` 已经拿到，后续即使任务失败，也没有必要重新上传同一个音频文件。
-     * 这里单独落库，就是为了让“上传成功、转写失败”的任务能直接从转写阶段继续。
+     * 一旦 `uploaded_source_url` 已经拿到，短时间内的重试可以直接复用它，
+     * 这样“上传成功、转写失败”的任务不用立刻重新上传同一个音频文件。
+     *
+     * 注意：百炼官方临时 `oss://` URL 只有 48 小时有效期。
+     * 所以这里必须同时保存检查点写入时间，worker 后续才能判断它是否已经过期。
      */
     pub async fn save_uploaded_source_url(
         &self,
@@ -438,8 +443,11 @@ impl Repository {
         uploaded_source_url: &str,
     ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE tasks SET uploaded_source_url = ?, updated_at = ? WHERE id = ?")
+        sqlx::query(
+            "UPDATE tasks SET uploaded_source_url = ?, uploaded_source_url_saved_at = ?, updated_at = ? WHERE id = ?",
+        )
             .bind(uploaded_source_url)
+            .bind(&now)
             .bind(&now)
             .bind(task_id)
             .execute(&self.pool)
@@ -493,7 +501,9 @@ impl Repository {
         sqlx::query(
             r#"
             UPDATE tasks
-            SET status = ?, stage = ?, uploaded_source_url = ?, transcript_text = ?, transcript_json = ?,
+            SET status = ?, stage = ?, uploaded_source_url = ?,
+                uploaded_source_url_saved_at = COALESCE(uploaded_source_url_saved_at, ?),
+                transcript_text = ?, transcript_json = ?,
                 segment_markdown_path = ?, segment_json_path = ?, course_manifest_path = ?,
                 merged_markdown_path = ?, progress_percent = NULL, transferred_bytes = NULL,
                 total_bytes = NULL, rate_bytes_per_sec = NULL, eta_seconds = NULL,
@@ -504,6 +514,7 @@ impl Repository {
         .bind(TaskStatus::Succeeded.as_str())
         .bind(TaskStage::Done.as_str())
         .bind(update.uploaded_source_url)
+        .bind(&now)
         .bind(update.transcript_text)
         .bind(update.transcript_json.to_string())
         .bind(update.segment_markdown_path)
@@ -784,6 +795,9 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         attempt_count: row.get("attempt_count"),
         last_error: row.get("last_error"),
         uploaded_source_url: row.get("uploaded_source_url"),
+        uploaded_source_url_saved_at: parse_optional_datetime(
+            row.try_get("uploaded_source_url_saved_at").ok(),
+        )?,
         segment_markdown_path: row.get("segment_markdown_path"),
         segment_json_path: row.get("segment_json_path"),
         course_manifest_path: row.get("course_manifest_path"),

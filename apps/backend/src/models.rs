@@ -112,6 +112,7 @@ pub struct TaskRecord {
     pub attempt_count: i64,
     pub last_error: Option<String>,
     pub uploaded_source_url: Option<String>,
+    pub uploaded_source_url_saved_at: Option<DateTime<Utc>>,
     pub segment_markdown_path: Option<String>,
     pub segment_json_path: Option<String>,
     pub course_manifest_path: Option<String>,
