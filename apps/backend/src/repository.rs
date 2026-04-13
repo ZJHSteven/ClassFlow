@@ -796,7 +796,9 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         last_error: row.get("last_error"),
         uploaded_source_url: row.get("uploaded_source_url"),
         uploaded_source_url_saved_at: parse_optional_datetime(
-            row.try_get("uploaded_source_url_saved_at").ok(),
+            row.try_get::<Option<String>, _>("uploaded_source_url_saved_at")
+                .ok()
+                .flatten(),
         )?,
         segment_markdown_path: row.get("segment_markdown_path"),
         segment_json_path: row.get("segment_json_path"),
