@@ -418,6 +418,22 @@ async fn intake_should_create_task_and_artifacts() {
         .await
         .expect("查询任务应成功");
     let course_key = tasks[0].course_key.clone();
+    let merged_markdown_path = tasks[0]
+        .merged_markdown_path
+        .clone()
+        .expect("任务成功后应记录课程总稿路径");
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let artifact_store = state.artifact_store.clone();
+        let merged_markdown_path = merged_markdown_path.clone();
+        Box::pin(async move {
+            artifact_store
+                .get_bytes(&merged_markdown_path)
+                .await
+                .is_ok()
+        })
+    })
+    .await;
 
     let artifact_response = build_app(state)
         .oneshot(
