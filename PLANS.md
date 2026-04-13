@@ -55,6 +55,7 @@
 4. 已完成：调整手动刷新/回到前台同步逻辑，避免在 SSE 已连接时无意义调用 `/api/v1/tasks`；按钮改为“重连任务流”。
 5. 已完成：补充前端测试，覆盖稳定首屏不会持续重复请求任务列表、SSE 首帧可填充任务列表、SSE 失败可退回 HTTP。
 6. 已完成：前端验证已通过 `npm run lint`、`npm test`（19 项）、`npm run build`；本轮只改前端 SSE 消费与测试，未改后端 SSE 契约。
+7. 已完成：前端 Worker 已重新构建并通过 `npx wrangler deploy` 发布，当前版本号为 `1659f30b-44ae-4842-90d5-f5c3010ff388`；匿名线上探针返回 `302` 到 Cloudflare Access 登录页，符合当前入口受 Access 保护的预期。
 
 ## 2026-03-25 本轮 ExecPlan
 
