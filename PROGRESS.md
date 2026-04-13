@@ -1,6 +1,8 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：`2026-04-13` 正在修复任务台请求风暴；已定位根因为前端 `TaskPanel` 的 `tasks -> loadTaskDetail -> loadTasks -> useEffect` 依赖链导致列表更新后反复触发阻塞式 `/api/v1/tasks` 加载，而不是后端 SSE 主动轮询。
+- 正在做：按“任务状态刷新以 SSE 为主、HTTP 只做首屏/失败兜底和用户命令/下载/详情按需请求”的方向重构任务台，并补回归测试防止再次出现 Worker 请求风暴。
 - 现状：`2026-04-09` 已完成 Worker 的 Access 回源能力接入，并已重新部署到 `https://classflow-web.zhangjiahe0830.workers.dev`；当前版本号为 `fe03c7e2-42ff-4a06-9e6d-93996c9db66c`。
 - 已完成：前端本轮验证已通过 `npm test`（17 项测试）、`npm run lint`、`npm run build`；新增测试覆盖了“Worker 回源时同时追加 `CF-Access-Client-Id` / `CF-Access-Client-Secret`”以及“只配置一半 Access 凭证时报显式错误”。
 - 已完成：已把 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` 写入 Worker secret；Worker 现在可以在回源后端时同时携带应用 Bearer Token 与 Cloudflare Access Service Token。
@@ -88,6 +90,8 @@
 - 下一步：根据你真实使用的屏幕尺寸与操作节奏，再决定是否继续补“面板高度可配置”、“任务详情按需 SSE”或“课程总稿/manifest 的浏览器端缓存持久化”。
 
 ## 关键决策与理由（防止“吃书”）
+- 决策AC：任务台普通状态刷新要以 SSE 为主，`GET /api/v1/tasks` 只作为 SSE 不可用或首帧超时的兜底，而不是和 SSE 长期并行。（原因：SSE 已经能推送任务摘要列表和传输进度；继续无变化地刷新普通列表会浪费 Cloudflare Worker 请求额度。）
+- 决策AD：任务详情、重试、删除和文件下载暂不塞进 SSE。（原因：SSE 是服务端到浏览器的单向通道，用户命令和二进制/文本文件下载仍更适合 HTTP；本轮先收敛最浪费的任务列表请求。）
 - 决策Z：`classflow-web.zhangjiahe0830.workers.dev` 这条 Worker 回源链路必须单独观察和单独切规则，不能再简单跟随“大一统代理组”的默认命中结果。（原因：`2026-04-09` 已经实证 `DIRECT` 不通、`Exflux` 可恢复，而历史 `Kuromis` 还曾直接出现 `i/o timeout`；这说明该域名对线路选择非常敏感。）
 - 决策AA：任务详情接口不再把 `transcript_json` / `transcript_text` 这类前端当前不用的大字段内联回浏览器，但 `task.json` 下载快照仍继续保留完整原始任务记录。（原因：真实样本已证明这两个字段会把一次详情请求膨胀到 200KB 级别，直接拖慢点击详情；而下载快照仍需要保真。）
 - 决策AB：任务台首屏应先把列表稳稳拿下来，再补建 SSE，而不是首帧就让“列表 HTTP + SSE”同时抢链路；列表首次失败也不应立刻把页面打成最终错误态，而要先做有限次短重试。（原因：现网首屏 502 与 SSE 首连偶发失败都集中出现在首次打开页面的几秒内，这个时段最值得优先减压与加兜底。）
@@ -118,6 +122,7 @@
 - 决策S：任务台与课程库都改为“固定面板高度 + 内部滚动”布局，而不是任由列表、报错、日志把整页无限拉长。（原因：用户要求在常见笔记本视口中尽量一屏看到主要操作按钮，减少无意义滚整页。）
 
 ## 常见坑 / 复现方法
+- 坑20：`TaskPanel` 里如果让 `loadTaskDetail` 依赖 `tasks`，再让 `loadTasks` 依赖 `loadTaskDetail`，最后首屏加载 `useEffect` 又依赖 `loadTasks`，就会在每次 `setTasks()` 后重新创建回调并再次执行阻塞加载；浏览器表现为 `/api/v1/tasks` 请求风暴和“正在加载任务列表...”反复闪烁。
 - 坑18：`classflow-web.zhangjiahe0830.workers.dev` 在这台机子上并不是“随便给个规则都行”；`DIRECT` 已被实测证伪，而某些代理组曾能恢复、某些组又会超时，所以排查 Worker 写产物失败时，必须把命中策略组一起记下来。
 - 坑19：`/api/v1/tasks/{id}` 旧实现会把 `transcript_json` 和 `transcript_text` 整包返回给前端，即使前端类型根本没用它们；在真实样本里，这会把一次详情点击膨胀到 `238466` 字节，导致“点一下详情要等很久”的错觉被放大。
 - 坑16：如果后端只是跑在 `systemd --user`，但当前用户又没有开启 `linger`，那么一旦 SSH / VS Code Remote 会话全断，`user@UID.service` 会被回收，后端也会一起消失；外部表现通常就是 `cloudflared` 回源 `127.0.0.1:8787` 时得到 `connect refused`，前端出现 `502`。
