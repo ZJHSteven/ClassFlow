@@ -185,7 +185,20 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         )
         .await?;
     state.notify_task_list_changed();
-    let uploaded_source_url = if let Some(saved_url) = reusable_uploaded_source_url(&task) {
+    let restored_transcript_checkpoint =
+        restore_transcript_checkpoint(&task, &state, task_id).await?;
+    let uploaded_source_url = if restored_transcript_checkpoint.is_some() {
+        let saved_url = task.uploaded_source_url.clone().unwrap_or_default();
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::UploadingAudio,
+                "检测到可恢复的历史转写检查点，跳过上传音频",
+            )
+            .await?;
+        saved_url
+    } else if let Some(saved_url) = reusable_uploaded_source_url(&task) {
         state
             .repo
             .update_task_stage(
@@ -233,9 +246,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .update_task_stage(task_id, TaskStage::Transcribing, "开始轮询百炼异步转写任务")
         .await?;
     state.notify_task_list_changed();
-    let transcript = if let Some(saved_transcript) =
-        restore_transcript_checkpoint(&task, &state, task_id).await?
-    {
+    let transcript = if let Some(saved_transcript) = restored_transcript_checkpoint {
         state
             .repo
             .update_task_stage(

@@ -870,6 +870,11 @@ async fn retry_should_resume_from_transcript_checkpoint_after_artifact_failure()
         failed_task.transcript_json.is_some(),
         "写产物失败前应已保存转写检查点"
     );
+    sqlx::query("UPDATE tasks SET uploaded_source_url_saved_at = NULL WHERE id = ?")
+        .bind(&task_id)
+        .execute(repo.pool())
+        .await
+        .expect("测试应能模拟旧版本缺少上传检查点保存时间的历史任务");
 
     let retry_response = build_app(state)
         .oneshot(
@@ -909,7 +914,7 @@ async fn retry_should_resume_from_transcript_checkpoint_after_artifact_failure()
     assert_eq!(
         counters.upload_calls.load(Ordering::SeqCst),
         1,
-        "产物写入失败后再次重试不应重新上传音频"
+        "产物写入失败后如果已有可恢复转写检查点，即使旧上传时间缺失也不应重新上传音频"
     );
     assert_eq!(
         counters.transcribe_calls.load(Ordering::SeqCst),
