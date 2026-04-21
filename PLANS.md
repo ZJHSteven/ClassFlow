@@ -83,6 +83,24 @@
 - 已完成：`speedtest-tracker` 配置为 `*/30 * * * *`，21:30 确有 `cli.speedtest.net` 连接；但 speedtest 数据库显示该次测速 `failed`，错误为 `ConfigurationError`，主要证据不是测速持续打满带宽，而是它也在网络最乱的窗口触发了一次外部连接。
 - 结论：两个假设里，“带宽/并发竞争”是放大因素，“Wi-Fi 漫游/重连 + 代理/DIRECT 混合链路被打断”是更强的直接证据。后续保护措施应优先考虑：固定/优化无线连接、避开半小时 speedtest、给全局上行做系统级整形，另可补应用内 Worker 写入并发/退避保护。
 
+## 2026-04-22 speedtest、校园网认证与 AP 漫游对齐排查 ExecPlan
+
+### 目标
+- 在不修改业务代码的前提下，查清 `speedtest-tracker` 是从哪里启动、何时配置、日志与数据放在哪里，并判断是否应先暂停该后台测速任务。
+- 对齐北京时间 2026-04-21 晚间故障窗口里的 `NetworkManager`、内核 Wi-Fi、`mihomo`、`cloudflared`、`campus-login` 与 ClassFlow 后端日志，判断“Worker 写入失败”是否可归因到无线网卡 AP 漫游/重连。
+- 区分三种可能：无线 AP 漫游导致底层断联、校园网认证掉线/脚本重登导致断联、或脚本周期太粗导致恢复等待时间被放大。
+
+### 执行步骤
+1. 进行中：定位 `speedtest-tracker` 的 Docker Compose、容器、数据库、调度表达式、日志输出与创建时间，必要时先停止容器但不删除数据。
+2. 进行中：读取 `campus-login.service`、`campus-login.timer` 与认证脚本，确认真实执行周期、探测目标、日志输出方式，以及是否会改 IP / 重新认证 / 重启网络。
+3. 待执行：按秒级时间线抽取 2026-04-21 21:20 到 21:55 的 NetworkManager、内核 `wlp3s0`、`mihomo`、`cloudflared`、`campus-login`、ClassFlow 后端日志。
+4. 待执行：检查 `nmcli` 当前 Wi-Fi 连接配置、BSSID、漫游/自动连接策略、DHCP 记录与 IP 变化记录，判断 AP 切换更像“AP 踢下线”还是客户端主动漫游。
+5. 待执行：给出本轮证据权重、是否能排除“强小上行”为主因、以及后续运维治理建议；本轮不改业务代码。
+
+### 当前状态
+- 进行中：已确认系统存在 `campus-login.timer`，当前配置为开机 2 分钟后首次执行，之后按 `OnUnitActiveSec=10min` 周期运行，不是 5 分钟。
+- 进行中：`speedtest-tracker` 初步看不是 systemd 单元，而是 Docker/Compose 常驻容器；需要继续定位 compose 文件、容器状态和日志。
+
 ## 2026-04-13 任务台 SSE 请求风暴修复 ExecPlan
 
 ### 目标
