@@ -61,6 +61,23 @@
 - 已完成：当前以真实后端进程环境、普通用户身份对 `workers.dev` 与自定义前端域名各做 10 次临时 `PUT` 探针，均返回 `204`；当前链路已恢复，未复现持续性 Worker/R2 故障。
 - 已完成：验证已通过 `cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、`cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`、`npm test`、`npm run lint`、`npm run build`。
 
+## 2026-04-22 上传带宽与 mihomo 链路对照排查 ExecPlan
+
+### 目标
+- 在不修改业务代码的前提下，继续排查 2026-04-21 晚间写入产物失败是否由“OSS 上传 + Worker 写入同时抢占 3~5 Mbps 上行”触发。
+- 对照同一时间窗口的 `mihomo` 日志，判断 Worker / OSS 请求当时是走代理还是直连，以及是否存在 `i/o timeout`、连接失败、节点切换等证据。
+- 讨论后续治理方向：应用内并发/带宽整形、系统级 QoS / 限速、代理规则调整，先形成判断，不改代码。
+
+### 执行步骤
+1. 正在做：从 SQLite 事件日志和 systemd 日志还原北京时间 2026-04-21 21:20 到 21:50 的任务阶段时间线，标出 OSS 上传开始/成功/重试、Worker 写入开始/失败/重试。
+2. 待做：结合当前配置 `CLASSFLOW_TASK_WORKER_COUNT`、`CLASSFLOW_UPLOAD_CONCURRENCY`、WorkerArtifactStore 实现，估算当时最多同时存在多少条 OSS 上传与 Worker 写入请求。
+3. 待做：估算失败样本里 Worker 产物正文/JSON 的体积量级，与 OSS 音频上传体积量级对比，判断 Worker 写入是否足以打满 3~5 Mbps 上行。
+4. 待做：读取 `mihomo.service` 在同一时间窗口的 journal 日志，检索 `classflow-web`、`workers.dev`、`dashscope`、`oss-cn-beijing`、`timeout`、`DIRECT`、代理组命中等线索。
+5. 待做：汇总两个假设的证据权重，并给出下一步可选保护措施，不修改业务代码。
+
+### 当前状态
+- 正在做：本轮只做日志、配置、历史数据和链路推断。
+
 ## 2026-04-13 任务台 SSE 请求风暴修复 ExecPlan
 
 ### 目标
