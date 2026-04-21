@@ -1,6 +1,13 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：`2026-04-22` 已完成 `speedtest-tracker`、校园网认证脚本、AP 漫游与 ClassFlow 写产物失败的对齐排查；本轮没有修改业务代码。
+- 已完成：`speedtest-tracker` 已确认由 `/home/zjhsteven/speedtest-tracker/docker-compose.yml` 启动，容器创建于 `2026-03-06 19:10:19 +0800`，配置 `restart: unless-stopped` 与 `SPEEDTEST_SCHEDULE="*/30 * * * *"`；数据和日志保留在 `/home/zjhsteven/speedtest-tracker/config`。
+- 已完成：已执行 `docker stop speedtest-tracker`，当前容器状态为 `Exited (0)`；数据未删除，后续如要恢复可从原 compose 目录重新启动。
+- 已完成：`campus-login.timer` 实际周期是 `OnUnitActiveSec=10min`，不是 5 分钟；北京时间 `2026-04-21 21:22 / 21:32 / 21:42 / 21:52` 几次执行都检测到百度可访问并退出，没有触发校园网门户登录 POST。
+- 已完成：北京时间 `2026-04-21 21:29:18~21:29:24`，`wlp3s0` 从 AP `06:05:88:4b:c8:99` 尝试漫游到 `06:05:88:4b:bb:55` 和 `06:05:88:4b:cc:41`，两次认证超时后回到 `06:05:88:4b:c8:99`；同一秒 `mihomo` 报 TUN 默认接口变化，`cloudflared` 报 `timeout: no recent network activity`，随后 ClassFlow Worker 产物写入与 OSS 上传都出现请求失败/超时。
+- 已完成：`21:39`、`21:41`、`21:46`、`21:54` 附近仍有 AP 切换或 deauth/reassoc；DHCP 每次很快拿回同一个 `100.65.37.205`，没有看到 IP 变化、等待门户认证、或认证脚本重登造成恢复延迟的证据。
+- 下一步：治理优先级应先从无线链路稳定性入手，例如固定 BSSID/减少漫游、改用有线或更稳定 AP、保留 speedtest 暂停状态；之后再考虑系统级 QoS 或应用内 Worker 写入并发保护。
 - 现状：`2026-04-22` 已完成写入产物失败的上传带宽与 `mihomo` 链路对照排查；本轮没有修改业务代码，只更新排查文档。
 - 已完成：北京时间 2026-04-21 21:20 到 21:50 的时间线显示，失败窗口确实存在 `CLASSFLOW_UPLOAD_CONCURRENCY=2` 的 OSS 上传、最多 4 个任务 worker 的 Worker 产物写入、aria2 直连下载、Worker 代理请求并发重叠。
 - 已完成：失败的 Worker 产物 JSON 体积约 `80KB~137KB`，Markdown 约 `9KB~15KB`；OSS 上传的是 `16kHz mono pcm_s16le` WAV，45 分钟理论约 `86MB`。因此 Worker 产物本身不大，不像是 30 秒内传不完，更可能是弱上行/链路切换时连接或响应被拖死。

@@ -91,15 +91,21 @@
 - 区分三种可能：无线 AP 漫游导致底层断联、校园网认证掉线/脚本重登导致断联、或脚本周期太粗导致恢复等待时间被放大。
 
 ### 执行步骤
-1. 进行中：定位 `speedtest-tracker` 的 Docker Compose、容器、数据库、调度表达式、日志输出与创建时间，必要时先停止容器但不删除数据。
-2. 进行中：读取 `campus-login.service`、`campus-login.timer` 与认证脚本，确认真实执行周期、探测目标、日志输出方式，以及是否会改 IP / 重新认证 / 重启网络。
-3. 待执行：按秒级时间线抽取 2026-04-21 21:20 到 21:55 的 NetworkManager、内核 `wlp3s0`、`mihomo`、`cloudflared`、`campus-login`、ClassFlow 后端日志。
-4. 待执行：检查 `nmcli` 当前 Wi-Fi 连接配置、BSSID、漫游/自动连接策略、DHCP 记录与 IP 变化记录，判断 AP 切换更像“AP 踢下线”还是客户端主动漫游。
-5. 待执行：给出本轮证据权重、是否能排除“强小上行”为主因、以及后续运维治理建议；本轮不改业务代码。
+1. 已完成：定位 `speedtest-tracker` 的 Docker Compose、容器、数据库、调度表达式、日志输出与创建时间，并停止容器但保留数据。
+2. 已完成：读取 `campus-login.service`、`campus-login.timer` 与认证脚本，确认真实执行周期、探测目标、日志输出方式，以及是否会改 IP / 重新认证 / 重启网络。
+3. 已完成：按秒级时间线抽取 2026-04-21 21:20 到 21:55 的 NetworkManager、内核 `wlp3s0`、`mihomo`、`cloudflared`、`campus-login`、ClassFlow 后端日志。
+4. 已完成：检查 `nmcli` 当前 Wi-Fi 连接配置、BSSID、漫游/自动连接策略、DHCP 记录与 IP 变化记录，判断 AP 切换更像“AP 踢下线”还是客户端主动漫游。
+5. 已完成：给出本轮证据权重、是否能排除“强小上行”为主因、以及后续运维治理建议；本轮不改业务代码。
 
 ### 当前状态
-- 进行中：已确认系统存在 `campus-login.timer`，当前配置为开机 2 分钟后首次执行，之后按 `OnUnitActiveSec=10min` 周期运行，不是 5 分钟。
-- 进行中：`speedtest-tracker` 初步看不是 systemd 单元，而是 Docker/Compose 常驻容器；需要继续定位 compose 文件、容器状态和日志。
+- 已完成：`speedtest-tracker` 不是 systemd 单元，而是 `/home/zjhsteven/speedtest-tracker/docker-compose.yml` 启动的 Docker 容器，镜像为 `lscr.io/linuxserver/speedtest-tracker:latest`，创建于 `2026-03-06 19:10:19 +0800`，配置 `restart: unless-stopped` 与 `SPEEDTEST_SCHEDULE="*/30 * * * *"`。
+- 已完成：`speedtest-tracker` 数据与日志位于 `/home/zjhsteven/speedtest-tracker/config`，其中 SQLite 为 `config/database.sqlite`，应用日志目录为 `config/log`；容器已执行 `docker stop speedtest-tracker`，当前为 `Exited (0)`，未删除数据。
+- 已完成：`speedtest-tracker` 在北京时间 `2026-04-21 21:30` 触发过 `cli.speedtest.net:443` 连接，但数据库记录显示 `21:00 / 21:30 / 22:00` 三次都是 `failed`，错误为 `Configuration - Could not retrieve or read configuration (ConfigurationError)`，不像持续测速流量打满上行。
+- 已完成：`campus-login.timer` 实际为开机 2 分钟后首次执行，之后按 `OnUnitActiveSec=10min` 周期运行，不是 5 分钟；故障窗口里的 `21:22 / 21:32 / 21:42 / 21:52` 均只是检测到百度可访问后退出，没有执行门户登录 POST。
+- 已完成：`campus-login.sh` 不会主动重启网卡或改 IP；它只检查当前 SSID、访问百度、必要时向校园网门户发登录请求。故障窗口未触发登录请求，因此“校园网认证脚本导致断网”证据弱。
+- 已完成：`21:29:18` 日志明确为 `wlp3s0` 从当前 AP `06:05:88:4b:c8:99` 断开并尝试认证 `06:05:88:4b:bb:55`，随后又尝试 `06:05:88:4b:cc:41`，两次认证超时后在 `21:29:22` 回到 `06:05:88:4b:c8:99`；同一秒 `cloudflared` 报 `timeout: no recent network activity`，`mihomo` 报 TUN 默认接口变化。
+- 已完成：`21:39:37`、`21:41:07~21:41:08`、`21:46:15`、`21:54:55~21:54:58` 还有多次 AP 切换或 deauth/reassoc。DHCP 每次都很快拿回同一个 `100.65.37.205`，没有看到 IP 变化或等待门户认证的证据。
+- 结论：这批失败的主因更应理解为无线网卡/AP 漫游重连造成的底层瞬断，`mihomo`、`cloudflared`、Worker 写入和 OSS 请求只是同一底层断联的不同表现；小上行和并发可能放大脆弱性，但不是本轮最强主因。
 
 ## 2026-04-13 任务台 SSE 请求风暴修复 ExecPlan
 
