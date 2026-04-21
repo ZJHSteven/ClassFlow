@@ -1,9 +1,12 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
-- 现状：`2026-04-22` 正在只读排查今天任务在 `storing_artifacts` / “写入产物”阶段偶发失败、随后重试成功的问题；本轮先查日志、数据库、历史改动与压测探针，不修改业务代码。
-- 正在做：筛选今天所有失败后成功的任务，重点核对写 Worker/R2 产物阶段的错误文本、重试次数、失败对象路径和时间分布，并与 2026-04-09 代理链路故障、2026-04-13 Cloudflare Access 302/404 故障对照。
-- 下一步：完成 systemd 日志、SQLite 事件日志、Worker 私有产物接口探针和现有测试后，给出是否属于网络/Access/R2 抖动、代码重试边界不足，或课程产物重建并发冲突的结论。
+- 现状：`2026-04-22` 已完成今天 `storing_artifacts` / “写入产物”偶发失败的只读排查；本轮没有修改业务代码，只更新排查文档。
+- 已完成：已确认 2026-04-21 北京时间 21:31 到 21:45 之间共有 4 个任务在写 Worker 私有产物接口时失败，错误集中为 `请求超时` / `请求发送失败`，失败对象都是单节 `segments/*.json` 或相关单节产物；这些任务在 2026-04-22 00:27 到 00:31 左右重试后全部成功。
+- 已完成：同一窗口内后端还多次记录 DashScope 临时 OSS 上传 `error sending request` 重试，说明当时外网出口 / 代理链路发生抖动，并非单个产物路径、Cloudflare Access 鉴权、R2 对象不存在或 404 类问题。
+- 已完成：当前以真实后端进程环境、普通用户身份探针验证 `workers.dev` 与 `classflow.zjhstudio.com` 私有产物 `PUT` 各 10 次均返回 `204`；当前链路已恢复。额外发现 root 身份访问 `workers.dev` 会连接超时，说明本机代理/TUN 对不同用户或规则可能存在差异，后端进程应以 `zjhsteven` 身份的结果为准。
+- 已完成：验证已通过 `cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`（后端 25 项）、`cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`、`npm test`（前端 19 项）、`npm run lint`、`npm run build`。
+- 下一步：如果要把这类偶发失败进一步降到更低，可以另起修复计划，把产物写入从“单对象 3 次重试耗尽即整任务失败”调整为更耐抖的策略，例如更长退避、按对象继续补偿、改用自定义前端域名作为产物代理入口，或把 `workers.dev` 精确路由规则稳定到已验证的出口。
 - 现状：`2026-04-13` 正在排查两个线上失败问题：一是“医学人文英语”历史任务重试时因为数据库仍有 `uploaded_source_url=oss://...` 而跳过上传，但临时 OSS 文件可能已经过期，导致后续转写报 `audio.wav not exist`；二是最近三节“毛泽东思想”任务在 `storing_artifacts` 阶段写 Worker/R2 产物失败，日志短码为 `HGP404`。
 - 已完成：已确认“医学人文综合英语”任务 `498d9a22-0968-4929-89ed-b8336c8d1999` 的旧 `oss://` 上传路径来自 `2026-04-04`，到 `2026-04-13` 重试时百炼返回 `BadRequest.ResourceNotExist`；后端已新增 `uploaded_source_url_saved_at`，对百炼临时 `oss://` 使用 47 小时安全复用窗口，过期或历史缺时间戳时会重新上传音频。
 - 已完成：已确认三条“毛泽东思想”失败任务 `bbcd053e-e4a5-4de9-880b-09a8f2c74a77`、`c81a5111-e0b3-4a22-9a5a-8b39404f1fb0`、`fa6c16b3-7125-4fae-8ac8-78f119cd7d99` 都已有转写检查点，失败点是后端写 Worker 私有产物；真实探针证明请求被 Cloudflare Access 先拦成 `302`，旧 `reqwest` 自动跟随重定向后变成空体 `404`。
