@@ -69,14 +69,19 @@
 - 讨论后续治理方向：应用内并发/带宽整形、系统级 QoS / 限速、代理规则调整，先形成判断，不改代码。
 
 ### 执行步骤
-1. 正在做：从 SQLite 事件日志和 systemd 日志还原北京时间 2026-04-21 21:20 到 21:50 的任务阶段时间线，标出 OSS 上传开始/成功/重试、Worker 写入开始/失败/重试。
-2. 待做：结合当前配置 `CLASSFLOW_TASK_WORKER_COUNT`、`CLASSFLOW_UPLOAD_CONCURRENCY`、WorkerArtifactStore 实现，估算当时最多同时存在多少条 OSS 上传与 Worker 写入请求。
-3. 待做：估算失败样本里 Worker 产物正文/JSON 的体积量级，与 OSS 音频上传体积量级对比，判断 Worker 写入是否足以打满 3~5 Mbps 上行。
-4. 待做：读取 `mihomo.service` 在同一时间窗口的 journal 日志，检索 `classflow-web`、`workers.dev`、`dashscope`、`oss-cn-beijing`、`timeout`、`DIRECT`、代理组命中等线索。
-5. 待做：汇总两个假设的证据权重，并给出下一步可选保护措施，不修改业务代码。
+1. 已完成：从 SQLite 事件日志和 systemd 日志还原北京时间 2026-04-21 21:20 到 21:50 的任务阶段时间线，标出 OSS 上传开始/成功/重试、Worker 写入开始/失败/重试。
+2. 已完成：结合当前配置 `CLASSFLOW_TASK_WORKER_COUNT`、`CLASSFLOW_UPLOAD_CONCURRENCY`、WorkerArtifactStore 实现，估算当时最多同时存在多少条 OSS 上传与 Worker 写入请求。
+3. 已完成：估算失败样本里 Worker 产物正文/JSON 的体积量级，与 OSS 音频上传体积量级对比，判断 Worker 写入是否足以打满 3~5 Mbps 上行。
+4. 已完成：读取 `mihomo.service` 在同一时间窗口的 journal 日志，检索 `classflow-web`、`workers.dev`、`dashscope`、`oss-cn-beijing`、`timeout`、`DIRECT`、代理组命中等线索。
+5. 已完成：汇总两个假设的证据权重，并给出下一步可选保护措施，不修改业务代码。
 
 ### 当前状态
-- 正在做：本轮只做日志、配置、历史数据和链路推断。
+- 已完成：失败窗口里 OSS 上传走 `DIRECT`，Worker 写入走 `Kuromis[香港 01]`；WorkerArtifactStore 没有独立全局并发信号量，只受 `TASK_WORKER_COUNT=4` 间接限制，而 OSS 上传由 `CLASSFLOW_UPLOAD_CONCURRENCY=2` 限制。
+- 已完成：失败对象 `segments/*.json` 体积约 `80KB~137KB`，单节 Markdown 约 `9KB~15KB`，而 45 分钟 `16kHz mono pcm_s16le` WAV 理论约 `86MB`；Worker 产物本体不大，不太像“请求体 30 秒内传不完”，更像弱上行/链路重连时小请求握手或响应被拖死。
+- 已完成：北京时间 21:29:18 到 21:29:24，`wlp3s0` 发生 AP 漫游/重连、两次认证超时、`mihomo` TUN 默认接口变化、`cloudflared` QUIC `timeout: no recent network activity`；这与第一批 Worker 写入失败高度重合。
+- 已完成：21:39、21:41、21:46、21:54 附近还继续出现 Wi-Fi AP 切换/掉 carrier，说明失败窗口不是一次孤立请求错误，而是校园 Wi-Fi 链路不稳定。
+- 已完成：`speedtest-tracker` 配置为 `*/30 * * * *`，21:30 确有 `cli.speedtest.net` 连接；但 speedtest 数据库显示该次测速 `failed`，错误为 `ConfigurationError`，主要证据不是测速持续打满带宽，而是它也在网络最乱的窗口触发了一次外部连接。
+- 结论：两个假设里，“带宽/并发竞争”是放大因素，“Wi-Fi 漫游/重连 + 代理/DIRECT 混合链路被打断”是更强的直接证据。后续保护措施应优先考虑：固定/优化无线连接、避开半小时 speedtest、给全局上行做系统级整形，另可补应用内 Worker 写入并发/退避保护。
 
 ## 2026-04-13 任务台 SSE 请求风暴修复 ExecPlan
 
