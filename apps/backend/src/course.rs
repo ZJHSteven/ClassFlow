@@ -253,6 +253,8 @@ mod tests {
             last_error: None,
             uploaded_source_url: None,
             uploaded_source_url_saved_at: None,
+            dashscope_task_id: None,
+            dashscope_task_id_saved_at: None,
             segment_markdown_path: Some("segment.md".into()),
             segment_json_path: Some("segment.json".into()),
             course_manifest_path: Some("manifest.json".into()),
