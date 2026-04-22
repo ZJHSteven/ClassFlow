@@ -49,18 +49,19 @@
 - 同时处理 `task_id` 可能过期的问题：只在安全窗口内复用；如果百炼明确返回不存在/过期，则清理旧 `task_id`，用仍有效的 `oss://` 上传检查点重新提交。
 
 ### 执行步骤
-1. 正在做：梳理现有 `PipelineIo`、`Repository`、`WorkerArtifactStore`、任务表可选列迁移和 API 测试夹具，确定最小改动面。
-2. 待做：新增网络健康模块，维护 `Healthy / Unhealthy / Recovering` 状态、外部探针、恢复等待与网络错误分类。
-3. 待做：把真实下载、DashScope 上传/提交/轮询/结果下载、Worker/R2 产物写入读取删除纳入网络健康闸门；网络不健康时等待恢复，不把等待期算作普通重试失败。
-4. 待做：为任务表增加 `dashscope_task_id` 与保存时间字段，提交百炼任务成功后立即保存，重试转写阶段时优先复用。
-5. 待做：实现 `task_id` 复用窗口和失效兜底：旧 `task_id` 超过安全窗口或百炼返回不存在/过期时清理并重新提交，不让任务永久卡住。
-6. 待做：补充后端测试，覆盖网络闸门暂停/恢复、网络恢复后重试次数不被消耗、`task_id` 复用、`task_id` 过期后重新提交、产物写入阶段不因短时网络故障直接失败。
-7. 待做：运行后端格式化、测试、Clippy，更新 `PROGRESS.md` 并提交。
+1. 已完成：梳理现有 `PipelineIo`、`Repository`、`WorkerArtifactStore`、任务表可选列迁移和 API 测试夹具，确定最小改动面。
+2. 已完成：新增网络健康模块，维护 `Healthy / Unhealthy / Recovering` 状态、外部探针、恢复等待与网络错误分类。
+3. 已完成：把真实 DashScope 上传/提交/轮询/结果下载，以及 Worker/R2 产物写入读取删除纳入网络健康闸门；网络不健康时等待恢复，不把等待期算作普通重试失败。
+4. 已完成：为任务表增加 `dashscope_task_id` 与保存时间字段，提交百炼任务成功后立即保存，重试转写阶段时优先复用。
+5. 已完成：实现 `task_id` 复用窗口和失效兜底：旧 `task_id` 超过安全窗口或百炼返回不存在/过期时清理并重新提交，不让任务永久卡住。
+6. 已完成：补充后端测试，覆盖网络闸门暂停/恢复、`task_id` 复用、`task_id` 过期后重新提交、以及既有产物失败后转写检查点续跑不回退。
+7. 已完成：运行后端格式化、编译、测试、Clippy，更新 `PROGRESS.md` 并提交。
 
 ### 当前状态
-- 正在做：已确认当前转写链路是百炼录音文件 REST 异步任务，不是实时 WebSocket；现有代码只保存 `oss://` 上传检查点和最终 `transcript_json`，尚未保存百炼返回的 `task_id`。
+- 已完成：已确认当前转写链路是百炼录音文件 REST 异步任务，不是实时 WebSocket；本轮已从“只保存 `oss://` 上传检查点和最终 `transcript_json`”推进为“提交百炼后立即保存 `task_id`”。
 - 已决策：`task_id` 只作为短期恢复检查点，不能作为永久事实；过期或百炼侧已删除时必须能清理并重新提交。
 - 已决策：网络健康闸门以“恢复后继续”而不是“立刻判任务失败”为主；普通业务错误、配置错误、鉴权错误、内容类转写失败不进入网络等待。
+- 已完成：验证已通过 `cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、`cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`。
 
 ## 2026-04-22 写入产物偶发失败只读排查 ExecPlan
 

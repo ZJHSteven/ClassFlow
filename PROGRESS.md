@@ -1,12 +1,13 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
-- 现状：`2026-04-22` 正在实现网络健康闸门与百炼 `task_id` 检查点；代码已完成第一版接入，正在进入自动化验证阶段。
+- 现状：`2026-04-22` 已完成网络健康闸门与百炼 `task_id` 检查点实现；后端格式化、编译、测试与 Clippy 均已通过。
 - 已完成：新增网络健康闸门模块，支持在外部请求遇到网络类错误后切换为不健康状态，通过配置的探针连续成功后再恢复执行；真实流水线和产物存储已接入该闸门。
 - 已完成：任务表新增 `dashscope_task_id` 与保存时间字段；百炼录音文件 REST 异步转写提交成功后会立即保存 `task_id`，后续转写阶段重试会优先复用安全窗口内的旧 `task_id`。
 - 已完成：已实现 `task_id` 失效兜底：旧 `task_id` 超出安全窗口或百炼返回 404 / 不存在 / 过期类错误时，会清理检查点并用有效的上传检查点重新提交转写。
-- 正在做：运行后端格式化、编译、测试与 Clippy，确认网络暂停、恢复重试、`task_id` 复用和过期兜底不破坏现有任务续跑逻辑。
-- 下一步：如测试通过，补充最终结论并提交验证结果；如测试失败，按失败用例继续收敛实现。
+- 已完成：新增回归覆盖网络健康探针从失败恢复、转写阶段失败后复用同一个百炼 `task_id`、旧 `task_id` 返回 404 后清理并重新提交，以及产物失败后仍从转写检查点续跑。
+- 已完成：验证已通过 `cargo fmt --check --manifest-path apps/backend/Cargo.toml`、`cargo check --manifest-path apps/backend/Cargo.toml`、`cargo test --manifest-path apps/backend/Cargo.toml`、`cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`。
+- 下一步：上线前需要重启真实 `classflow-backend.service` 才会生效；上线后重点观察 AP 漫游窗口内任务是否从“失败重试”变为“暂停等待恢复”。
 - 现状：`2026-04-22` 已完成 `speedtest-tracker`、校园网认证脚本、AP 漫游与 ClassFlow 写产物失败的对齐排查；本轮没有修改业务代码。
 - 已完成：`speedtest-tracker` 已确认由 `/home/zjhsteven/speedtest-tracker/docker-compose.yml` 启动，容器创建于 `2026-03-06 19:10:19 +0800`，配置 `restart: unless-stopped` 与 `SPEEDTEST_SCHEDULE="*/30 * * * *"`；数据和日志保留在 `/home/zjhsteven/speedtest-tracker/config`。
 - 已完成：已执行 `docker stop speedtest-tracker`，当前容器状态为 `Exited (0)`；数据未删除，后续如要恢复可从原 compose 目录重新启动。
