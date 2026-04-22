@@ -230,6 +230,32 @@ impl NetworkHealthGate {
     }
 }
 
+pub fn is_network_like_error(error: &AppError) -> bool {
+    match error {
+        AppError::Io(_) => true,
+        AppError::External(message) => {
+            let text = message.to_lowercase();
+            [
+                "请求超时",
+                "连接失败",
+                "请求发送失败",
+                "network",
+                "timed out",
+                "timeout",
+                "connection",
+                "connect",
+                "dns",
+                "temporarily unavailable",
+                "no recent network activity",
+                "error sending request",
+            ]
+            .iter()
+            .any(|needle| text.contains(needle))
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -295,31 +321,5 @@ mod tests {
         );
 
         server.abort();
-    }
-}
-
-pub fn is_network_like_error(error: &AppError) -> bool {
-    match error {
-        AppError::Io(_) => true,
-        AppError::External(message) => {
-            let text = message.to_lowercase();
-            [
-                "请求超时",
-                "连接失败",
-                "请求发送失败",
-                "network",
-                "timed out",
-                "timeout",
-                "connection",
-                "connect",
-                "dns",
-                "temporarily unavailable",
-                "no recent network activity",
-                "error sending request",
-            ]
-            .iter()
-            .any(|needle| text.contains(needle))
-        }
-        _ => false,
     }
 }
