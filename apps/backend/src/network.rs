@@ -92,7 +92,6 @@ impl NetworkHealthGate {
         }
     }
 
-    #[cfg(test)]
     pub fn disabled_for_tests() -> Self {
         Self {
             enabled: false,
