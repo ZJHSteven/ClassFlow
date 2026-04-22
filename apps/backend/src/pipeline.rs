@@ -50,6 +50,7 @@ use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
     models::NormalizedTranscript,
+    network::NetworkHealthGate,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -102,7 +103,12 @@ pub trait PipelineIo: Send + Sync {
         audio_path: &Path,
         progress_sink: Option<Arc<dyn ProgressSink>>,
     ) -> AppResult<String>;
-    async fn transcribe_file_url(&self, file_url: &str) -> AppResult<NormalizedTranscript>;
+    async fn submit_transcription_task(&self, file_url: &str) -> AppResult<String>;
+    async fn poll_transcription_task(&self, task_id: &str) -> AppResult<NormalizedTranscript>;
+    async fn transcribe_file_url(&self, file_url: &str) -> AppResult<NormalizedTranscript> {
+        let task_id = self.submit_transcription_task(file_url).await?;
+        self.poll_transcription_task(&task_id).await
+    }
     async fn cleanup_dir(&self, dir_path: &Path) -> AppResult<()>;
 }
 
@@ -112,10 +118,11 @@ pub struct RealPipelineIo {
     download_semaphore: Arc<Semaphore>,
     upload_semaphore: Arc<Semaphore>,
     transcribe_semaphore: Arc<Semaphore>,
+    network_health: Arc<NetworkHealthGate>,
 }
 
 impl RealPipelineIo {
-    pub fn new(config: AppConfig) -> Self {
+    pub fn new(config: AppConfig, network_health: Arc<NetworkHealthGate>) -> Self {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .build()
@@ -126,6 +133,7 @@ impl RealPipelineIo {
             download_semaphore: Arc::new(Semaphore::new(config.download_concurrency.max(1))),
             upload_semaphore: Arc::new(Semaphore::new(config.upload_concurrency.max(1))),
             transcribe_semaphore: Arc::new(Semaphore::new(config.transcribe_concurrency.max(1))),
+            network_health,
             config,
         }
     }
@@ -150,10 +158,20 @@ impl RealPipelineIo {
         let total_attempts = attempts.max(1);
         let wait_duration = Duration::from_secs_f64(wait_secs.max(0.0));
 
-        for attempt in 1..=total_attempts {
+        let mut attempt = 1;
+        while attempt <= total_attempts {
+            self.network_health.wait_until_ready(label).await?;
             match factory().await {
                 Ok(result) => return Ok(result),
                 Err(error) => {
+                    if self
+                        .network_health
+                        .pause_if_network_error(label, &error)
+                        .await?
+                    {
+                        continue;
+                    }
+
                     if !is_retryable_error(&error) || attempt == total_attempts {
                         return Err(error);
                     }
@@ -168,6 +186,7 @@ impl RealPipelineIo {
                     if !wait_duration.is_zero() {
                         tokio::time::sleep(wait_duration).await;
                     }
+                    attempt += 1;
                 }
             }
         }
@@ -207,7 +226,7 @@ impl RealPipelineIo {
         .await
     }
 
-    async fn submit_transcription_task(&self, file_url: &str) -> AppResult<String> {
+    async fn submit_dashscope_transcription_task(&self, file_url: &str) -> AppResult<String> {
         self.run_with_retry(
             "提交百炼转写任务",
             self.config.dashscope_request_retry_attempts,
@@ -254,7 +273,7 @@ impl RealPipelineIo {
         .await
     }
 
-    async fn poll_transcription_task(&self, task_id: &str) -> AppResult<Value> {
+    async fn poll_dashscope_transcription_task_output(&self, task_id: &str) -> AppResult<Value> {
         let task_url = self
             .config
             .dashscope_task_url_template
@@ -839,16 +858,28 @@ impl PipelineIo for RealPipelineIo {
         .await
     }
 
-    async fn transcribe_file_url(&self, file_url: &str) -> AppResult<NormalizedTranscript> {
+    async fn submit_transcription_task(&self, file_url: &str) -> AppResult<String> {
         let _permit = self
             .transcribe_semaphore
             .acquire()
             .await
             .map_err(|error| AppError::Internal(format!("转写信号量获取失败: {error}")))?;
 
-        let task_id = self.submit_transcription_task(file_url).await?;
+        let task_id = self.submit_dashscope_transcription_task(file_url).await?;
         info!("百炼任务已提交: {task_id}");
-        let task_output = self.poll_transcription_task(&task_id).await?;
+        Ok(task_id)
+    }
+
+    async fn poll_transcription_task(&self, task_id: &str) -> AppResult<NormalizedTranscript> {
+        let _permit = self
+            .transcribe_semaphore
+            .acquire()
+            .await
+            .map_err(|error| AppError::Internal(format!("转写信号量获取失败: {error}")))?;
+
+        let task_output = self
+            .poll_dashscope_transcription_task_output(task_id)
+            .await?;
         self.parse_transcript_payload(task_output).await
     }
 
@@ -1165,7 +1196,9 @@ mod tests {
 
     #[tokio::test]
     async fn should_parse_transcription_url_payload() {
-        let pipeline = RealPipelineIo::new(AppConfig::from_env().expect("配置应该可构建"));
+        let config = AppConfig::from_env().expect("配置应该可构建");
+        let pipeline =
+            RealPipelineIo::new(config, Arc::new(NetworkHealthGate::disabled_for_tests()));
         let payload = json!({
             "output": {
                 "results": [{

@@ -134,6 +134,10 @@ impl Repository {
             .await?;
         self.ensure_optional_task_column("uploaded_source_url_saved_at", "TEXT")
             .await?;
+        self.ensure_optional_task_column("dashscope_task_id", "TEXT")
+            .await?;
+        self.ensure_optional_task_column("dashscope_task_id_saved_at", "TEXT")
+            .await?;
 
         Ok(())
     }
@@ -459,6 +463,60 @@ impl Repository {
             "音频上传成功，已保存上传检查点",
         )
         .await
+    }
+
+    /**
+     * 保存“百炼异步转写任务已经提交”的断点信息。
+     *
+     * 这一步必须紧跟百炼返回 `task_id` 之后执行。这样即使本机随后因为
+     * Wi-Fi 漫游断线、进程重启或轮询失败，后续也可以先继续查询同一个
+     * 百炼任务，而不是立刻重新提交一次音频转写。
+     */
+    pub async fn save_dashscope_task_checkpoint(
+        &self,
+        task_id: &str,
+        dashscope_task_id: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE tasks SET dashscope_task_id = ?, dashscope_task_id_saved_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(dashscope_task_id)
+        .bind(&now)
+        .bind(&now)
+        .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        self.add_task_event(
+            task_id,
+            TaskStage::Transcribing.as_str(),
+            "info",
+            &format!("百炼任务已提交，已保存 task_id 检查点: {dashscope_task_id}"),
+        )
+        .await
+    }
+
+    /**
+     * 清理已经失效的百炼 `task_id` 检查点。
+     *
+     * 百炼云端任务不会永久保存；当本地检查点超过安全窗口，或百炼明确返回
+     * 404 / 不存在 / 过期时，必须清掉旧值，让后续流程可以重新提交转写。
+     */
+    pub async fn clear_dashscope_task_checkpoint(
+        &self,
+        task_id: &str,
+        reason: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE tasks SET dashscope_task_id = NULL, dashscope_task_id_saved_at = NULL, updated_at = ? WHERE id = ?",
+        )
+        .bind(&now)
+        .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        self.add_task_event(task_id, TaskStage::Transcribing.as_str(), "info", reason)
+            .await
     }
 
     /**
@@ -797,6 +855,12 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         uploaded_source_url: row.get("uploaded_source_url"),
         uploaded_source_url_saved_at: parse_optional_datetime(
             row.try_get::<Option<String>, _>("uploaded_source_url_saved_at")
+                .ok()
+                .flatten(),
+        )?,
+        dashscope_task_id: row.try_get("dashscope_task_id").ok().flatten(),
+        dashscope_task_id_saved_at: parse_optional_datetime(
+            row.try_get::<Option<String>, _>("dashscope_task_id_saved_at")
                 .ok()
                 .flatten(),
         )?,

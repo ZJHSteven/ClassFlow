@@ -24,6 +24,7 @@ pub mod config;
 pub mod course;
 pub mod error;
 pub mod models;
+pub mod network;
 pub mod pipeline;
 pub mod repository;
 pub mod routes;

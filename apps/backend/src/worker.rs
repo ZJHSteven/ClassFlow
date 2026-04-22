@@ -32,6 +32,7 @@ use crate::{
 };
 
 const TEMP_OSS_UPLOAD_REUSE_MAX_AGE_HOURS: i64 = 47;
+const DASHSCOPE_TASK_ID_REUSE_MAX_AGE_HOURS: i64 = 24;
 
 #[derive(Clone)]
 pub struct TaskQueue {
@@ -227,6 +228,15 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         {
             Ok(url) => {
                 state.repo.save_uploaded_source_url(task_id, &url).await?;
+                if task.dashscope_task_id.is_some() {
+                    state
+                        .repo
+                        .clear_dashscope_task_checkpoint(
+                            task_id,
+                            "音频已重新上传，旧百炼 task_id 不再复用",
+                        )
+                        .await?;
+                }
                 state.notify_task_list_changed();
                 url
             }
@@ -246,6 +256,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .update_task_stage(task_id, TaskStage::Transcribing, "开始轮询百炼异步转写任务")
         .await?;
     state.notify_task_list_changed();
+    let task_after_upload = state.repo.get_task(task_id).await?;
     let transcript = if let Some(saved_transcript) = restored_transcript_checkpoint {
         state
             .repo
@@ -257,10 +268,13 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .await?;
         saved_transcript
     } else {
-        match state
-            .pipeline
-            .transcribe_file_url(&uploaded_source_url)
-            .await
+        match transcribe_with_task_checkpoint(
+            &state,
+            &task_after_upload,
+            task_id,
+            &uploaded_source_url,
+        )
+        .await
         {
             Ok(result) => {
                 let transcript_json = serde_json::to_value(&result).map_err(|error| {
@@ -388,6 +402,78 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
     Ok(())
 }
 
+async fn transcribe_with_task_checkpoint(
+    state: &AppState,
+    task: &TaskRecord,
+    task_id: &str,
+    uploaded_source_url: &str,
+) -> AppResult<NormalizedTranscript> {
+    let mut saved_dashscope_task_id = reusable_dashscope_task_id(task);
+    if task.dashscope_task_id.is_some() && saved_dashscope_task_id.is_none() {
+        state
+            .repo
+            .clear_dashscope_task_checkpoint(
+                task_id,
+                "历史百炼 task_id 检查点缺少保存时间或已超过安全复用窗口，重新提交转写任务",
+            )
+            .await?;
+    }
+
+    loop {
+        let used_saved_checkpoint = saved_dashscope_task_id.is_some();
+        let dashscope_task_id = match saved_dashscope_task_id.take() {
+            Some(existing_task_id) => {
+                state
+                    .repo
+                    .update_task_stage(
+                        task_id,
+                        TaskStage::Transcribing,
+                        &format!(
+                            "检测到仍在安全窗口内的百炼 task_id，继续轮询: {existing_task_id}"
+                        ),
+                    )
+                    .await?;
+                existing_task_id
+            }
+            None => {
+                let new_task_id = state
+                    .pipeline
+                    .submit_transcription_task(uploaded_source_url)
+                    .await?;
+                state
+                    .repo
+                    .save_dashscope_task_checkpoint(task_id, &new_task_id)
+                    .await?;
+                state.notify_task_list_changed();
+                new_task_id
+            }
+        };
+
+        match state
+            .pipeline
+            .poll_transcription_task(&dashscope_task_id)
+            .await
+        {
+            Ok(result) => return Ok(result),
+            Err(error)
+                if used_saved_checkpoint && is_dashscope_task_checkpoint_stale_error(&error) =>
+            {
+                state
+                    .repo
+                    .clear_dashscope_task_checkpoint(
+                        task_id,
+                        &format!(
+                            "百炼 task_id 检查点已失效，清理后重新提交转写任务: {dashscope_task_id}"
+                        ),
+                    )
+                    .await?;
+                state.notify_task_list_changed();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /**
  * 判断数据库里的上传检查点是否还能复用。
  *
@@ -427,6 +513,43 @@ fn should_report_expired_uploaded_source_url(task: &TaskRecord) -> bool {
         .as_deref()
         .map(|value| value.trim_start().starts_with("oss://"))
         .unwrap_or(false)
+}
+
+fn reusable_dashscope_task_id(task: &TaskRecord) -> Option<String> {
+    let task_id = task
+        .dashscope_task_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())?;
+    let saved_at = task.dashscope_task_id_saved_at?;
+    let max_age = ChronoDuration::hours(DASHSCOPE_TASK_ID_REUSE_MAX_AGE_HOURS);
+
+    if Utc::now().signed_duration_since(saved_at) < max_age {
+        return Some(task_id);
+    }
+
+    None
+}
+
+fn is_dashscope_task_checkpoint_stale_error(error: &AppError) -> bool {
+    let AppError::External(message) = error else {
+        return false;
+    };
+
+    let text = message.to_lowercase();
+    [
+        "http=404",
+        "notfound",
+        "not found",
+        "not_exist",
+        "not exist",
+        "resource not exist",
+        "resource_not_found",
+        "expired",
+        "过期",
+        "不存在",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 #[derive(Clone)]

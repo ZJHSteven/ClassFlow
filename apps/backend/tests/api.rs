@@ -11,7 +11,7 @@
 
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -29,6 +29,7 @@ use backend::{
     config::ArtifactStoreMode,
     error::AppResult,
     models::{NormalizedTranscript, TaskListQuery, TaskStage, TaskStatus},
+    network::NetworkHealthGate,
     pipeline::{PipelineIo, ProgressSink},
     repository::Repository,
     worker::{detached_queue, spawn_workers},
@@ -44,7 +45,10 @@ struct MockPipelineCounters {
     download_calls: AtomicUsize,
     extract_calls: AtomicUsize,
     upload_calls: AtomicUsize,
+    submit_calls: AtomicUsize,
     transcribe_calls: AtomicUsize,
+    polled_task_ids: Mutex<Vec<String>>,
+    stale_task_ids: Mutex<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -91,7 +95,30 @@ impl PipelineIo for MockPipeline {
         Ok("oss://mock/audio.wav".to_string())
     }
 
-    async fn transcribe_file_url(&self, _file_url: &str) -> AppResult<NormalizedTranscript> {
+    async fn submit_transcription_task(&self, _file_url: &str) -> AppResult<String> {
+        let current = self.counters.submit_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(format!("dashscope-mock-task-{}", current + 1))
+    }
+
+    async fn poll_transcription_task(&self, _task_id: &str) -> AppResult<NormalizedTranscript> {
+        self.counters
+            .polled_task_ids
+            .lock()
+            .expect("测试记录锁不应中毒")
+            .push(_task_id.to_string());
+        if self
+            .counters
+            .stale_task_ids
+            .lock()
+            .expect("测试记录锁不应中毒")
+            .iter()
+            .any(|task_id| task_id == _task_id)
+        {
+            return Err(AppError::External(format!(
+                "查询百炼转写任务失败，HTTP=404，task_id={_task_id}"
+            )));
+        }
+
         let current = self
             .counters
             .transcribe_calls
@@ -207,6 +234,11 @@ async fn build_test_state(
         artifact_proxy_timeout_secs: 30.0,
         artifact_proxy_retry_attempts: 2,
         artifact_proxy_retry_wait_secs: 0.1,
+        network_health_enabled: false,
+        network_health_probe_urls: Vec::new(),
+        network_health_probe_timeout_secs: 1.0,
+        network_health_check_interval_secs: 0.1,
+        network_health_stable_successes: 1,
         task_event_retention_days: 30,
         task_event_retention_rows_per_task: 200,
     };
@@ -230,6 +262,7 @@ async fn build_test_state(
         repo,
         artifact_store,
         pipeline,
+        network_health: Arc::new(NetworkHealthGate::disabled_for_tests()),
         queue: detached_queue(),
         task_list_events: tokio::sync::broadcast::channel::<()>(64).0,
     };
@@ -520,6 +553,11 @@ async fn retry_should_requeue_failed_task() {
         failed_task.transcript_json.is_none(),
         "转写失败前不应提前写入转写检查点"
     );
+    assert_eq!(
+        failed_task.dashscope_task_id.as_deref(),
+        Some("dashscope-mock-task-1"),
+        "提交百炼成功后即使后续轮询失败，也应保留 task_id 检查点"
+    );
 
     let retry_response = build_app(state)
         .oneshot(
@@ -562,9 +600,123 @@ async fn retry_should_requeue_failed_task() {
         "转写失败后再次重试不应重新上传音频"
     );
     assert_eq!(
+        counters.submit_calls.load(Ordering::SeqCst),
+        1,
+        "转写阶段重试时应复用已保存的百炼 task_id，不应重复提交"
+    );
+    assert_eq!(
         counters.transcribe_calls.load(Ordering::SeqCst),
         2,
         "转写失败后再次重试只应再次触发转写阶段"
+    );
+    assert_eq!(
+        *counters.polled_task_ids.lock().expect("测试记录锁不应中毒"),
+        vec![
+            "dashscope-mock-task-1".to_string(),
+            "dashscope-mock-task-1".to_string(),
+        ],
+        "重试时应继续轮询第一次提交得到的百炼 task_id"
+    );
+}
+
+#[tokio::test]
+async fn retry_should_resubmit_when_saved_dashscope_task_id_is_stale() {
+    let (state, _temp, counters) = build_test_state(true, false).await;
+    let repo = state.repo.clone();
+
+    let intake_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/intake/batches")
+                .header("Authorization", "Bearer test-token")
+                .header("Content-Type", "application/json")
+                .body(Body::from(intake_request_json().to_string()))
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("intake 应返回响应");
+    assert_eq!(intake_response.status(), StatusCode::ACCEPTED);
+
+    let payload: Value = serde_json::from_slice(
+        &intake_response
+            .into_body()
+            .collect()
+            .await
+            .expect("响应体应可读取")
+            .to_bytes(),
+    )
+    .expect("响应体应是合法 JSON");
+    let task_id = payload["task_ids"][0]
+        .as_str()
+        .expect("应返回 task_id")
+        .to_string();
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Failed)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    counters
+        .stale_task_ids
+        .lock()
+        .expect("测试记录锁不应中毒")
+        .push("dashscope-mock-task-1".to_string());
+
+    let retry_response = build_app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/tasks/{task_id}/retry"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("重试请求应返回响应");
+    assert_eq!(retry_response.status(), StatusCode::ACCEPTED);
+
+    wait_for_condition(Duration::from_secs(3), || {
+        let repo = repo.clone();
+        let task_id = task_id.clone();
+        Box::pin(async move {
+            repo.get_task(&task_id)
+                .await
+                .map(|task| task.status == TaskStatus::Succeeded)
+                .unwrap_or(false)
+        })
+    })
+    .await;
+
+    let retried_task = repo
+        .get_task(&task_id)
+        .await
+        .expect("重试成功后任务应能查询成功");
+    assert_eq!(
+        retried_task.dashscope_task_id.as_deref(),
+        Some("dashscope-mock-task-2"),
+        "旧 task_id 失效后应保存重新提交得到的新 task_id"
+    );
+    assert_eq!(
+        counters.submit_calls.load(Ordering::SeqCst),
+        2,
+        "旧 task_id 明确失效后，应重新提交一次百炼转写任务"
+    );
+    assert_eq!(
+        *counters.polled_task_ids.lock().expect("测试记录锁不应中毒"),
+        vec![
+            "dashscope-mock-task-1".to_string(),
+            "dashscope-mock-task-1".to_string(),
+            "dashscope-mock-task-2".to_string(),
+        ],
+        "应先尝试旧 task_id，收到失效错误后再轮询新 task_id"
     );
 }
 

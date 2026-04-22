@@ -26,6 +26,7 @@ use crate::{
     config::{AppConfig, ArtifactStoreMode},
     error::{AppError, AppResult},
     models::StoredObject,
+    network::NetworkHealthGate,
 };
 
 #[async_trait]
@@ -42,6 +43,89 @@ pub async fn build_artifact_store(config: &AppConfig) -> AppResult<Arc<dyn Artif
         })),
         ArtifactStoreMode::R2 => Ok(Arc::new(R2ArtifactStore::new(config).await?)),
         ArtifactStoreMode::Worker => Ok(Arc::new(WorkerArtifactStore::new(config)?)),
+    }
+}
+
+pub struct NetworkAwareArtifactStore {
+    inner: Arc<dyn ArtifactStore>,
+    network_health: Arc<NetworkHealthGate>,
+}
+
+impl NetworkAwareArtifactStore {
+    pub fn wrap(
+        inner: Arc<dyn ArtifactStore>,
+        network_health: Arc<NetworkHealthGate>,
+    ) -> Arc<dyn ArtifactStore> {
+        Arc::new(Self {
+            inner,
+            network_health,
+        })
+    }
+}
+
+#[async_trait]
+impl ArtifactStore for NetworkAwareArtifactStore {
+    async fn put_bytes(&self, path: &str, content_type: &str, bytes: Vec<u8>) -> AppResult<()> {
+        loop {
+            self.network_health.wait_until_ready("写入产物").await?;
+            let result = self
+                .inner
+                .put_bytes(path, content_type, bytes.clone())
+                .await;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    if self
+                        .network_health
+                        .pause_if_network_error("写入产物", &error)
+                        .await?
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    async fn get_bytes(&self, path: &str) -> AppResult<StoredObject> {
+        loop {
+            self.network_health.wait_until_ready("读取产物").await?;
+            let result = self.inner.get_bytes(path).await;
+            match result {
+                Ok(object) => return Ok(object),
+                Err(error) => {
+                    if self
+                        .network_health
+                        .pause_if_network_error("读取产物", &error)
+                        .await?
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    async fn delete(&self, path: &str) -> AppResult<()> {
+        loop {
+            self.network_health.wait_until_ready("删除产物").await?;
+            let result = self.inner.delete(path).await;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    if self
+                        .network_health
+                        .pause_if_network_error("删除产物", &error)
+                        .await?
+                    {
+                        continue;
+                    }
+                    return Err(error);
+                }
+            }
+        }
     }
 }
 
@@ -602,6 +686,11 @@ mod tests {
             artifact_proxy_timeout_secs: 5.0,
             artifact_proxy_retry_attempts: 2,
             artifact_proxy_retry_wait_secs: 0.0,
+            network_health_enabled: false,
+            network_health_probe_urls: Vec::new(),
+            network_health_probe_timeout_secs: 1.0,
+            network_health_check_interval_secs: 0.1,
+            network_health_stable_successes: 1,
             task_event_retention_days: 30,
             task_event_retention_rows_per_task: 200,
         }

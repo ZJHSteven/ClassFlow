@@ -90,6 +90,11 @@ pub struct AppConfig {
     pub artifact_proxy_timeout_secs: f64,
     pub artifact_proxy_retry_attempts: u32,
     pub artifact_proxy_retry_wait_secs: f64,
+    pub network_health_enabled: bool,
+    pub network_health_probe_urls: Vec<String>,
+    pub network_health_probe_timeout_secs: f64,
+    pub network_health_check_interval_secs: f64,
+    pub network_health_stable_successes: usize,
     pub task_event_retention_days: u64,
     pub task_event_retention_rows_per_task: u64,
 }
@@ -222,6 +227,23 @@ impl AppConfig {
                 "CLASSFLOW_ARTIFACT_PROXY_RETRY_WAIT_SECS",
                 1.0,
             )?,
+            network_health_enabled: env_or_parse("CLASSFLOW_NETWORK_HEALTH_ENABLED", true)?,
+            network_health_probe_urls: env_or_csv(
+                "CLASSFLOW_NETWORK_HEALTH_PROBE_URLS",
+                "https://www.baidu.com,https://dashscope.aliyuncs.com",
+            ),
+            network_health_probe_timeout_secs: env_or_parse(
+                "CLASSFLOW_NETWORK_HEALTH_PROBE_TIMEOUT_SECS",
+                5.0,
+            )?,
+            network_health_check_interval_secs: env_or_parse(
+                "CLASSFLOW_NETWORK_HEALTH_CHECK_INTERVAL_SECS",
+                5.0,
+            )?,
+            network_health_stable_successes: env_or_parse(
+                "CLASSFLOW_NETWORK_HEALTH_STABLE_SUCCESSES",
+                2,
+            )?,
             task_event_retention_days: env_or_parse("CLASSFLOW_TASK_EVENT_RETENTION_DAYS", 30)?,
             task_event_retention_rows_per_task: env_or_parse(
                 "CLASSFLOW_TASK_EVENT_RETENTION_ROWS_PER_TASK",
@@ -239,6 +261,15 @@ fn env_or_any(keys: &[&str], default: &str) -> String {
     keys.iter()
         .find_map(|key| env::var(key).ok())
         .unwrap_or_else(|| default.to_string())
+}
+
+fn env_or_csv(key: &str, default: &str) -> Vec<String> {
+    env_or(key, default)
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn env_or_parse<T>(key: &str, default: T) -> AppResult<T>

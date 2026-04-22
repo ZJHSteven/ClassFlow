@@ -23,6 +23,7 @@ use crate::{
     artifacts::{ArtifactStore, build_artifact_store},
     config::AppConfig,
     error::AppResult,
+    network::NetworkHealthGate,
     pipeline::{PipelineIo, RealPipelineIo},
     repository::Repository,
     routes::build_router,
@@ -35,6 +36,7 @@ pub struct AppState {
     pub repo: Repository,
     pub artifact_store: Arc<dyn ArtifactStore>,
     pub pipeline: Arc<dyn PipelineIo>,
+    pub network_health: Arc<NetworkHealthGate>,
     pub queue: TaskQueue,
     pub task_list_events: broadcast::Sender<()>,
 }
@@ -114,8 +116,12 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
     tokio::fs::create_dir_all("./data").await?;
 
     let repo = Repository::connect(&config.db_url).await?;
+    let network_health = Arc::new(NetworkHealthGate::from_config(&config));
     let artifact_store = build_artifact_store(&config).await?;
-    let pipeline: Arc<dyn PipelineIo> = Arc::new(RealPipelineIo::new(config.clone()));
+    let artifact_store =
+        crate::artifacts::NetworkAwareArtifactStore::wrap(artifact_store, network_health.clone());
+    let pipeline: Arc<dyn PipelineIo> =
+        Arc::new(RealPipelineIo::new(config.clone(), network_health.clone()));
     let (task_list_events, _) = broadcast::channel::<()>(256);
 
     let placeholder_queue = spawn_workers_placeholder();
@@ -124,6 +130,7 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
         repo,
         artifact_store,
         pipeline,
+        network_health,
         queue: placeholder_queue,
         task_list_events,
     };
