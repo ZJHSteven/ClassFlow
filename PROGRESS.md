@@ -1,6 +1,9 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 现状：`2026-05-19` 已修正线上后端“最后写入产物”使用的 Worker 私有产物入口；真实 `/etc/classflow/backend.env` 中的 `CLASSFLOW_ARTIFACT_PROXY_BASE_URL` 已从旧 `workers.dev` 开发域名改为正式部署域名 `https://classflow.zjhstudio.com/`。
+- 已完成：已回滚本轮误把历史文档中所有旧 Worker 域名机械替换为正式域名的错误修改；历史排查记录继续保留当时真实使用过的 `classflow-web.zhangjiahe0830.workers.dev`。
+- 正在做：重启系统级 `classflow-backend.service`，让后端进程重新读取新的产物代理域名，并做健康检查与私有产物写入探针。
 - 现状：`2026-04-22` 已完成网络健康闸门与百炼 `task_id` 检查点实现；后端格式化、编译、测试与 Clippy 均已通过。
 - 已完成：新增网络健康闸门模块，支持在外部请求遇到网络类错误后切换为不健康状态，通过配置的探针连续成功后再恢复执行；真实流水线和产物存储已接入该闸门。
 - 已完成：任务表新增 `dashscope_task_id` 与保存时间字段；百炼录音文件 REST 异步转写提交成功后会立即保存 `task_id`，后续转写阶段重试会优先复用安全窗口内的旧 `task_id`。
