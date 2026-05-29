@@ -10,10 +10,7 @@ ASR provider 统一接口。
 
 use async_trait::async_trait;
 
-use crate::{
-    error::AppResult,
-    models::NormalizedTranscript,
-};
+use crate::{error::AppResult, models::NormalizedTranscript};
 
 use super::types::AsrInput;
 

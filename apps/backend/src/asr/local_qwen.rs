@@ -17,7 +17,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::{fs, process::Command, sync::Semaphore, time::timeout};
 
@@ -27,10 +27,7 @@ use crate::{
     models::NormalizedTranscript,
 };
 
-use super::{
-    provider::AsrProvider,
-    types::AsrInput,
-};
+use super::{provider::AsrProvider, types::AsrInput};
 
 #[derive(Debug, Deserialize)]
 struct LocalQwenErrorPayload {
@@ -39,7 +36,7 @@ struct LocalQwenErrorPayload {
     traceback: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct LocalQwenTimestampItem {
     text: String,
     start_time: f64,
@@ -104,9 +101,9 @@ impl LocalQwenAsrProvider {
     }
 
     async fn ensure_parent_dir(path: &Path) -> AppResult<()> {
-        let parent = path.parent().ok_or_else(|| {
-            AppError::Internal(format!("输出路径缺少父目录: {}", path.display()))
-        })?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| AppError::Internal(format!("输出路径缺少父目录: {}", path.display())))?;
         fs::create_dir_all(parent).await?;
         Ok(())
     }
@@ -135,16 +132,13 @@ impl LocalQwenAsrProvider {
 
         let task_timeout = self.config.local_asr_task_timeout_secs;
         let output = if task_timeout > 0.0 {
-            timeout(
-                Duration::from_secs_f64(task_timeout),
-                command.output(),
-            )
-            .await
-            .map_err(|_| {
-                AppError::External(format!(
-                    "本地 ASR 脚本执行超时: timeout_secs={task_timeout}"
-                ))
-            })??
+            timeout(Duration::from_secs_f64(task_timeout), command.output())
+                .await
+                .map_err(|_| {
+                    AppError::External(format!(
+                        "本地 ASR 脚本执行超时: timeout_secs={task_timeout}"
+                    ))
+                })??
         } else {
             command.output().await?
         };
@@ -192,9 +186,7 @@ impl LocalQwenAsrProvider {
 
         let text = result.text.unwrap_or_default();
         if text.trim().is_empty() {
-            return Err(AppError::External(
-                "本地 ASR 返回空文本".to_string(),
-            ));
+            return Err(AppError::External("本地 ASR 返回空文本".to_string()));
         }
 
         let timestamps = result.timestamps.unwrap_or_default();
@@ -205,12 +197,9 @@ impl LocalQwenAsrProvider {
                 .tokens
                 .unwrap_or_else(|| timestamps.iter().map(|item| item.text.clone()).collect()),
             timestamps: timestamps.iter().map(|item| item.start_time).collect(),
-            duration_seconds: result.duration_seconds.unwrap_or_else(|| {
-                timestamps
-                    .last()
-                    .map(|item| item.end_time)
-                    .unwrap_or(0.0)
-            }),
+            duration_seconds: result
+                .duration_seconds
+                .unwrap_or_else(|| timestamps.last().map(|item| item.end_time).unwrap_or(0.0)),
             raw_task_output: serde_json::json!({
                 "provider": result.provider,
                 "performance": result.performance,
@@ -224,13 +213,151 @@ impl LocalQwenAsrProvider {
 #[async_trait]
 impl AsrProvider for LocalQwenAsrProvider {
     async fn transcribe_audio(&self, input: AsrInput) -> AppResult<NormalizedTranscript> {
-        let _permit = self.semaphore.acquire().await.map_err(|error| {
-            AppError::Internal(format!("获取本地 ASR 并发信号量失败: {error}"))
-        })?;
+        let _permit =
+            self.semaphore.acquire().await.map_err(|error| {
+                AppError::Internal(format!("获取本地 ASR 并发信号量失败: {error}"))
+            })?;
 
         let output_path = self.output_json_path(&input.task_id);
         self.run_script(&input, &output_path).await?;
         let result = self.read_result_json(&output_path).await?;
         self.normalize_result(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    use crate::config::{AppConfig, ArtifactStoreMode};
+
+    use super::*;
+
+    fn build_test_config(temp_root: &Path) -> AppConfig {
+        AppConfig {
+            bind_addr: "127.0.0.1:0".parse().expect("测试地址应合法"),
+            db_url: "sqlite://:memory:".to_string(),
+            bearer_token: "test-token".to_string(),
+            default_semester: "2025-2026-2".to_string(),
+            temp_root: temp_root.to_path_buf(),
+            local_artifact_root: temp_root.join("artifacts"),
+            task_worker_count: 1,
+            download_concurrency: 1,
+            upload_concurrency: 1,
+            transcribe_concurrency: 1,
+            r2_concurrency: 1,
+            cleanup_hours: 24,
+            artifact_store_mode: ArtifactStoreMode::Local,
+            aria2_bin: "aria2c".to_string(),
+            download_retry_attempts: 1,
+            download_retry_wait_secs: 0.1,
+            download_connect_timeout_secs: 5.0,
+            download_timeout_secs: 10.0,
+            download_split: 1,
+            download_connections_per_server: 1,
+            download_lowest_speed_limit_bytes: 0,
+            asr_provider: "local_qwen".to_string(),
+            dashscope_api_key: String::new(),
+            dashscope_model: "fun-asr-mtl".to_string(),
+            dashscope_submit_url: String::new(),
+            dashscope_task_url_template: String::new(),
+            dashscope_upload_policy_url: String::new(),
+            dashscope_request_timeout_secs: 10.0,
+            dashscope_request_retry_attempts: 1,
+            dashscope_request_retry_wait_secs: 0.1,
+            upload_retry_attempts: 1,
+            upload_retry_wait_secs: 0.1,
+            upload_timeout_secs: 10.0,
+            dashscope_poll_interval_secs: 1.0,
+            dashscope_poll_timeout_secs: 10.0,
+            local_asr_python: "python3".to_string(),
+            local_asr_script: "./tools/local_asr/local_qwen_asr_once.py".to_string(),
+            local_asr_workdir: "/tmp/capswriter".to_string(),
+            local_asr_model_dir: "/tmp/capswriter/models/qwen".to_string(),
+            local_asr_aligner_dir: "/tmp/capswriter/models/aligner".to_string(),
+            local_asr_concurrency: 1,
+            local_asr_idle_shutdown_secs: 1800,
+            local_asr_start_timeout_secs: 120.0,
+            local_asr_task_timeout_secs: 0.0,
+            r2_bucket: String::new(),
+            r2_endpoint: String::new(),
+            r2_access_key_id: String::new(),
+            r2_secret_access_key: String::new(),
+            r2_region: "auto".to_string(),
+            artifact_proxy_base_url: String::new(),
+            artifact_proxy_token: String::new(),
+            artifact_proxy_access_client_id: String::new(),
+            artifact_proxy_access_client_secret: String::new(),
+            artifact_proxy_connect_timeout_secs: 10.0,
+            artifact_proxy_timeout_secs: 10.0,
+            artifact_proxy_retry_attempts: 1,
+            artifact_proxy_retry_wait_secs: 0.1,
+            network_health_enabled: false,
+            network_health_probe_urls: Vec::new(),
+            network_health_probe_timeout_secs: 1.0,
+            network_health_check_interval_secs: 1.0,
+            network_health_stable_successes: 1,
+            task_event_retention_days: 30,
+            task_event_retention_rows_per_task: 200,
+        }
+    }
+
+    #[tokio::test]
+    async fn should_normalize_success_result() {
+        let temp = tempdir().expect("临时目录应创建成功");
+        let provider = LocalQwenAsrProvider::new(Arc::new(build_test_config(temp.path())));
+        let result = LocalQwenResult {
+            ok: true,
+            provider: "local_qwen".to_string(),
+            text: Some("你好，世界".to_string()),
+            tokens: Some(vec!["你好".to_string(), "世界".to_string()]),
+            timestamps: Some(vec![
+                LocalQwenTimestampItem {
+                    text: "你好".to_string(),
+                    start_time: 0.0,
+                    end_time: 0.3,
+                },
+                LocalQwenTimestampItem {
+                    text: "世界".to_string(),
+                    start_time: 0.3,
+                    end_time: 0.7,
+                },
+            ]),
+            duration_seconds: Some(0.7),
+            performance: Some(json!({"load_seconds": 1.0})),
+            raw: Some(json!({"demo": true})),
+            error: None,
+        };
+
+        let transcript = provider.normalize_result(result).expect("应能成功标准化");
+        assert_eq!(transcript.text_display, "你好，世界");
+        assert_eq!(transcript.tokens, vec!["你好", "世界"]);
+        assert_eq!(transcript.timestamps, vec![0.0, 0.3]);
+        assert_eq!(transcript.duration_seconds, 0.7);
+    }
+
+    #[tokio::test]
+    async fn should_reject_empty_text_result() {
+        let temp = tempdir().expect("临时目录应创建成功");
+        let provider = LocalQwenAsrProvider::new(Arc::new(build_test_config(temp.path())));
+        let result = LocalQwenResult {
+            ok: true,
+            provider: "local_qwen".to_string(),
+            text: Some("   ".to_string()),
+            tokens: None,
+            timestamps: None,
+            duration_seconds: None,
+            performance: None,
+            raw: None,
+            error: None,
+        };
+
+        let error = provider
+            .normalize_result(result)
+            .expect_err("空文本应该被拒绝");
+        assert!(error.to_string().contains("空文本"));
     }
 }

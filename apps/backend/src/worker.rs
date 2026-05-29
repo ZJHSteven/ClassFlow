@@ -261,6 +261,13 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .await?;
     state.notify_task_list_changed();
 
+    let final_uploaded_source_url = state
+        .repo
+        .get_task(task_id)
+        .await?
+        .uploaded_source_url
+        .unwrap_or_default();
+
     let transcript_json = serde_json::to_value(&transcript)
         .map_err(|error| AppError::Internal(format!("转写结果 JSON 化失败: {error}")))?;
     state
@@ -268,7 +275,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .mark_task_succeeded(
             task_id,
             TaskSuccessUpdate {
-                uploaded_source_url: &uploaded_source_url,
+                uploaded_source_url: &final_uploaded_source_url,
                 transcript_text: &transcript.text_accu,
                 transcript_json: &transcript_json,
                 segment_markdown_path: &segment_markdown_path,
@@ -305,7 +312,11 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
 }
 
 fn is_local_qwen_provider(state: &AppState) -> bool {
-    state.config.asr_provider.trim().eq_ignore_ascii_case("local_qwen")
+    state
+        .config
+        .asr_provider
+        .trim()
+        .eq_ignore_ascii_case("local_qwen")
 }
 
 async fn transcribe_with_local_provider(
@@ -314,7 +325,8 @@ async fn transcribe_with_local_provider(
     task_id: &str,
     extracted_audio: &Path,
 ) -> AppResult<NormalizedTranscript> {
-    let restored_transcript_checkpoint = restore_transcript_checkpoint(task, state, task_id).await?;
+    let restored_transcript_checkpoint =
+        restore_transcript_checkpoint(task, state, task_id).await?;
     if let Some(saved_transcript) = restored_transcript_checkpoint {
         state
             .repo
@@ -340,7 +352,11 @@ async fn transcribe_with_local_provider(
 
     state
         .repo
-        .update_task_stage(task_id, TaskStage::Transcribing, "开始执行本地 Qwen3 ASR 转写")
+        .update_task_stage(
+            task_id,
+            TaskStage::Transcribing,
+            "开始执行本地 Qwen3 ASR 转写",
+        )
         .await?;
     state.notify_task_list_changed();
 
@@ -372,7 +388,8 @@ async fn transcribe_with_dashscope_flow(
     extracted_audio: &Path,
     upload_progress_sink: Arc<dyn ProgressSink>,
 ) -> AppResult<NormalizedTranscript> {
-    let restored_transcript_checkpoint = restore_transcript_checkpoint(task, state, task_id).await?;
+    let restored_transcript_checkpoint =
+        restore_transcript_checkpoint(task, state, task_id).await?;
     let uploaded_source_url = if restored_transcript_checkpoint.is_some() {
         let saved_url = task.uploaded_source_url.clone().unwrap_or_default();
         state

@@ -15,16 +15,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{
-    error::AppResult,
-    models::NormalizedTranscript,
-    pipeline::PipelineIo,
-};
+use crate::{error::AppResult, models::NormalizedTranscript, pipeline::PipelineIo};
 
-use super::{
-    provider::AsrProvider,
-    types::AsrInput,
-};
+use super::{provider::AsrProvider, types::AsrInput};
 
 pub struct DashScopeAsrProvider {
     pipeline: Arc<dyn PipelineIo>,
@@ -36,10 +29,7 @@ impl DashScopeAsrProvider {
     }
 
     /// 当前阶段仍使用旧的 pipeline 云端链路，后续再按需要继续细拆。
-    async fn transcribe_with_pipeline(
-        &self,
-        input: &AsrInput,
-    ) -> AppResult<NormalizedTranscript> {
+    async fn transcribe_with_pipeline(&self, input: &AsrInput) -> AppResult<NormalizedTranscript> {
         let uploaded_source_url = self
             .pipeline
             .upload_audio_for_transcription(&input.audio_path, None)

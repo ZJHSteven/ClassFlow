@@ -50,10 +50,13 @@
    - 真实音频 `嗯，帮我干一个小事情啊！.mp3` 转写成功，输出文本：`嗯，帮我干一个小事情啊。`
    - 实测本机 CPU 模式下该样本一次转写总耗时约 `32.6s`，其中 `prefill` 占比最高。
 7. 已完成：已确认 `CapsWriter` 源码里存在一个必须规避的坑：`QwenASREngine.transcribe()` 默认把 `duration=0.0` 传给 `load_audio()`，会被底层音频读取实现解释为“读取 0 帧”，从而出现“模型加载成功但输出空文本”的假象。后续 ClassFlow 自己的 sidecar 脚本必须显式传 `duration=None` 或自行调用 `load_audio() + asr()`，不能直接照搬默认调用。
-8. 待执行：实现 `tools/local_asr/local_qwen_asr_once.py`，把上面的 Linux 冒烟链路固化成可被 Rust 调用的标准 JSON 脚本。
-9. 待执行：新增后端 `asr/` 模块，迁移 DashScope 转写逻辑到 provider。
-10. 待执行：接入 `local_qwen` provider，把主流程切成“下载/抽音频 + provider 转写 + 原有产物入库”。
-11. 待执行：补齐测试、文档、运行示例，并记录真实 Linux 冒烟结果。
+8. 已完成：已实现 `tools/local_asr/local_qwen_asr_once.py`，把 Linux 冒烟链路固化成可被 Rust 调用的标准 JSON 脚本；并已用真实中文音频验证脚本输出成功。
+9. 已完成：已新增后端 `asr/` 模块与 `DashScopeAsrProvider / LocalQwenAsrProvider` 骨架，并把 provider 配置接入 `AppState`。
+10. 已完成：`worker.rs` 已接入 `CLASSFLOW_ASR_PROVIDER` 分支：
+   - `dashscope` 继续走原有云端上传/轮询逻辑；
+   - `local_qwen` 走本地 provider，跳过云端上传，直接对 `audio.wav` 做本地转写后继续原有产物入库流程。
+11. 已完成：后端验证已通过 `cargo check`、`cargo test`、`cargo clippy -D warnings`；本地 Python sidecar 脚本也已对真实音频成功输出标准 JSON。
+12. 待执行：补部署文档与运行步骤，明确 Linux 侧运行时依赖、环境变量、以及当前阶段仍保留的后续优化项（例如常驻 sidecar、日志收敛、任务级语言映射策略）。
 
 ### 验收标准
 - `CLASSFLOW_ASR_PROVIDER=dashscope` 时，现有测试与行为不回退。

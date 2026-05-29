@@ -20,8 +20,8 @@ use tower_http::{
 use tracing::{info, warn};
 
 use crate::{
-    asr::{AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider},
     artifacts::{ArtifactStore, build_artifact_store},
+    asr::{AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider},
     config::AppConfig,
     error::AppResult,
     network::NetworkHealthGate,
@@ -125,16 +125,16 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
     let pipeline: Arc<dyn PipelineIo> =
         Arc::new(RealPipelineIo::new(config.clone(), network_health.clone()));
     let config_arc = Arc::new(config.clone());
-    let asr_provider: Arc<dyn AsrProvider> = match config.asr_provider.trim().to_lowercase().as_str()
-    {
-        "dashscope" => Arc::new(DashScopeAsrProvider::new(pipeline.clone())),
-        "local_qwen" => Arc::new(LocalQwenAsrProvider::new(config_arc.clone())),
-        other => {
-            return Err(crate::error::AppError::Config(format!(
-                "不支持的 CLASSFLOW_ASR_PROVIDER: {other}"
-            )));
-        }
-    };
+    let asr_provider: Arc<dyn AsrProvider> =
+        match config.asr_provider.trim().to_lowercase().as_str() {
+            "dashscope" => Arc::new(DashScopeAsrProvider::new(pipeline.clone())),
+            "local_qwen" => Arc::new(LocalQwenAsrProvider::new(config_arc.clone())),
+            other => {
+                return Err(crate::error::AppError::Config(format!(
+                    "不支持的 CLASSFLOW_ASR_PROVIDER: {other}"
+                )));
+            }
+        };
     let (task_list_events, _) = broadcast::channel::<()>(256);
 
     let placeholder_queue = spawn_workers_placeholder();
