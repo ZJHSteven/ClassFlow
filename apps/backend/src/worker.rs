@@ -21,6 +21,7 @@ use tracing::{error, info};
 
 use crate::{
     app::AppState,
+    asr::types::AsrInput,
     course::{
         build_course_paths, build_manifest_json, build_merged_markdown, build_segment_markdown,
         build_segment_paths,
@@ -186,116 +187,17 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         )
         .await?;
     state.notify_task_list_changed();
-    let restored_transcript_checkpoint =
-        restore_transcript_checkpoint(&task, &state, task_id).await?;
-    let uploaded_source_url = if restored_transcript_checkpoint.is_some() {
-        let saved_url = task.uploaded_source_url.clone().unwrap_or_default();
-        state
-            .repo
-            .update_task_stage(
-                task_id,
-                TaskStage::UploadingAudio,
-                "检测到可恢复的历史转写检查点，跳过上传音频",
-            )
-            .await?;
-        saved_url
-    } else if let Some(saved_url) = reusable_uploaded_source_url(&task) {
-        state
-            .repo
-            .update_task_stage(
-                task_id,
-                TaskStage::UploadingAudio,
-                "检测到仍在有效期内的历史上传检查点，跳过重复上传音频",
-            )
-            .await?;
-        saved_url
+    let transcript = if is_local_qwen_provider(&state) {
+        transcribe_with_local_provider(&state, &task, task_id, &extracted_audio).await?
     } else {
-        if should_report_expired_uploaded_source_url(&task) {
-            state
-                .repo
-                .update_task_stage(
-                    task_id,
-                    TaskStage::UploadingAudio,
-                    "历史百炼临时 OSS 上传检查点缺少保存时间或已超过安全复用窗口，重新上传音频",
-                )
-                .await?;
-        }
-
-        match state
-            .pipeline
-            .upload_audio_for_transcription(&extracted_audio, Some(upload_progress_sink))
-            .await
-        {
-            Ok(url) => {
-                state.repo.save_uploaded_source_url(task_id, &url).await?;
-                if task.dashscope_task_id.is_some() {
-                    state
-                        .repo
-                        .clear_dashscope_task_checkpoint(
-                            task_id,
-                            "音频已重新上传，旧百炼 task_id 不再复用",
-                        )
-                        .await?;
-                }
-                state.notify_task_list_changed();
-                url
-            }
-            Err(error) => {
-                state
-                    .repo
-                    .mark_task_failed(task_id, TaskStage::UploadingAudio, &error.to_string())
-                    .await?;
-                state.notify_task_list_changed();
-                return Err(error);
-            }
-        }
-    };
-
-    state
-        .repo
-        .update_task_stage(task_id, TaskStage::Transcribing, "开始轮询百炼异步转写任务")
-        .await?;
-    state.notify_task_list_changed();
-    let task_after_upload = state.repo.get_task(task_id).await?;
-    let transcript = if let Some(saved_transcript) = restored_transcript_checkpoint {
-        state
-            .repo
-            .update_task_stage(
-                task_id,
-                TaskStage::Transcribing,
-                "检测到历史转写检查点，跳过重复调用百炼",
-            )
-            .await?;
-        saved_transcript
-    } else {
-        match transcribe_with_task_checkpoint(
+        transcribe_with_dashscope_flow(
             &state,
-            &task_after_upload,
+            &task,
             task_id,
-            &uploaded_source_url,
+            &extracted_audio,
+            upload_progress_sink,
         )
-        .await
-        {
-            Ok(result) => {
-                let transcript_json = serde_json::to_value(&result).map_err(|error| {
-                    AppError::Internal(format!("转写结果 JSON 化失败: {error}"))
-                })?;
-                state
-                    .repo
-                    .save_transcript_checkpoint(task_id, &result.text_accu, &transcript_json)
-                    .await?;
-                state.notify_task_list_changed();
-                result
-            }
-            Err(error) => {
-                state
-                    .repo
-                    .mark_task_failed(task_id, TaskStage::Transcribing, &error.to_string())
-                    .await?;
-                state.notify_task_list_changed();
-                return Err(error);
-            }
-        }
+        .await?
     };
 
     let current_task = state.repo.get_task(task_id).await?;
@@ -400,6 +302,180 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
     state.notify_task_list_changed();
 
     Ok(())
+}
+
+fn is_local_qwen_provider(state: &AppState) -> bool {
+    state.config.asr_provider.trim().eq_ignore_ascii_case("local_qwen")
+}
+
+async fn transcribe_with_local_provider(
+    state: &AppState,
+    task: &TaskRecord,
+    task_id: &str,
+    extracted_audio: &Path,
+) -> AppResult<NormalizedTranscript> {
+    let restored_transcript_checkpoint = restore_transcript_checkpoint(task, state, task_id).await?;
+    if let Some(saved_transcript) = restored_transcript_checkpoint {
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::Transcribing,
+                "检测到历史本地转写检查点，跳过重复调用本地 ASR",
+            )
+            .await?;
+        state.notify_task_list_changed();
+        return Ok(saved_transcript);
+    }
+
+    state
+        .repo
+        .update_task_stage(
+            task_id,
+            TaskStage::UploadingAudio,
+            "当前使用本地 ASR，跳过云端音频上传阶段",
+        )
+        .await?;
+    state.notify_task_list_changed();
+
+    state
+        .repo
+        .update_task_stage(task_id, TaskStage::Transcribing, "开始执行本地 Qwen3 ASR 转写")
+        .await?;
+    state.notify_task_list_changed();
+
+    let result = state
+        .asr_provider
+        .transcribe_audio(AsrInput {
+            audio_path: extracted_audio.to_path_buf(),
+            task_id: task_id.to_string(),
+            language: Some("zh".to_string()),
+            context: Some(task.raw_title.clone()),
+        })
+        .await
+        .map_err(|error| AppError::External(format!("本地 ASR 转写失败: {error}")))?;
+
+    let transcript_json = serde_json::to_value(&result)
+        .map_err(|error| AppError::Internal(format!("转写结果 JSON 化失败: {error}")))?;
+    state
+        .repo
+        .save_transcript_checkpoint(task_id, &result.text_accu, &transcript_json)
+        .await?;
+    state.notify_task_list_changed();
+    Ok(result)
+}
+
+async fn transcribe_with_dashscope_flow(
+    state: &AppState,
+    task: &TaskRecord,
+    task_id: &str,
+    extracted_audio: &Path,
+    upload_progress_sink: Arc<dyn ProgressSink>,
+) -> AppResult<NormalizedTranscript> {
+    let restored_transcript_checkpoint = restore_transcript_checkpoint(task, state, task_id).await?;
+    let uploaded_source_url = if restored_transcript_checkpoint.is_some() {
+        let saved_url = task.uploaded_source_url.clone().unwrap_or_default();
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::UploadingAudio,
+                "检测到可恢复的历史转写检查点，跳过上传音频",
+            )
+            .await?;
+        saved_url
+    } else if let Some(saved_url) = reusable_uploaded_source_url(task) {
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::UploadingAudio,
+                "检测到仍在有效期内的历史上传检查点，跳过重复上传音频",
+            )
+            .await?;
+        saved_url
+    } else {
+        if should_report_expired_uploaded_source_url(task) {
+            state
+                .repo
+                .update_task_stage(
+                    task_id,
+                    TaskStage::UploadingAudio,
+                    "历史百炼临时 OSS 上传检查点缺少保存时间或已超过安全复用窗口，重新上传音频",
+                )
+                .await?;
+        }
+
+        match state
+            .pipeline
+            .upload_audio_for_transcription(extracted_audio, Some(upload_progress_sink))
+            .await
+        {
+            Ok(url) => {
+                state.repo.save_uploaded_source_url(task_id, &url).await?;
+                if task.dashscope_task_id.is_some() {
+                    state
+                        .repo
+                        .clear_dashscope_task_checkpoint(
+                            task_id,
+                            "音频已重新上传，旧百炼 task_id 不再复用",
+                        )
+                        .await?;
+                }
+                state.notify_task_list_changed();
+                url
+            }
+            Err(error) => {
+                state
+                    .repo
+                    .mark_task_failed(task_id, TaskStage::UploadingAudio, &error.to_string())
+                    .await?;
+                state.notify_task_list_changed();
+                return Err(error);
+            }
+        }
+    };
+
+    state
+        .repo
+        .update_task_stage(task_id, TaskStage::Transcribing, "开始轮询百炼异步转写任务")
+        .await?;
+    state.notify_task_list_changed();
+    let task_after_upload = state.repo.get_task(task_id).await?;
+    if let Some(saved_transcript) = restored_transcript_checkpoint {
+        state
+            .repo
+            .update_task_stage(
+                task_id,
+                TaskStage::Transcribing,
+                "检测到历史转写检查点，跳过重复调用百炼",
+            )
+            .await?;
+        return Ok(saved_transcript);
+    }
+
+    match transcribe_with_task_checkpoint(state, &task_after_upload, task_id, &uploaded_source_url)
+        .await
+    {
+        Ok(result) => {
+            let transcript_json = serde_json::to_value(&result)
+                .map_err(|error| AppError::Internal(format!("转写结果 JSON 化失败: {error}")))?;
+            state
+                .repo
+                .save_transcript_checkpoint(task_id, &result.text_accu, &transcript_json)
+                .await?;
+            state.notify_task_list_changed();
+            Ok(result)
+        }
+        Err(error) => {
+            state
+                .repo
+                .mark_task_failed(task_id, TaskStage::Transcribing, &error.to_string())
+                .await?;
+            state.notify_task_list_changed();
+            Err(error)
+        }
+    }
 }
 
 async fn transcribe_with_task_checkpoint(
