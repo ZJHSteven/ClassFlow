@@ -20,6 +20,7 @@ use tower_http::{
 use tracing::{info, warn};
 
 use crate::{
+    asr::{AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider},
     artifacts::{ArtifactStore, build_artifact_store},
     config::AppConfig,
     error::AppResult,
@@ -36,6 +37,7 @@ pub struct AppState {
     pub repo: Repository,
     pub artifact_store: Arc<dyn ArtifactStore>,
     pub pipeline: Arc<dyn PipelineIo>,
+    pub asr_provider: Arc<dyn AsrProvider>,
     pub network_health: Arc<NetworkHealthGate>,
     pub queue: TaskQueue,
     pub task_list_events: broadcast::Sender<()>,
@@ -122,14 +124,26 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
         crate::artifacts::NetworkAwareArtifactStore::wrap(artifact_store, network_health.clone());
     let pipeline: Arc<dyn PipelineIo> =
         Arc::new(RealPipelineIo::new(config.clone(), network_health.clone()));
+    let config_arc = Arc::new(config.clone());
+    let asr_provider: Arc<dyn AsrProvider> = match config.asr_provider.trim().to_lowercase().as_str()
+    {
+        "dashscope" => Arc::new(DashScopeAsrProvider::new(pipeline.clone())),
+        "local_qwen" => Arc::new(LocalQwenAsrProvider::new(config_arc.clone())),
+        other => {
+            return Err(crate::error::AppError::Config(format!(
+                "不支持的 CLASSFLOW_ASR_PROVIDER: {other}"
+            )));
+        }
+    };
     let (task_list_events, _) = broadcast::channel::<()>(256);
 
     let placeholder_queue = spawn_workers_placeholder();
     let mut state = AppState {
-        config: Arc::new(config.clone()),
+        config: config_arc,
         repo,
         artifact_store,
         pipeline,
+        asr_provider,
         network_health,
         queue: placeholder_queue,
         task_list_events,

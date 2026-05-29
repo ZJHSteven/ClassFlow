@@ -19,6 +19,7 @@
 */
 
 pub mod app;
+pub mod asr;
 pub mod artifacts;
 pub mod config;
 pub mod course;

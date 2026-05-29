@@ -19,6 +19,11 @@ use crate::error::{AppError, AppResult};
 /// 2. review 或排查线上问题时，可以很快看清“代码默认值到底是什么”，避免继续翻长配置构造逻辑。
 const DEFAULT_DASHSCOPE_MODEL: &str = "fun-asr-mtl";
 
+/// ASR provider 默认值。
+///
+/// 当前保持与既有线上行为一致，仍默认走 DashScope。
+const DEFAULT_ASR_PROVIDER: &str = "dashscope";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactStoreMode {
     Local,
@@ -64,6 +69,7 @@ pub struct AppConfig {
     pub download_split: usize,
     pub download_connections_per_server: usize,
     pub download_lowest_speed_limit_bytes: u64,
+    pub asr_provider: String,
     pub dashscope_api_key: String,
     pub dashscope_model: String,
     pub dashscope_submit_url: String,
@@ -77,6 +83,15 @@ pub struct AppConfig {
     pub upload_timeout_secs: f64,
     pub dashscope_poll_interval_secs: f64,
     pub dashscope_poll_timeout_secs: f64,
+    pub local_asr_python: String,
+    pub local_asr_script: String,
+    pub local_asr_workdir: String,
+    pub local_asr_model_dir: String,
+    pub local_asr_aligner_dir: String,
+    pub local_asr_concurrency: usize,
+    pub local_asr_idle_shutdown_secs: u64,
+    pub local_asr_start_timeout_secs: f64,
+    pub local_asr_task_timeout_secs: f64,
     pub r2_bucket: String,
     pub r2_endpoint: String,
     pub r2_access_key_id: String,
@@ -152,6 +167,7 @@ impl AppConfig {
                 "CLASSFLOW_DOWNLOAD_LOWEST_SPEED_LIMIT_BYTES",
                 0,
             )?,
+            asr_provider: env_or("CLASSFLOW_ASR_PROVIDER", DEFAULT_ASR_PROVIDER),
             dashscope_api_key: env::var("DASHSCOPE_API_KEY").unwrap_or_default(),
             dashscope_model: env_or("CLASSFLOW_DASHSCOPE_MODEL", DEFAULT_DASHSCOPE_MODEL),
             dashscope_submit_url: env_or(
@@ -188,6 +204,39 @@ impl AppConfig {
             dashscope_poll_timeout_secs: env_or_parse(
                 "CLASSFLOW_DASHSCOPE_POLL_TIMEOUT_SECS",
                 900.0,
+            )?,
+            local_asr_python: env_or(
+                "CLASSFLOW_LOCAL_ASR_PYTHON",
+                "/home/zjhsteven/CapsWriter-Offline/.venv/bin/python",
+            ),
+            local_asr_script: env_or(
+                "CLASSFLOW_LOCAL_ASR_SCRIPT",
+                "./tools/local_asr/local_qwen_asr_once.py",
+            ),
+            local_asr_workdir: env_or(
+                "CLASSFLOW_LOCAL_ASR_WORKDIR",
+                "/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline",
+            ),
+            local_asr_model_dir: env_or(
+                "CLASSFLOW_LOCAL_ASR_MODEL_DIR",
+                "/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ASR/Qwen3-ASR-1.7B",
+            ),
+            local_asr_aligner_dir: env_or(
+                "CLASSFLOW_LOCAL_ASR_ALIGNER_DIR",
+                "/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ForcedAligner/Qwen3-ForcedAligner-0.6B",
+            ),
+            local_asr_concurrency: env_or_parse("CLASSFLOW_LOCAL_ASR_CONCURRENCY", 1)?,
+            local_asr_idle_shutdown_secs: env_or_parse(
+                "CLASSFLOW_LOCAL_ASR_IDLE_SHUTDOWN_SECS",
+                1800,
+            )?,
+            local_asr_start_timeout_secs: env_or_parse(
+                "CLASSFLOW_LOCAL_ASR_START_TIMEOUT_SECS",
+                120.0,
+            )?,
+            local_asr_task_timeout_secs: env_or_parse(
+                "CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS",
+                0.0,
             )?,
             r2_bucket: env::var("CLASSFLOW_R2_BUCKET").unwrap_or_default(),
             r2_endpoint: env::var("CLASSFLOW_R2_ENDPOINT").unwrap_or_default(),
