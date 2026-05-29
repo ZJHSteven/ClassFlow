@@ -43,10 +43,17 @@
 2. 已完成：核对 `CapsWriter-Offline` 当前目录结构，确认 Qwen3 引擎有文件级 `transcribe(audio_file)` 入口。
 3. 已完成：确认服务器上的 `CapsWriter-Offline` 是 Windows 打包目录，不能原样在 Linux 上直接跑；计划已改为“复用源码 + 模型，Linux 单独准备运行时”。
 4. 进行中：把本轮 ExecPlan 和项目状态快照写入 `PLANS.md` 与 `PROGRESS.md`，形成执行基线。
-5. 待执行：实现 `tools/local_asr/local_qwen_asr_once.py`，优先让 Linux 独立冒烟跑通。
-6. 待执行：新增后端 `asr/` 模块，迁移 DashScope 转写逻辑到 provider。
-7. 待执行：接入 `local_qwen` provider，把主流程切成“下载/抽音频 + provider 转写 + 原有产物入库”。
-8. 待执行：补齐测试、文档、运行示例，并记录真实 Linux 冒烟结果。
+5. 已完成：已在当前 Ubuntu 机器上补齐 `cmake / ninja / python3-venv`，从 `llama.cpp` `b7798` 源码构建出 Linux 版 `libggml*.so / libllama.so`，并接入 `CapsWriter` 的 `qwen_asr_gguf/inference/bin/`。
+6. 已完成：已创建 `/home/zjhsteven/CapsWriter-Offline/.venv`，补齐最小 Python 依赖，并完成真实本地冒烟：
+   - 导入 `QwenASREngine` 成功。
+   - 模型加载成功。
+   - 真实音频 `嗯，帮我干一个小事情啊！.mp3` 转写成功，输出文本：`嗯，帮我干一个小事情啊。`
+   - 实测本机 CPU 模式下该样本一次转写总耗时约 `32.6s`，其中 `prefill` 占比最高。
+7. 已完成：已确认 `CapsWriter` 源码里存在一个必须规避的坑：`QwenASREngine.transcribe()` 默认把 `duration=0.0` 传给 `load_audio()`，会被底层音频读取实现解释为“读取 0 帧”，从而出现“模型加载成功但输出空文本”的假象。后续 ClassFlow 自己的 sidecar 脚本必须显式传 `duration=None` 或自行调用 `load_audio() + asr()`，不能直接照搬默认调用。
+8. 待执行：实现 `tools/local_asr/local_qwen_asr_once.py`，把上面的 Linux 冒烟链路固化成可被 Rust 调用的标准 JSON 脚本。
+9. 待执行：新增后端 `asr/` 模块，迁移 DashScope 转写逻辑到 provider。
+10. 待执行：接入 `local_qwen` provider，把主流程切成“下载/抽音频 + provider 转写 + 原有产物入库”。
+11. 待执行：补齐测试、文档、运行示例，并记录真实 Linux 冒烟结果。
 
 ### 验收标准
 - `CLASSFLOW_ASR_PROVIDER=dashscope` 时，现有测试与行为不回退。
