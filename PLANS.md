@@ -1,5 +1,60 @@
 # ExecPlan
 
+## 2026-05-29 本地 ASR 接入 ExecPlan
+
+### 目标
+- 给 `ClassFlow` 后端增加“可切换的 ASR provider”抽象，避免继续把 DashScope 逻辑硬编码在 `worker.rs + pipeline.rs` 主流程中。
+- 在保持现有 DashScope 转写链路可用的前提下，新增一个 `local_qwen` provider，把“音频文件 -> 文本”的能力切到本地 Python 脚本。
+- 本地 provider 第一阶段只做“单次脚本模式”，即 Rust 为每次任务启动一次 Python 脚本、等待 JSON 结果返回；先不把“常驻 sidecar + 空闲自动关闭 + 前端状态展示”混进同一轮。
+- 先用你已经上传到服务器的 `CapsWriter-Offline` 目录复用代码和模型，但明确不把这份 Windows 打包产物直接当成 Linux 运行时；Linux 侧必须单独补 Python 依赖和原生库。
+
+### 已确认事实
+- 当前 `ClassFlow` 后端还是“下载视频 -> 抽音频 -> 上传百炼 -> 提交百炼 -> 轮询百炼 -> 产物入库”的单体流程，DashScope 逻辑尚未抽成独立 provider。
+- `CapsWriter-Offline` 里的 Qwen3 引擎确实存在文件级转写入口：`core/server/engines/qwen_asr_gguf/inference/asr.py` 的 `QwenASREngine.transcribe(audio_file=...)` 可以直接按音频路径返回转写结果。
+- 你上传到 Linux 机上的目录本质上是 Windows 打包产物：里面大量是 `.dll / .pyd`，当前没有可直接给 Linux 使用的 `libggml.so / libllama.so`。因此这份目录可以复用 Python 源码和模型文件，但不能原样直接运行。
+- 当前模型目录真实结构与最初计划书里的示例值有差异，必须以服务器现状为准：
+  - `models/Qwen3-ASR/Qwen3-ASR-1.7B`
+  - `models/Qwen3-ForcedAligner/Qwen3-ForcedAligner-0.6B`
+  - 主模型文件名是 `qwen3_asr_encoder_frontend.onnx`、`qwen3_asr_encoder_backend.onnx`、`qwen3_asr_llm.gguf`
+  - 对齐器文件名是 `qwen3_aligner_encoder_frontend.int4.onnx`、`qwen3_aligner_encoder_backend.int4.onnx`、`qwen3_aligner_llm.q5_k.gguf`
+
+### 实现范围
+1. 先完成 Linux 侧独立冒烟：
+   - 准备 Python venv。
+   - 安装最小依赖。
+   - 补齐 Linux 版 llama/onnx 所需运行环境。
+   - 用单次脚本对一段短音频做真实转写。
+2. 在后端新增 `asr/` 模块，抽出统一 provider 接口与公共输入输出结构。
+3. 保留 DashScope provider，迁移现有云端转写逻辑，确保旧模式行为不变。
+4. 新增 `local_qwen` provider，通过 Python 单次脚本执行本地文件转写并返回标准 JSON。
+5. 增加本地 ASR 的配置、结构化日志、错误分类与串行控制。
+6. 补齐 Rust 单元测试、集成测试，以及 Python 脚本最小自检。
+
+### 本轮明确不做
+- 不写 WebSocket headless client。
+- 不拉起完整 CapsWriter GUI / 完整 server 作为主链路。
+- 不在本轮先做常驻 HTTP sidecar。
+- 不做自动 fallback 到 DashScope。
+- 不做前端 provider 热切换。
+- 不做多模型统一抽象。
+
+### 执行步骤
+1. 已完成：核对 `ClassFlow` 当前 Rust 后端链路，确认 DashScope 逻辑仍写死在主流程，必须先做 provider 抽象。
+2. 已完成：核对 `CapsWriter-Offline` 当前目录结构，确认 Qwen3 引擎有文件级 `transcribe(audio_file)` 入口。
+3. 已完成：确认服务器上的 `CapsWriter-Offline` 是 Windows 打包目录，不能原样在 Linux 上直接跑；计划已改为“复用源码 + 模型，Linux 单独准备运行时”。
+4. 进行中：把本轮 ExecPlan 和项目状态快照写入 `PLANS.md` 与 `PROGRESS.md`，形成执行基线。
+5. 待执行：实现 `tools/local_asr/local_qwen_asr_once.py`，优先让 Linux 独立冒烟跑通。
+6. 待执行：新增后端 `asr/` 模块，迁移 DashScope 转写逻辑到 provider。
+7. 待执行：接入 `local_qwen` provider，把主流程切成“下载/抽音频 + provider 转写 + 原有产物入库”。
+8. 待执行：补齐测试、文档、运行示例，并记录真实 Linux 冒烟结果。
+
+### 验收标准
+- `CLASSFLOW_ASR_PROVIDER=dashscope` 时，现有测试与行为不回退。
+- `CLASSFLOW_ASR_PROVIDER=local_qwen` 时，一条课程任务能完成“抽音频 -> 本地转写 -> 入库 -> 生成后续产物”。
+- 本地转写失败时不自动切回云端，而是明确失败并给出日志。
+- 本地 provider 全局串行执行，避免多任务同时压本地模型。
+- 当前轮次至少完成“单次脚本模式”真实可用；常驻 sidecar 留到下一轮，前提是不影响现阶段稳定替换云端 ASR。
+
 ## 目标
 - 在 `ClassFlow` 仓库中实现第一阶段完整方案：Rust 后端、React + Cloudflare Worker 前端、以及与 `smartclass-downloader` 的联动改造。
 
