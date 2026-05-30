@@ -1,7 +1,7 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
-- 现状：`2026-05-29` 正在启动“本地 ASR 替换 DashScope”这一轮改造；已经完成现状梳理与技术可行性核对，尚未进入正式代码改造阶段。
+- 现状：`2026-05-30` 本地 ASR 第一阶段代码接入已经完成，线上后端环境也已切到 `CLASSFLOW_ASR_PROVIDER=local_qwen`；当前正在跑一条真实课程任务做端到端冒烟收口。
 - 已完成：Linux 侧本地 Qwen3 ASR 独立冒烟已经跑通。当前机器已从 `llama.cpp` `b7798` 源码编出 Linux 版 `libggml*.so / libllama.so`，并接到 `CapsWriter` 的 `qwen_asr_gguf/inference/bin/`；Python 虚拟环境位于 `/home/zjhsteven/CapsWriter-Offline/.venv`。
 - 已完成：真实中文音频样本 `CapsWriter-Offline/CapsWriter-Offline/2026/05/assets/(20260529-195742)嗯，帮我干一个小事情啊！.mp3` 已在本机 CPU 模式下得到非空转写结果：`嗯，帮我干一个小事情啊。`，单次总耗时约 `32.6` 秒。
 - 已完成：已定位 `CapsWriter` 当前源码里的一个关键坑：`QwenASREngine.transcribe()` 默认参数会把 `duration=0.0` 传给 `load_audio()`，而当前 `load_audio_*()` 实现会把 `0.0` 解释为“读取 0 帧”，导致表面看起来“模型跑了但结果为空”。后续 sidecar 必须规避这个调用方式。
@@ -14,8 +14,18 @@
 - 已完成：已确认 `ClassFlow` 当前转写流程仍然把 DashScope 上传、提交任务、轮询结果直接写在主流程里，本轮必须先抽出 ASR provider 接口，再接入本地 provider。
 - 已完成：已确认服务器上的 `CapsWriter-Offline` 目录虽然包含可复用的 Python 源码和模型文件，但本质上是 Windows 打包产物，里面的原生依赖主要是 `.dll / .pyd`；这份目录不能直接当 Linux 运行时使用。
 - 已完成：已确认 `CapsWriter` 的 Qwen3 引擎存在文件级入口 `QwenASREngine.transcribe(audio_file=...)`，因此“先走文件转写，不做 WebSocket fallback”这条技术路线成立。
-- 正在做：补部署文档与环境变量说明，并评估是否需要把默认日志进一步收敛，避免 Python 侧 llama 初始化日志过多淹没业务日志。
-- 下一步：把 `local_qwen` 模式真正挂到你的测试或线上环境配置里，跑一条 `ClassFlow` 真实课程任务验收。
+- 已完成：已安装并登录 `gh`，确认本机可访问 GitHub；账号 `ZJHSteven` 名下已有 `CapsWriter-Offline` fork。
+- 已完成：已在 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src` clone 干净源码工作树，并接好 `origin + upstream` 双远端，后续可以标准方式拉取上游更新并承载 Linux 适配改动。
+- 已完成：真实后端环境 `/etc/classflow/backend.env` 已显式写入：
+  - `CLASSFLOW_ASR_PROVIDER=local_qwen`
+  - `CLASSFLOW_LOCAL_ASR_PYTHON=/home/zjhsteven/CapsWriter-Offline/.venv/bin/python`
+  - `CLASSFLOW_LOCAL_ASR_SCRIPT=/home/zjhsteven/ClassFlow/tools/local_asr/local_qwen_asr_once.py`
+  - `CLASSFLOW_LOCAL_ASR_WORKDIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline`
+  - `CLASSFLOW_LOCAL_ASR_MODEL_DIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ASR/Qwen3-ASR-1.7B`
+  - `CLASSFLOW_LOCAL_ASR_ALIGNER_DIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ForcedAligner/Qwen3-ForcedAligner-0.6B`
+- 已完成：系统级 `classflow-backend.service` 已在 `2026-05-30 21:14:44 CST` 重启到新配置，健康检查 `http://127.0.0.1:8787/api/v1/health` 返回 `{"service":"classflow-backend","status":"ok"}`。
+- 正在做：真实课程任务 `9b7c24df-fc5d-43c6-9a9b-62b99b8674af` 已进入 `transcribing`，事件日志确认“跳过云端音频上传阶段”并“开始执行本地 Qwen3 ASR 转写”；真实 Python 进程 `local_qwen_asr_once.py` 正在对抽出的 `audio.wav` 做 CPU 推理。
+- 下一步：等待这条真实课程冒烟跑完，确认 `segment.md / segment.json / course.md` 产物是否全部落地，并把最终耗时、文本结果与可能暴露出的日志/性能问题补入文档。
 - 现状：`2026-05-19` 已修正线上后端“最后写入产物”使用的 Worker 私有产物入口；真实 `/etc/classflow/backend.env` 中的 `CLASSFLOW_ARTIFACT_PROXY_BASE_URL` 已从旧 `workers.dev` 开发域名改为正式部署域名 `https://classflow.zjhstudio.com/`。
 - 已完成：已回滚本轮误把历史文档中所有旧 Worker 域名机械替换为正式域名的错误修改；历史排查记录继续保留当时真实使用过的 `classflow-web.zhangjiahe0830.workers.dev`。
 - 正在做：重启系统级 `classflow-backend.service`，让后端进程重新读取新的产物代理域名，并做健康检查与私有产物写入探针。
@@ -150,6 +160,7 @@
 - 决策AG：本轮本地 ASR 主线是引擎级 `transcribe(audio_file)` 文件转写，不走 WebSocket 协议层。（原因：已经在源码里确认存在文件级入口，直接复用可显著减少协议、流式分片和客户端兼容问题。）
 - 决策AH：ClassFlow 自己的 Python sidecar 不能直接依赖 `QwenASREngine.transcribe()` 的默认参数调用，而要显式规避 `duration=0.0` 这个上游坑。（原因：当前 Linux 冒烟已实证，默认调用会把音频读成 0 帧，导致模型虽然加载成功却返回空文本。）
 - 决策AI：为了压低本轮回归风险，`dashscope` 模式暂时保留现有 `worker.rs` 里的云端检查点逻辑；provider 抽象先优先服务于 `local_qwen` 的接入，而不是本轮一次性重写全部云端恢复语义。（原因：当前目标是“稳定把本地 ASR 接进去”，不是把整条云端恢复链路同时推倒重做。）
+- 决策AJ：`CapsWriter` 的“源码仓库”和当前已补好 Linux 运行时的“运行目录”分开管理：前者固定在 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src` 作为 git 工作树，后者继续保留 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline` 供现阶段 ClassFlow 直接调用。（原因：这样后续同步上游、做 Linux 适配、保留当前已跑通的模型与依赖，不会互相污染。）
 - 决策AC：任务台普通状态刷新要以 SSE 为主，`GET /api/v1/tasks` 只作为 SSE 不可用或首帧超时的兜底，而不是和 SSE 长期并行。（原因：SSE 已经能推送任务摘要列表和传输进度；继续无变化地刷新普通列表会浪费 Cloudflare Worker 请求额度。）
 - 决策AD：任务详情、重试、删除和文件下载暂不塞进 SSE。（原因：SSE 是服务端到浏览器的单向通道，用户命令和二进制/文本文件下载仍更适合 HTTP；本轮先收敛最浪费的任务列表请求。）
 - 决策Z：`classflow-web.zhangjiahe0830.workers.dev` 这条 Worker 回源链路必须单独观察和单独切规则，不能再简单跟随“大一统代理组”的默认命中结果。（原因：`2026-04-09` 已经实证 `DIRECT` 不通、`Exflux` 可恢复，而历史 `Kuromis` 还曾直接出现 `i/o timeout`；这说明该域名对线路选择非常敏感。）
@@ -184,6 +195,7 @@
 ## 常见坑 / 复现方法
 - 坑21：服务器上的 `CapsWriter-Offline` 当前是 Windows 打包目录，不是 Linux 成品环境；如果直接把它的 `internal/*.pyd`、`core/server/engines/llama/bin/*.dll` 当成 Linux 依赖来跑，导入阶段就会失败。正确做法是复用源码与模型，Linux 侧自己准备 `venv + pip + libllama.so/libggml.so` 等运行时。
 - 坑22：`CapsWriter` 当前 `QwenASREngine.transcribe()` 的默认参数会把 `duration=0.0` 传到 `load_audio()`；而当前实现里 `duration=0.0` 会被换算成 `frames=0`，最终读出空音频，表现为“模型加载正常、耗时极短、结果文本为空”。复现时直接调用默认 `transcribe(audio_file, language='Chinese')` 即可看到；规避方式是显式传 `duration=None`，或绕开这个包装层，自己先 `load_audio()` 再调用 `asr()`。
+- 坑23：服务器上当前真正给 ClassFlow 调用的 `CapsWriter` 目录不是 git 仓库，而是你上传的解压运行目录 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline`；如果后续要做 fork 同步或提交 Linux 适配，应该在单独的源码工作树 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src` 上操作，不要把运行目录误当成 git 仓库。
 - 坑20：`TaskPanel` 里如果让 `loadTaskDetail` 依赖 `tasks`，再让 `loadTasks` 依赖 `loadTaskDetail`，最后首屏加载 `useEffect` 又依赖 `loadTasks`，就会在每次 `setTasks()` 后重新创建回调并再次执行阻塞加载；浏览器表现为 `/api/v1/tasks` 请求风暴和“正在加载任务列表...”反复闪烁。
 - 坑18：`classflow-web.zhangjiahe0830.workers.dev` 在这台机子上并不是“随便给个规则都行”；`DIRECT` 已被实测证伪，而某些代理组曾能恢复、某些组又会超时，所以排查 Worker 写产物失败时，必须把命中策略组一起记下来。
 - 坑19：`/api/v1/tasks/{id}` 旧实现会把 `transcript_json` 和 `transcript_text` 整包返回给前端，即使前端类型根本没用它们；在真实样本里，这会把一次详情点击膨胀到 `238466` 字节，导致“点一下详情要等很久”的错觉被放大。

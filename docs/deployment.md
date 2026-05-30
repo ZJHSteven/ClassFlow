@@ -99,6 +99,75 @@ npx wrangler whoami
 - 如果 userscript 直连后端 Tunnel 域名，那么脚本里的 `Bearer Token` 也必须填这同一个值。
 - 如果 userscript 访问的是 Worker 域名，则推荐让脚本侧 `Bearer Token` 留空，由 Worker 代为补上。
 
+### 3.1 本地 ASR 模式额外配置
+
+如果你要把转写从 DashScope 切到本地 `CapsWriter + Qwen3-ASR`，除了上面的通用变量，还需要确认下面这些项：
+
+- `CLASSFLOW_ASR_PROVIDER=local_qwen`
+- `CLASSFLOW_LOCAL_ASR_PYTHON`
+- `CLASSFLOW_LOCAL_ASR_SCRIPT`
+- `CLASSFLOW_LOCAL_ASR_WORKDIR`
+- `CLASSFLOW_LOCAL_ASR_MODEL_DIR`
+- `CLASSFLOW_LOCAL_ASR_ALIGNER_DIR`
+- `CLASSFLOW_LOCAL_ASR_CONCURRENCY`
+- `CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS`
+
+当前这台机器已经验证过的真实值是：
+
+```env
+CLASSFLOW_ASR_PROVIDER=local_qwen
+CLASSFLOW_LOCAL_ASR_PYTHON=/home/zjhsteven/CapsWriter-Offline/.venv/bin/python
+CLASSFLOW_LOCAL_ASR_SCRIPT=/home/zjhsteven/ClassFlow/tools/local_asr/local_qwen_asr_once.py
+CLASSFLOW_LOCAL_ASR_WORKDIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline
+CLASSFLOW_LOCAL_ASR_MODEL_DIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ASR/Qwen3-ASR-1.7B
+CLASSFLOW_LOCAL_ASR_ALIGNER_DIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ForcedAligner/Qwen3-ForcedAligner-0.6B
+CLASSFLOW_LOCAL_ASR_CONCURRENCY=1
+CLASSFLOW_LOCAL_ASR_IDLE_SHUTDOWN_SECS=1800
+CLASSFLOW_LOCAL_ASR_START_TIMEOUT_SECS=120
+CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0
+```
+
+补充说明：
+
+- 当前第一阶段并没有把 `CapsWriter` 改造成常驻 sidecar，而是每个任务调用一次 [tools/local_asr/local_qwen_asr_once.py](/home/zjhsteven/ClassFlow/tools/local_asr/local_qwen_asr_once.py)。
+- `CLASSFLOW_LOCAL_ASR_WORKDIR` 指向的是当前已补齐 Linux 运行时的“运行目录”，不是 git 源码仓库。
+- 服务器上另有一份独立源码工作树 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src`，专门用于后续 fork 同步和 Linux 适配提交；不要把两者混用。
+- `CLASSFLOW_LOCAL_ASR_CONCURRENCY` 第一阶段建议固定为 `1`，避免多任务同时把 CPU 和内存打满。
+- `CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0` 表示不做固定总超时硬杀；当前 CPU 模式下 45 分钟课程的本地推理会明显慢于短样本冒烟，属于预期现象。
+
+### 3.2 本地 ASR 运行前提
+
+当前这台 Ubuntu 24.04.3 机器上，本地 ASR 跑通依赖下面这些现实前提：
+
+- Python 虚拟环境：
+  - `/home/zjhsteven/CapsWriter-Offline/.venv`
+- `CapsWriter` 运行目录：
+  - `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline`
+- `CapsWriter` 独立源码工作树：
+  - `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src`
+- Linux 版 llama 动态库目录：
+  - `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/core/server/engines/qwen_asr_gguf/inference/bin`
+
+这里要特别区分两件事：
+
+- `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline`
+  - 这是当前给 ClassFlow 真正调用的运行目录。
+  - 它最初来源于 Windows 打包目录，后来在 Linux 上补齐了 Python 依赖和 `.so` 运行时。
+- `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src`
+  - 这是后来从 GitHub fork clone 下来的干净源码仓库。
+  - 它的远端已经接成 `origin=ZJHSteven/CapsWriter-Offline`、`upstream=HaujetZhao/CapsWriter-Offline`，专门用于后续同步上游和提交 Linux 适配改动。
+
+推荐的上游同步方式：
+
+```bash
+cd /home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src
+git fetch upstream
+git merge upstream/master
+git push origin master
+```
+
+如果后续你要把某次 Linux 适配提交真正落回 fork，应该优先在 `CapsWriter-Offline-src` 上改、测、提，而不是直接在当前运行目录里“边跑边改”。
+
 ## 4. 构建并运行后端
 
 ```bash

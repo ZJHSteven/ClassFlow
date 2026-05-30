@@ -56,7 +56,17 @@
    - `dashscope` 继续走原有云端上传/轮询逻辑；
    - `local_qwen` 走本地 provider，跳过云端上传，直接对 `audio.wav` 做本地转写后继续原有产物入库流程。
 11. 已完成：后端验证已通过 `cargo check`、`cargo test`、`cargo clippy -D warnings`；本地 Python sidecar 脚本也已对真实音频成功输出标准 JSON。
-12. 待执行：补部署文档与运行步骤，明确 Linux 侧运行时依赖、环境变量、以及当前阶段仍保留的后续优化项（例如常驻 sidecar、日志收敛、任务级语言映射策略）。
+12. 已完成：已安装并登录 `gh`，确认机器可访问 GitHub，并确认账号 `ZJHSteven` 名下已有 fork：`ZJHSteven/CapsWriter-Offline`。
+13. 已完成：已在 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src` clone 一份干净源码仓库，远端已接成：
+   - `origin -> https://github.com/ZJHSteven/CapsWriter-Offline.git`
+   - `upstream -> https://github.com/HaujetZhao/CapsWriter-Offline.git`
+   这样后续 Linux 适配改动与上游同步不再混在当前“运行时目录”里。
+14. 已完成：已把真实后端环境 `/etc/classflow/backend.env` 切到 `CLASSFLOW_ASR_PROVIDER=local_qwen`，并显式写入当前机器的 `CLASSFLOW_LOCAL_ASR_*` 路径；系统级 `classflow-backend.service` 已重启成功。
+15. 进行中：正在以真实课程片段 `task_id=9b7c24df-fc5d-43c6-9a9b-62b99b8674af` 做端到端冒烟。当前已确认：
+   - 下载视频成功进入 `transcribing` 阶段；
+   - 事件日志明确记录“当前使用本地 ASR，跳过云端音频上传阶段”；
+   - 后端真实 fork 出 `local_qwen_asr_once.py`，并正在对 `audio.wav` 执行本地 CPU 推理。
+16. 待执行：等真实课程冒烟完成后，补记最终结果（成功文本 / 失败原因 / 产物路径），并继续完善部署文档中的本地 ASR 专节。
 
 ### 验收标准
 - `CLASSFLOW_ASR_PROVIDER=dashscope` 时，现有测试与行为不回退。
