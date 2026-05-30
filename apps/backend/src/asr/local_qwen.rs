@@ -1,25 +1,40 @@
 /*!
 本地 Qwen3 ASR provider。
 
-第一轮只做“单次 Python 脚本模式”：
+这一版已经从“每任务启动一次 Python 脚本”升级成“常驻 sidecar + 模型复用”：
 
-1. Rust 调起一次 Python 脚本；
-2. 脚本内部加载模型并输出 JSON；
-3. Rust 读取 JSON 并映射成 `NormalizedTranscript`。
+1. 第一个本地任务到来时，Rust 懒启动 Python sidecar。
+2. sidecar 启动后立即加载模型，并通过本地 HTTP 暴露 `health / transcribe / shutdown`。
+3. 后续任务复用同一个 sidecar，不再重复把模型读入内存。
+4. 如果超过空闲阈值没有新任务使用，就自动关闭 sidecar，释放内存。
 
-这样做的核心目的不是极致性能，而是先把“云端 -> 本地”的能力稳定替换掉。
+为什么仍然保留 Rust 侧串行控制：
+
+1. 当前真实目标是“连续任务稳定跑通”，不是最大化并发吞吐。
+2. `CapsWriter` 的 Qwen3 路线并没有现成保证“多请求同时进一个模型实例”完全安全。
+3. 因此这里先采用最稳妥的策略：Rust 侧全局串行 + sidecar 内部再做一层自保锁。
 */
 
 use std::{
+    net::TcpListener,
     path::{Path, PathBuf},
+    process::Stdio,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tokio::{fs, process::Command, sync::Semaphore, time::timeout};
+use serde_json::{Value, json};
+use tokio::{
+    fs,
+    process::{Child, Command},
+    sync::{Mutex, Semaphore},
+    task::JoinHandle,
+    time::{sleep, timeout},
+};
+use tracing::{info, warn};
 
 use crate::{
     config::AppConfig,
@@ -56,16 +71,65 @@ struct LocalQwenResult {
     error: Option<LocalQwenErrorPayload>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SidecarHealthResponse {
+    ok: bool,
+    provider: String,
+    status: String,
+    load_seconds: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct SidecarTranscribeRequest<'a> {
+    audio_path: &'a str,
+    language: &'a str,
+    context: &'a str,
+}
+
+struct SidecarProcess {
+    child: Child,
+    base_url: String,
+    last_used_at: Instant,
+    load_seconds: f64,
+}
+
+struct SidecarState {
+    process: Option<SidecarProcess>,
+    idle_shutdown_task: Option<JoinHandle<()>>,
+}
+
+impl SidecarState {
+    fn new() -> Self {
+        Self {
+            process: None,
+            idle_shutdown_task: None,
+        }
+    }
+}
+
 pub struct LocalQwenAsrProvider {
     config: Arc<AppConfig>,
     semaphore: Arc<Semaphore>,
+    http_client: HttpClient,
+    sidecar_state: Arc<Mutex<SidecarState>>,
 }
 
 impl LocalQwenAsrProvider {
     pub fn new(config: Arc<AppConfig>) -> Self {
+        Self::new_with_http_client(
+            config,
+            HttpClient::builder()
+                .build()
+                .expect("本地 sidecar HTTP client 应能构建成功"),
+        )
+    }
+
+    fn new_with_http_client(config: Arc<AppConfig>, http_client: HttpClient) -> Self {
         Self {
             semaphore: Arc::new(Semaphore::new(config.local_asr_concurrency.max(1))),
             config,
+            http_client,
+            sidecar_state: Arc::new(Mutex::new(SidecarState::new())),
         }
     }
 
@@ -75,6 +139,19 @@ impl LocalQwenAsrProvider {
             .join("jobs")
             .join(task_id)
             .join("local_asr_result.json")
+    }
+
+    fn sidecar_script_path(&self) -> PathBuf {
+        let configured = PathBuf::from(&self.config.local_asr_script);
+        let current = configured
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if current == "local_qwen_asr_sidecar.py" {
+            return configured;
+        }
+
+        configured.with_file_name("local_qwen_asr_sidecar.py")
     }
 
     fn map_language(&self, language: Option<&str>) -> String {
@@ -108,53 +185,243 @@ impl LocalQwenAsrProvider {
         Ok(())
     }
 
-    async fn run_script(&self, input: &AsrInput, output_path: &Path) -> AppResult<()> {
-        Self::ensure_parent_dir(output_path).await?;
+    fn reserve_local_port(&self) -> AppResult<u16> {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| {
+            AppError::Internal(format!("为本地 ASR sidecar 保留端口失败: {error}"))
+        })?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| AppError::Internal(format!("读取本地 ASR sidecar 端口失败: {error}")))?
+            .port();
+        drop(listener);
+        Ok(port)
+    }
+
+    async fn poll_sidecar_health(
+        &self,
+        base_url: &str,
+        timeout_secs: f64,
+    ) -> AppResult<SidecarHealthResponse> {
+        let deadline = Instant::now() + Duration::from_secs_f64(timeout_secs.max(1.0));
+        let health_url = format!("{base_url}/health");
+        loop {
+            match self.http_client.get(&health_url).send().await {
+                Ok(response) if response.status().is_success() => {
+                    let health = response
+                        .json::<SidecarHealthResponse>()
+                        .await
+                        .map_err(|error| {
+                            AppError::External(format!(
+                                "解析本地 ASR sidecar health 响应失败: url={health_url}, error={error}"
+                            ))
+                        })?;
+                    if health.ok && health.provider == "local_qwen" && health.status == "ready" {
+                        return Ok(health);
+                    }
+                }
+                Ok(_) | Err(_) => {}
+            }
+
+            if Instant::now() >= deadline {
+                return Err(AppError::External(format!(
+                    "等待本地 ASR sidecar 就绪超时: timeout_secs={timeout_secs}"
+                )));
+            }
+
+            sleep(Duration::from_millis(300)).await;
+        }
+    }
+
+    async fn start_sidecar_process(&self) -> AppResult<SidecarProcess> {
+        let port = self.reserve_local_port()?;
+        let base_url = format!("http://127.0.0.1:{port}");
+        let sidecar_script = self.sidecar_script_path();
+        info!(
+            "准备启动本地 ASR sidecar: script={}, base_url={}",
+            sidecar_script.display(),
+            base_url
+        );
 
         let mut command = Command::new(&self.config.local_asr_python);
         command
-            .arg(&self.config.local_asr_script)
+            .arg(&sidecar_script)
             .arg("--capswriter-root")
             .arg(&self.config.local_asr_workdir)
-            .arg("--audio")
-            .arg(&input.audio_path)
             .arg("--model-dir")
             .arg(&self.config.local_asr_model_dir)
             .arg("--aligner-dir")
             .arg(&self.config.local_asr_aligner_dir)
-            .arg("--output")
-            .arg(output_path)
-            .arg("--language")
-            .arg(self.map_language(input.language.as_deref()))
-            .arg("--context")
-            .arg(input.context.clone().unwrap_or_default())
-            .current_dir(&self.config.local_asr_workdir);
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--host")
+            .arg("127.0.0.1")
+            .current_dir(&self.config.local_asr_workdir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
 
-        let task_timeout = self.config.local_asr_task_timeout_secs;
-        let output = if task_timeout > 0.0 {
-            timeout(Duration::from_secs_f64(task_timeout), command.output())
-                .await
-                .map_err(|_| {
-                    AppError::External(format!(
-                        "本地 ASR 脚本执行超时: timeout_secs={task_timeout}"
-                    ))
-                })??
-        } else {
-            command.output().await?
-        };
+        let child = command.spawn().map_err(|error| {
+            AppError::External(format!(
+                "启动本地 ASR sidecar 失败: script={}, error={error}",
+                sidecar_script.display()
+            ))
+        })?;
 
-        if output.status.success() {
-            return Ok(());
+        let health = self
+            .poll_sidecar_health(&base_url, self.config.local_asr_start_timeout_secs)
+            .await?;
+        info!(
+            "本地 ASR sidecar 已就绪: base_url={}, load_seconds={}",
+            base_url, health.load_seconds
+        );
+
+        Ok(SidecarProcess {
+            child,
+            base_url,
+            last_used_at: Instant::now(),
+            load_seconds: health.load_seconds,
+        })
+    }
+
+    async fn ensure_sidecar_ready(&self) -> AppResult<(String, f64)> {
+        let mut state = self.sidecar_state.lock().await;
+
+        if let Some(existing_shutdown_task) = state.idle_shutdown_task.take() {
+            existing_shutdown_task.abort();
         }
 
-        let stdout_text = String::from_utf8_lossy(&output.stdout);
-        let stderr_text = String::from_utf8_lossy(&output.stderr);
-        Err(AppError::External(format!(
-            "本地 ASR 脚本执行失败: status={}, stdout={}, stderr={}",
-            output.status,
-            stdout_text.trim(),
-            stderr_text.trim(),
-        )))
+        if let Some(process) = state.process.as_mut() {
+            if let Some(exit_status) = process.child.try_wait()? {
+                warn!("本地 ASR sidecar 已提前退出，准备重新拉起: status={exit_status}");
+                state.process = None;
+                return Err(AppError::External(format!(
+                    "本地 ASR sidecar 已提前退出: status={exit_status}"
+                )));
+            }
+
+            process.last_used_at = Instant::now();
+            info!(
+                "复用已存在的本地 ASR sidecar: base_url={}",
+                process.base_url
+            );
+            return Ok((process.base_url.clone(), process.load_seconds));
+        }
+
+        let process = self.start_sidecar_process().await?;
+        let base_url = process.base_url.clone();
+        let load_seconds = process.load_seconds;
+        state.process = Some(process);
+        Ok((base_url, load_seconds))
+    }
+
+    async fn schedule_idle_shutdown(&self) {
+        let idle_secs = self.config.local_asr_idle_shutdown_secs;
+        if idle_secs == 0 {
+            return;
+        }
+
+        let sidecar_state = self.sidecar_state.clone();
+        let http_client = self.http_client.clone();
+        let handle = tokio::spawn(async move {
+            sleep(Duration::from_secs(idle_secs)).await;
+
+            let mut guard = sidecar_state.lock().await;
+            let Some(process) = guard.process.as_mut() else {
+                guard.idle_shutdown_task = None;
+                return;
+            };
+
+            if process.last_used_at.elapsed() < Duration::from_secs(idle_secs) {
+                guard.idle_shutdown_task = None;
+                return;
+            }
+
+            let shutdown_url = format!("{}/shutdown", process.base_url);
+            info!("本地 ASR sidecar 空闲超时，准备关闭: url={shutdown_url}");
+            let _ = http_client.post(&shutdown_url).send().await;
+
+            if let Err(_error) = timeout(Duration::from_secs(5), process.child.wait()).await {
+                let _ = process.child.kill().await;
+                let _ = process.child.wait().await;
+            }
+
+            guard.process = None;
+            guard.idle_shutdown_task = None;
+        });
+
+        let mut guard = self.sidecar_state.lock().await;
+        if let Some(old_task) = guard.idle_shutdown_task.replace(handle) {
+            old_task.abort();
+        }
+    }
+
+    async fn call_sidecar_transcribe(
+        &self,
+        base_url: &str,
+        input: &AsrInput,
+        output_path: &Path,
+    ) -> AppResult<()> {
+        Self::ensure_parent_dir(output_path).await?;
+
+        let request = SidecarTranscribeRequest {
+            audio_path: input
+                .audio_path
+                .to_str()
+                .ok_or_else(|| AppError::BadRequest("音频路径包含非法 UTF-8".to_string()))?,
+            language: &self.map_language(input.language.as_deref()),
+            context: input.context.as_deref().unwrap_or_default(),
+        };
+
+        let request_future = self
+            .http_client
+            .post(format!("{base_url}/transcribe"))
+            .json(&request)
+            .send();
+        info!(
+            "开始请求本地 ASR sidecar 转写: task_id={}, base_url={}, audio_path={}",
+            input.task_id, base_url, request.audio_path
+        );
+
+        let response = if self.config.local_asr_task_timeout_secs > 0.0 {
+            timeout(
+                Duration::from_secs_f64(self.config.local_asr_task_timeout_secs),
+                request_future,
+            )
+            .await
+            .map_err(|_| {
+                AppError::External(format!(
+                    "本地 ASR sidecar 转写超时: timeout_secs={}",
+                    self.config.local_asr_task_timeout_secs
+                ))
+            })??
+        } else {
+            request_future.await?
+        };
+
+        let status = response.status();
+        let body = response.text().await.map_err(|error| {
+            AppError::External(format!("读取本地 ASR sidecar 响应体失败: {error}"))
+        })?;
+        info!(
+            "本地 ASR sidecar 已返回响应: task_id={}, base_url={}, http_status={}",
+            input.task_id, base_url, status
+        );
+
+        if !status.is_success() {
+            return Err(AppError::External(format!(
+                "本地 ASR sidecar 转写失败: http={}, body={body}",
+                status
+            )));
+        }
+
+        fs::write(output_path, body).await.map_err(|error| {
+            AppError::Io(format!(
+                "写入本地 ASR sidecar 输出 JSON 失败: path={}, error={error}",
+                output_path.display()
+            ))
+        })?;
+
+        Ok(())
     }
 
     async fn read_result_json(&self, output_path: &Path) -> AppResult<LocalQwenResult> {
@@ -200,7 +467,7 @@ impl LocalQwenAsrProvider {
             duration_seconds: result
                 .duration_seconds
                 .unwrap_or_else(|| timestamps.last().map(|item| item.end_time).unwrap_or(0.0)),
-            raw_task_output: serde_json::json!({
+            raw_task_output: json!({
                 "provider": result.provider,
                 "performance": result.performance,
                 "raw": result.raw,
@@ -219,9 +486,32 @@ impl AsrProvider for LocalQwenAsrProvider {
             })?;
 
         let output_path = self.output_json_path(&input.task_id);
-        self.run_script(&input, &output_path).await?;
+        let (base_url, _load_seconds) = self.ensure_sidecar_ready().await?;
+        self.call_sidecar_transcribe(&base_url, &input, &output_path)
+            .await?;
         let result = self.read_result_json(&output_path).await?;
-        self.normalize_result(result)
+        let normalized = self.normalize_result(result)?;
+        self.schedule_idle_shutdown().await;
+        Ok(normalized)
+    }
+}
+
+impl Drop for LocalQwenAsrProvider {
+    fn drop(&mut self) {
+        let sidecar_state = self.sidecar_state.clone();
+        tokio::spawn(async move {
+            let mut guard = sidecar_state.lock().await;
+            if let Some(handle) = guard.idle_shutdown_task.take() {
+                handle.abort();
+            }
+
+            let Some(mut process) = guard.process.take() else {
+                return;
+            };
+
+            let _ = process.child.kill().await;
+            let _ = process.child.wait().await;
+        });
     }
 }
 
@@ -308,7 +598,12 @@ mod tests {
     #[tokio::test]
     async fn should_normalize_success_result() {
         let temp = tempdir().expect("临时目录应创建成功");
-        let provider = LocalQwenAsrProvider::new(Arc::new(build_test_config(temp.path())));
+        let provider = LocalQwenAsrProvider::new_with_http_client(
+            Arc::new(build_test_config(temp.path())),
+            HttpClient::builder()
+                .build()
+                .expect("测试 HTTP client 应能构建成功"),
+        );
         let result = LocalQwenResult {
             ok: true,
             provider: "local_qwen".to_string(),
@@ -342,7 +637,12 @@ mod tests {
     #[tokio::test]
     async fn should_reject_empty_text_result() {
         let temp = tempdir().expect("临时目录应创建成功");
-        let provider = LocalQwenAsrProvider::new(Arc::new(build_test_config(temp.path())));
+        let provider = LocalQwenAsrProvider::new_with_http_client(
+            Arc::new(build_test_config(temp.path())),
+            HttpClient::builder()
+                .build()
+                .expect("测试 HTTP client 应能构建成功"),
+        );
         let result = LocalQwenResult {
             ok: true,
             provider: "local_qwen".to_string(),
@@ -359,5 +659,23 @@ mod tests {
             .normalize_result(result)
             .expect_err("空文本应该被拒绝");
         assert!(error.to_string().contains("空文本"));
+    }
+
+    #[tokio::test]
+    async fn should_derive_sidecar_script_path_from_once_script() {
+        let temp = tempdir().expect("临时目录应创建成功");
+        let mut config = build_test_config(temp.path());
+        config.local_asr_script = "/demo/tools/local_qwen_asr_once.py".to_string();
+        let provider = LocalQwenAsrProvider::new_with_http_client(
+            Arc::new(config),
+            HttpClient::builder()
+                .build()
+                .expect("测试 HTTP client 应能构建成功"),
+        );
+
+        assert_eq!(
+            provider.sidecar_script_path(),
+            PathBuf::from("/demo/tools/local_qwen_asr_sidecar.py")
+        );
     }
 }

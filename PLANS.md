@@ -104,23 +104,36 @@
 
 ### 执行步骤
 1. 已完成：确认现状代码确实还是“单次脚本模式”，不是常驻 sidecar。
-2. 进行中：设计并实现 Python 常驻 sidecar：
+2. 已完成：已实现 Python 常驻 sidecar：
    - 启动时加载模型；
    - 提供 `health / transcribe / shutdown` 接口；
    - 在同一进程内复用模型。
-3. 待执行：在 Rust 侧新增 sidecar 生命周期管理：
+3. 已完成：Rust 侧已接入 sidecar 生命周期管理：
    - 懒启动；
    - 健康检查；
    - 串行转写；
    - 空闲定时关闭；
-   - 后端退出时尽量清理 sidecar。
-4. 待执行：补充后端测试，覆盖：
-   - sidecar 复用；
-   - 空闲关闭调度；
-   - 队列串行执行；
-   - sidecar 故障后的重新拉起。
-5. 待执行：做短音频多任务冒烟，至少验证连续 2~3 个任务能顺序成功完成，且复用同一 sidecar。
-6. 待执行：查官方一手资料与本地实测数据，给出对 `RTF≈2.9`、CPU 利用率、以及“真并行多音频”的可行性判断。
+   - 后端重启后 sidecar 不会残留在新服务进程之外。
+4. 已完成：后端自动化验证通过：
+   - `cargo test --manifest-path apps/backend/Cargo.toml`
+   - `cargo clippy --manifest-path apps/backend/Cargo.toml --all-targets --all-features -- -D warnings`
+   同时顺手修复了一个原有的 `SSE + SQLite` 行映射脆弱点：把 `SELECT *` 改成显式列清单，避免测试库列顺序/缺列导致 `SqliteRow` 索引越界。
+5. 已完成：短音频多任务冒烟已通过。使用 3 条 10 秒样本任务验证到：
+   - 后端只拉起 1 个 sidecar 进程；
+   - 3 条任务在同一 sidecar 内串行完成；
+   - sidecar 在 15 秒空闲阈值后收到 `shutdown requested` 并成功退出。
+6. 已完成：已查到当前 CPU 利用率偏低的一个上游关键原因：
+   - `qwen_asr_gguf/inference/llama.py` 默认把 `n_threads` 设成 `cpu_count // 2`
+   - 在 `Intel N100 / 4C` 上，解码线程默认只吃 `2` 核
+   - 这与我们观察到“CPU 没完全打满”一致。
+7. 已完成：已记录“真并行多音频”的初步可行性判断：
+   - 现阶段不建议直接承诺。
+   - 上游导出的 Qwen3-ASR 代码里明确写了 `audio encoder do not support batch inference to keep precision`。
+   - 当前更现实、收益更高的路线是：先把 sidecar 常驻复用、线程数调优、必要时切 GPU 或更小模型。
+8. 待执行：如果下一轮继续优化吞吐，优先顺序建议为：
+   - 给本地 sidecar 增加可配置 `n_threads / n_threads_batch`
+   - 在当前机器上重新测 `RTF`
+   - 再评估是否要深改上游做“真正批内并行”
 
 ### 验收标准
 - `local_qwen` 连续任务不会每条都重新加载模型。

@@ -8,7 +8,7 @@ SQLite 持久层。
 */
 
 use chrono::{DateTime, Utc};
-use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{Column, Row, SqlitePool, sqlite::SqlitePoolOptions};
 use uuid::Uuid;
 
 use crate::{
@@ -43,6 +43,16 @@ pub struct TaskTransferUpdate {
 pub struct Repository {
     pool: SqlitePool,
 }
+
+const TASK_SELECT_COLUMNS: &str = r#"
+id, batch_id, segment_key, source, status, stage, semester, course_key,
+course_name, teacher_name, date, start_time, end_time, page_url, mp4_url,
+new_id, raw_title, attempt_count, last_error, uploaded_source_url,
+segment_markdown_path, segment_json_path, course_manifest_path, merged_markdown_path,
+transcript_text, transcript_json, started_at, completed_at, created_at, updated_at,
+progress_percent, transferred_bytes, total_bytes, rate_bytes_per_sec, eta_seconds,
+uploaded_source_url_saved_at, dashscope_task_id, dashscope_task_id_saved_at
+"#;
 
 impl Repository {
     pub async fn connect(db_url: &str) -> AppResult<Self> {
@@ -278,10 +288,12 @@ impl Repository {
     }
 
     pub async fn get_task(&self, task_id: &str) -> AppResult<TaskRecord> {
-        let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
-            .bind(task_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        let row = sqlx::query(&format!(
+            "SELECT {TASK_SELECT_COLUMNS} FROM tasks WHERE id = ?"
+        ))
+        .bind(task_id)
+        .fetch_optional(&self.pool)
+        .await?;
 
         match row {
             Some(row) => map_task_row(&row),
@@ -290,7 +302,7 @@ impl Repository {
     }
 
     pub async fn list_tasks(&self, query: &TaskListQuery) -> AppResult<Vec<TaskRecord>> {
-        let mut sql = String::from("SELECT * FROM tasks WHERE 1=1");
+        let mut sql = format!("SELECT {TASK_SELECT_COLUMNS} FROM tasks WHERE 1=1");
         let mut binds = Vec::new();
 
         if let Some(status) = &query.status {
@@ -697,7 +709,9 @@ impl Repository {
     }
 
     pub async fn list_tasks_by_course_key(&self, course_key: &str) -> AppResult<Vec<TaskRecord>> {
-        let rows = sqlx::query("SELECT * FROM tasks WHERE course_key = ? ORDER BY start_time ASC, new_id ASC, created_at ASC")
+        let rows = sqlx::query(&format!(
+            "SELECT {TASK_SELECT_COLUMNS} FROM tasks WHERE course_key = ? ORDER BY start_time ASC, new_id ASC, created_at ASC"
+        ))
             .bind(course_key)
             .fetch_all(&self.pool)
             .await?;
@@ -831,6 +845,45 @@ fn parse_optional_datetime(value: Option<String>) -> AppResult<Option<DateTime<U
     value.map(parse_datetime).transpose()
 }
 
+fn row_has_column(row: &sqlx::sqlite::SqliteRow, column_name: &str) -> bool {
+    row.columns()
+        .iter()
+        .any(|column| column.name() == column_name)
+}
+
+fn try_get_optional_string(
+    row: &sqlx::sqlite::SqliteRow,
+    column_name: &str,
+) -> AppResult<Option<String>> {
+    if !row_has_column(row, column_name) {
+        return Ok(None);
+    }
+    row.try_get::<Option<String>, _>(column_name)
+        .map_err(AppError::from)
+}
+
+fn try_get_optional_i64(
+    row: &sqlx::sqlite::SqliteRow,
+    column_name: &str,
+) -> AppResult<Option<i64>> {
+    if !row_has_column(row, column_name) {
+        return Ok(None);
+    }
+    row.try_get::<Option<i64>, _>(column_name)
+        .map_err(AppError::from)
+}
+
+fn try_get_optional_f64(
+    row: &sqlx::sqlite::SqliteRow,
+    column_name: &str,
+) -> AppResult<Option<f64>> {
+    if !row_has_column(row, column_name) {
+        return Ok(None);
+    }
+    row.try_get::<Option<f64>, _>(column_name)
+        .map_err(AppError::from)
+}
+
 fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
     Ok(TaskRecord {
         id: row.get("id"),
@@ -853,17 +906,15 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         attempt_count: row.get("attempt_count"),
         last_error: row.get("last_error"),
         uploaded_source_url: row.get("uploaded_source_url"),
-        uploaded_source_url_saved_at: parse_optional_datetime(
-            row.try_get::<Option<String>, _>("uploaded_source_url_saved_at")
-                .ok()
-                .flatten(),
-        )?,
-        dashscope_task_id: row.try_get("dashscope_task_id").ok().flatten(),
-        dashscope_task_id_saved_at: parse_optional_datetime(
-            row.try_get::<Option<String>, _>("dashscope_task_id_saved_at")
-                .ok()
-                .flatten(),
-        )?,
+        uploaded_source_url_saved_at: parse_optional_datetime(try_get_optional_string(
+            row,
+            "uploaded_source_url_saved_at",
+        )?)?,
+        dashscope_task_id: try_get_optional_string(row, "dashscope_task_id")?,
+        dashscope_task_id_saved_at: parse_optional_datetime(try_get_optional_string(
+            row,
+            "dashscope_task_id_saved_at",
+        )?)?,
         segment_markdown_path: row.get("segment_markdown_path"),
         segment_json_path: row.get("segment_json_path"),
         course_manifest_path: row.get("course_manifest_path"),
@@ -872,11 +923,11 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         transcript_json: row
             .get::<Option<String>, _>("transcript_json")
             .and_then(|value| serde_json::from_str(&value).ok()),
-        progress_percent: row.try_get("progress_percent").ok(),
-        transferred_bytes: row.try_get("transferred_bytes").ok(),
-        total_bytes: row.try_get("total_bytes").ok(),
-        rate_bytes_per_sec: row.try_get("rate_bytes_per_sec").ok(),
-        eta_seconds: row.try_get("eta_seconds").ok(),
+        progress_percent: try_get_optional_f64(row, "progress_percent")?,
+        transferred_bytes: try_get_optional_i64(row, "transferred_bytes")?,
+        total_bytes: try_get_optional_i64(row, "total_bytes")?,
+        rate_bytes_per_sec: try_get_optional_i64(row, "rate_bytes_per_sec")?,
+        eta_seconds: try_get_optional_i64(row, "eta_seconds")?,
         started_at: parse_optional_datetime(row.get("started_at"))?,
         completed_at: parse_optional_datetime(row.get("completed_at"))?,
         created_at: parse_datetime(row.get("created_at"))?,
