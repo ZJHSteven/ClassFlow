@@ -58,6 +58,18 @@ def build_common_arg_parser(description: str) -> argparse.ArgumentParser:
         default="CPU",
         help="ONNX 推理后端，默认 CPU",
     )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=0,
+        help="llama.cpp 解码线程数；0 表示沿用上游默认策略",
+    )
+    parser.add_argument(
+        "--threads-batch",
+        type=int,
+        default=0,
+        help="llama.cpp batch 线程数；0 表示沿用上游默认策略",
+    )
     return parser
 
 
@@ -195,12 +207,53 @@ def build_engine_from_args(args: argparse.Namespace) -> tuple[Any, Any, float]:
 
     from core.server.engines.qwen_asr_gguf.inference.asr import QwenASREngine
     from core.server.engines.qwen_asr_gguf.inference.audio import load_audio
+    from core.server.engines.qwen_asr_gguf.inference import llama
     from core.server.engines.qwen_asr_gguf.inference.schema import (
         ASREngineConfig,
         AlignerConfig,
     )
 
     load_started_at = time.time()
+    requested_threads = args.threads if args.threads > 0 else None
+    requested_threads_batch = args.threads_batch if args.threads_batch > 0 else None
+
+    if requested_threads is not None or requested_threads_batch is not None:
+        original_init = llama.LlamaContext.__init__
+
+        def patched_init(self, model, n_ctx=2048, n_batch=2048, n_ubatch=512, n_seq_max=1,
+                         embeddings=False, pooling_type=0, flash_attn=True,
+                         offload_kqv=True, no_perf=True, n_threads=None, n_threads_batch=None):
+            """
+            运行时覆盖 LlamaContext 线程参数。
+
+            这里不直接改上游源码，而是在 ClassFlow 的 sidecar 进程内临时注入：
+            1. 便于快速验证“2 核 vs 4 核”的真实收益；
+            2. 不会把服务器上的 CapsWriter 运行目录改成长期分叉版本；
+            3. 当环境变量保持 0 时，完全回到当前上游默认行为。
+            """
+
+            original_init(
+                self,
+                model,
+                n_ctx=n_ctx,
+                n_batch=n_batch,
+                n_ubatch=n_ubatch,
+                n_seq_max=n_seq_max,
+                embeddings=embeddings,
+                pooling_type=pooling_type,
+                flash_attn=flash_attn,
+                offload_kqv=offload_kqv,
+                no_perf=no_perf,
+                n_threads=requested_threads if requested_threads is not None else n_threads,
+                n_threads_batch=(
+                    requested_threads_batch
+                    if requested_threads_batch is not None
+                    else n_threads_batch
+                ),
+            )
+
+        llama.LlamaContext.__init__ = patched_init
+
     config = ASREngineConfig(
         model_dir=args.model_dir,
         encoder_frontend_fn="qwen3_asr_encoder_frontend.onnx",

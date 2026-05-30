@@ -680,6 +680,8 @@ mod tests {
             local_asr_model_dir: "/tmp/capswriter/models/qwen".to_string(),
             local_asr_aligner_dir: "/tmp/capswriter/models/aligner".to_string(),
             local_asr_concurrency: 1,
+            local_asr_threads: 0,
+            local_asr_threads_batch: 0,
             local_asr_idle_shutdown_secs: 1800,
             local_asr_start_timeout_secs: 120.0,
             local_asr_task_timeout_secs: 0.0,

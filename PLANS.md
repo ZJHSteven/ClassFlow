@@ -79,6 +79,7 @@
    - `CLASSFLOW_LOCAL_ASR_CONCURRENCY=1` 会让本地转写串行排队。
    - `CLASSFLOW_LOCAL_ASR_IDLE_SHUTDOWN_SECS` 目前只有配置项，没有接入真实生命周期逻辑，因此不会实现“空闲 N 分钟后再关”。
 18. 待执行：下一轮如果要优化真实可用性，优先级应放在“常驻 sidecar + 模型复用 + 空闲回收”，否则连续任务场景下会重复加载模型，并且 N100 上单节课耗时过长。
+19. 进行中：补充 `CLASSFLOW_LOCAL_ASR_THREADS / CLASSFLOW_LOCAL_ASR_THREADS_BATCH` 运行时参数，把 CapsWriter 默认 `n_threads=cpu_count/2` 的限制开放出来，并在 N100 上做 2 核/4 核对比测试。
 
 ## 2026-05-31 本地 ASR 常驻复用与队列验证 ExecPlan
 

@@ -110,6 +110,8 @@ npx wrangler whoami
 - `CLASSFLOW_LOCAL_ASR_MODEL_DIR`
 - `CLASSFLOW_LOCAL_ASR_ALIGNER_DIR`
 - `CLASSFLOW_LOCAL_ASR_CONCURRENCY`
+- `CLASSFLOW_LOCAL_ASR_THREADS`
+- `CLASSFLOW_LOCAL_ASR_THREADS_BATCH`
 - `CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS`
 
 当前这台机器已经验证过的真实值是：
@@ -122,6 +124,8 @@ CLASSFLOW_LOCAL_ASR_WORKDIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offlin
 CLASSFLOW_LOCAL_ASR_MODEL_DIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ASR/Qwen3-ASR-1.7B
 CLASSFLOW_LOCAL_ASR_ALIGNER_DIR=/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ForcedAligner/Qwen3-ForcedAligner-0.6B
 CLASSFLOW_LOCAL_ASR_CONCURRENCY=1
+CLASSFLOW_LOCAL_ASR_THREADS=0
+CLASSFLOW_LOCAL_ASR_THREADS_BATCH=0
 CLASSFLOW_LOCAL_ASR_IDLE_SHUTDOWN_SECS=1800
 CLASSFLOW_LOCAL_ASR_START_TIMEOUT_SECS=120
 CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0
@@ -129,10 +133,12 @@ CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0
 
 补充说明：
 
-- 当前第一阶段并没有把 `CapsWriter` 改造成常驻 sidecar，而是每个任务调用一次 [tools/local_asr/local_qwen_asr_once.py](/home/zjhsteven/ClassFlow/tools/local_asr/local_qwen_asr_once.py)。
+- 当前已经升级为“常驻 sidecar + 模型复用 + 空闲回收”模式；`CLASSFLOW_LOCAL_ASR_SCRIPT` 仍然可以写成 `local_qwen_asr_once.py`，后端会自动推导并拉起同目录下的 `local_qwen_asr_sidecar.py`。
 - `CLASSFLOW_LOCAL_ASR_WORKDIR` 指向的是当前已补齐 Linux 运行时的“运行目录”，不是 git 源码仓库。
 - 服务器上另有一份独立源码工作树 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src`，专门用于后续 fork 同步和 Linux 适配提交；不要把两者混用。
 - `CLASSFLOW_LOCAL_ASR_CONCURRENCY` 第一阶段建议固定为 `1`，避免多任务同时把 CPU 和内存打满。
+- `CLASSFLOW_LOCAL_ASR_THREADS=0` 表示沿用 CapsWriter 当前默认线程策略；在这台 `Intel N100 / 4 核` 机器上，默认会落到 `n_threads=2`。如果你要测试“2 核 vs 4 核”的性能差异，可以显式改成 `4`。
+- `CLASSFLOW_LOCAL_ASR_THREADS_BATCH=0` 表示沿用上游 batch 线程策略；如果只做最直接的 CPU 压测，通常先把它也改成 `4` 与主线程数保持一致即可。
 - `CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0` 表示不做固定总超时硬杀；当前 CPU 模式下 45 分钟课程的本地推理会明显慢于短样本冒烟，属于预期现象。
 
 ### 3.2 本地 ASR 运行前提

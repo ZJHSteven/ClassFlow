@@ -89,6 +89,8 @@ pub struct AppConfig {
     pub local_asr_model_dir: String,
     pub local_asr_aligner_dir: String,
     pub local_asr_concurrency: usize,
+    pub local_asr_threads: usize,
+    pub local_asr_threads_batch: usize,
     pub local_asr_idle_shutdown_secs: u64,
     pub local_asr_start_timeout_secs: f64,
     pub local_asr_task_timeout_secs: f64,
@@ -226,6 +228,8 @@ impl AppConfig {
                 "/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline/models/Qwen3-ForcedAligner/Qwen3-ForcedAligner-0.6B",
             ),
             local_asr_concurrency: env_or_parse("CLASSFLOW_LOCAL_ASR_CONCURRENCY", 1)?,
+            local_asr_threads: env_or_parse("CLASSFLOW_LOCAL_ASR_THREADS", 0)?,
+            local_asr_threads_batch: env_or_parse("CLASSFLOW_LOCAL_ASR_THREADS_BATCH", 0)?,
             local_asr_idle_shutdown_secs: env_or_parse(
                 "CLASSFLOW_LOCAL_ASR_IDLE_SHUTDOWN_SECS",
                 1800,
