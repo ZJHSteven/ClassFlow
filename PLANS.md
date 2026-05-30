@@ -62,11 +62,23 @@
    - `upstream -> https://github.com/HaujetZhao/CapsWriter-Offline.git`
    这样后续 Linux 适配改动与上游同步不再混在当前“运行时目录”里。
 14. 已完成：已把真实后端环境 `/etc/classflow/backend.env` 切到 `CLASSFLOW_ASR_PROVIDER=local_qwen`，并显式写入当前机器的 `CLASSFLOW_LOCAL_ASR_*` 路径；系统级 `classflow-backend.service` 已重启成功。
-15. 进行中：正在以真实课程片段 `task_id=9b7c24df-fc5d-43c6-9a9b-62b99b8674af` 做端到端冒烟。当前已确认：
-   - 下载视频成功进入 `transcribing` 阶段；
-   - 事件日志明确记录“当前使用本地 ASR，跳过云端音频上传阶段”；
-   - 后端真实 fork 出 `local_qwen_asr_once.py`，并正在对 `audio.wav` 执行本地 CPU 推理。
-16. 待执行：等真实课程冒烟完成后，补记最终结果（成功文本 / 失败原因 / 产物路径），并继续完善部署文档中的本地 ASR 专节。
+15. 已完成：真实课程片段 `task_id=9b7c24df-fc5d-43c6-9a9b-62b99b8674af` 端到端冒烟已经成功。
+   - 同源历史 DashScope 任务：`90a154be-9ee1-48fc-9e4b-449d629d18ee`
+   - 两者 `mp4_url` 完全相同，都是 `2026-05-29 13:30-14:15` 的同一节课，不是新的音频样本。
+   - 本地任务事件日志已确认“跳过云端音频上传阶段”并“开始执行本地 Qwen3 ASR 转写”。
+   - 本地任务成功产出 `segment.md / segment.json / course.md`，说明后续 ClassFlow 产物链路也已接通。
+16. 已完成：已记录这条真实任务的关键性能数据：
+   - 音频时长：`45` 分钟（`2700s`）
+   - 本地任务总耗时：约 `7963.78s`（`2h 12m 44s`）
+   - 其中本地推理耗时：约 `7835.59s`
+   - 本地推理 RTF：约 `2.90`
+   - 端到端总 RTF：约 `2.95`
+   - 同源 DashScope 历史任务总耗时：约 `350.32s`（`5m 50s`）
+17. 已完成：已确认当前实现不是“常驻 sidecar + 空闲回收”。
+   - 现在的实现仍然是“每个任务启动一次 `local_qwen_asr_once.py`，任务结束后进程退出”。
+   - `CLASSFLOW_LOCAL_ASR_CONCURRENCY=1` 会让本地转写串行排队。
+   - `CLASSFLOW_LOCAL_ASR_IDLE_SHUTDOWN_SECS` 目前只有配置项，没有接入真实生命周期逻辑，因此不会实现“空闲 N 分钟后再关”。
+18. 待执行：下一轮如果要优化真实可用性，优先级应放在“常驻 sidecar + 模型复用 + 空闲回收”，否则连续任务场景下会重复加载模型，并且 N100 上单节课耗时过长。
 
 ### 验收标准
 - `CLASSFLOW_ASR_PROVIDER=dashscope` 时，现有测试与行为不回退。
