@@ -57,6 +57,28 @@
   - `CapsWriter` 的 `LlamaContext` 默认会把 `n_threads` 设为 `cpu_count / 2`；
   - 在这台 `Intel N100 / 4 核` 机器上，默认就是 `2` 线程；
   - `ClassFlow` 现已新增 `CLASSFLOW_LOCAL_ASR_THREADS / CLASSFLOW_LOCAL_ASR_THREADS_BATCH`，准备做 `2 核 vs 4 核` 实测对比。
+- 已完成：`CLASSFLOW_LOCAL_ASR_THREADS / CLASSFLOW_LOCAL_ASR_THREADS_BATCH` 已完成本机对比测试，当前结论是“把线程改到 4 并没有带来显著收益”。
+  - 测试样本：从真实课程 `audio.wav` 开头裁出的 `20s` 片段 `/tmp/classflow_local_asr_bench_20s_start.wav`
+  - `threads=0`（沿用 CapsWriter 默认）：
+    - 总耗时 `44.96s`
+    - `/usr/bin/time` 总 CPU `341%`
+    - 采样平均 CPU `264.8%`，峰值 CPU `342%`
+    - 峰值 RSS `4496760 KB`（约 `4.29 GiB`）
+    - 结果文本：`嗯。`
+  - `threads=4, threads_batch=4`：
+    - 总耗时 `44.35s`
+    - `/usr/bin/time` 总 CPU `351%`
+    - 采样平均 CPU `280.8%`，峰值 CPU `353%`
+    - 峰值 RSS `4500648 KB`（约 `4.29 GiB`）
+    - 结果文本：`嗯。`
+  - 结论：
+    - 同一片段下总耗时只缩短了约 `0.61s`，提升约 `1.4%`，可以视为基本无显著收益。
+    - 内存几乎不变，CPU 只略高一点，说明当前瓶颈不只是 `llama.cpp` 解码线程数。
+    - 更重的耗时仍集中在 `prefill + encode + align`，单纯把解码线程从默认策略拉满不能根治当前 N100 上的慢速问题。
+- 已记录：一次 `60s` 中段样本 `/tmp/classflow_local_asr_bench_60s.wav` 在本地测试中返回空文本，不适合作为识别质量对比样本；但它的资源占用仍给了一个侧面参考：
+  - 默认线程下约 `102.10s` 才结束，
+  - `/usr/bin/time` CPU 约 `373%`，
+  - 峰值 RSS 约 `4586748 KB`（约 `4.37 GiB`）。
 - 已确认：当前这台机器并没有真正启用本地 GPU 推理路径。
   - `onnxruntime.get_available_providers()` 结果是 `['AzureExecutionProvider', 'CPUExecutionProvider']`；
   - 当前 `libllama.so` 也没有可见的 CUDA / Vulkan 等 GPU 后端；
@@ -218,6 +240,7 @@
 - 决策AA：任务详情接口不再把 `transcript_json` / `transcript_text` 这类前端当前不用的大字段内联回浏览器，但 `task.json` 下载快照仍继续保留完整原始任务记录。（原因：真实样本已证明这两个字段会把一次详情请求膨胀到 200KB 级别，直接拖慢点击详情；而下载快照仍需要保真。）
 - 决策AB：任务台首屏应先把列表稳稳拿下来，再补建 SSE，而不是首帧就让“列表 HTTP + SSE”同时抢链路；列表首次失败也不应立刻把页面打成最终错误态，而要先做有限次短重试。（原因：现网首屏 502 与 SSE 首连偶发失败都集中出现在首次打开页面的几秒内，这个时段最值得优先减压与加兜底。）
 - 决策AC：本地 ASR 的线程调优先通过 `ClassFlow` sidecar 运行时参数覆盖完成，不立即改写服务器上的 `CapsWriter` 运行目录源码。（原因：当前最重要的是快速验证 `2 核 vs 4 核` 的真实收益；运行时注入更易回滚，也不会把运行目录变成长期分叉版本。）
+- 决策AD：在线上默认配置里先不把 `CLASSFLOW_LOCAL_ASR_THREADS` 强行改成 `4`。（原因：在 N100 上的实测提升只有约 `1.4%`，不足以证明值得为了这点收益去压更多 CPU 给同机其他业务。）
 - 决策W：这台校园机的后端常驻方式正式改为系统级 `systemd`，不再继续依赖 `systemd --user + linger` 作为最终方案。（原因：项目目标是“开机即在线、与 SSH / VS Code 会话彻底解耦”，系统级服务更符合守护进程的长期形态。）
 - 决策X：当前系统级服务先继续以 `zjhsteven` 身份运行，并沿用既有的 `/home/zjhsteven/ClassFlow` 与 `/home/zjhsteven/.local/state/classflow/*` 路径，不额外迁移到 `/opt/classflow` 或单独 `classflow` 用户。（原因：本轮重点是先消除用户会话耦合风险；沿用现有数据目录可以把迁移风险压到最低。）
 - 决策Y：Cloudflare Access 的收口顺序采用“先给前端入口和自动化准备好 Service Token，再考虑把后端 Tunnel 域名也纳入 Access”的渐进式方案。（原因：当前 Worker 还只会带应用自己的 Bearer Token，如果后端域名先被 Access 挡住，前端代理会立刻失效。）
@@ -248,6 +271,7 @@
 - 坑21：服务器上的 `CapsWriter-Offline` 当前是 Windows 打包目录，不是 Linux 成品环境；如果直接把它的 `internal/*.pyd`、`core/server/engines/llama/bin/*.dll` 当成 Linux 依赖来跑，导入阶段就会失败。正确做法是复用源码与模型，Linux 侧自己准备 `venv + pip + libllama.so/libggml.so` 等运行时。
 - 坑22：`CapsWriter` 当前 `QwenASREngine.transcribe()` 的默认参数会把 `duration=0.0` 传到 `load_audio()`；而当前实现里 `duration=0.0` 会被换算成 `frames=0`，最终读出空音频，表现为“模型加载正常、耗时极短、结果文本为空”。复现时直接调用默认 `transcribe(audio_file, language='Chinese')` 即可看到；规避方式是显式传 `duration=None`，或绕开这个包装层，自己先 `load_audio()` 再调用 `asr()`。
 - 坑23：当前 `CapsWriter` CPU 路线的 `llama.cpp` 线程默认值不是“用满所有核”，而是 `n_threads = cpu_count / 2`。在 4 核 N100 上这会自然落到 2 线程，所以如果看到 CPU 只有两三核在跑，不一定是队列卡死，更可能只是默认线程策略偏保守。
+- 坑24：单看 `n_threads` 很容易误判瓶颈位置。当前这条 Qwen3-ASR CPU 路线里，`encode_time / prefill_time / align_time` 也都很重，所以就算把 `llama.cpp` 线程数调到 `4`，整段转写总耗时也可能几乎不变。
 - 坑23：服务器上当前真正给 ClassFlow 调用的 `CapsWriter` 目录不是 git 仓库，而是你上传的解压运行目录 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline`；如果后续要做 fork 同步或提交 Linux 适配，应该在单独的源码工作树 `/home/zjhsteven/CapsWriter-Offline/CapsWriter-Offline-src` 上操作，不要把运行目录误当成 git 仓库。
 - 坑24：`CLASSFLOW_LOCAL_ASR_IDLE_SHUTDOWN_SECS` 现在只是配置项，不代表已经实现“空闲 30 分钟关闭模型”。当前 `LocalQwenAsrProvider` 仍然是每个任务 `Command::new(...).output()` 启一次脚本、跑完即退出；如果只看 env 名字，很容易误以为已经有常驻 sidecar。
 - 坑25：如果本地 sidecar 的 HTTP client 写死较短总超时（例如 30 秒），在 `N100 + CPU` 上哪怕 10 秒短音频也可能被误杀成“error sending request for url (http://127.0.0.1:PORT/transcribe)”。当前已经改成：只在显式配置 `CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS > 0` 时才做总超时。
