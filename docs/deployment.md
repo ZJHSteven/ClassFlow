@@ -139,6 +139,7 @@ CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0
 - `CLASSFLOW_LOCAL_ASR_CONCURRENCY` 第一阶段建议固定为 `1`，避免多任务同时把 CPU 和内存打满。
 - `CLASSFLOW_LOCAL_ASR_THREADS=0` 表示沿用 CapsWriter 当前默认线程策略；在这台 `Intel N100 / 4 核` 机器上，默认会落到 `n_threads=2`。如果你要测试“2 核 vs 4 核”的性能差异，可以显式改成 `4`。
 - `CLASSFLOW_LOCAL_ASR_THREADS_BATCH=0` 表示沿用上游 batch 线程策略；如果只做最直接的 CPU 压测，通常先把它也改成 `4` 与主线程数保持一致即可。
+- 当前 `ClassFlow` 这条本地 ASR 链路默认已经关闭 `Force Aligner`，因此不会再产出真实词级时间戳；`CLASSFLOW_LOCAL_ASR_ALIGNER_DIR` 目前只是为了兼容既有配置保留，运行时不再参与推理。
 - `CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0` 表示不做固定总超时硬杀；当前 CPU 模式下 45 分钟课程的本地推理会明显慢于短样本冒烟，属于预期现象。
 
 ### 3.2 本地 ASR 运行前提

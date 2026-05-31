@@ -14,6 +14,8 @@
    - 调用 `engine.asr()`
    - 输出稳定 JSON
 3. 如果两份脚本各自复制一套实现，后续修 bug 时极容易出现“一边修了，另一边忘了”的问题。
+4. 当前 `ClassFlow` 这条本地 ASR 链路只关心“稳定拿到纯文本”，不需要词级时间戳。
+   因此这里默认关闭 Force Aligner，优先把推理时间压下来。
 
 因此这里保持“公共逻辑在一个文件，入口脚本只负责各自的运行方式”。
 """
@@ -152,17 +154,34 @@ def convert_alignment(alignment: Any) -> list[dict[str, Any]]:
     ]
 
 
+def fallback_tokens_from_text(text: str) -> list[str]:
+    """
+    在关闭对齐器时，为输出结构补一个最保守的 token 兜底。
+
+    这里不再伪造时间戳，也不尝试做复杂分词，只返回“整段文本作为一个 token”：
+
+    1. 能保持后端字段结构稳定；
+    2. 不会制造伪精度；
+    3. 方便后续若某些消费方只判空数组，至少仍能拿到非空文本载荷。
+    """
+
+    stripped = text.strip()
+    return [stripped] if stripped else []
+
+
 def normalize_result(result: Any, load_seconds: float, transcribe_seconds: float) -> dict[str, Any]:
     """
     将上游结果对象规整成 Rust 与 sidecar 都容易消费的稳定 JSON。
     """
 
     timestamps = convert_alignment(result.alignment)
+    text = result.text or ""
+    tokens = [item["text"] for item in timestamps] if timestamps else fallback_tokens_from_text(text)
     return {
         "ok": True,
         "provider": "local_qwen",
-        "text": result.text,
-        "tokens": [item["text"] for item in timestamps],
+        "text": text,
+        "tokens": tokens,
         "timestamps": timestamps,
         "duration_seconds": sum(
             max(0.0, item["end_time"] - item["start_time"]) for item in timestamps
@@ -173,7 +192,7 @@ def normalize_result(result: Any, load_seconds: float, transcribe_seconds: float
             **(result.performance or {}),
         },
         "raw": {
-            "text": result.text,
+            "text": text,
             "alignment": timestamps,
             "performance": result.performance,
         },
@@ -208,10 +227,7 @@ def build_engine_from_args(args: argparse.Namespace) -> tuple[Any, Any, float]:
     from core.server.engines.qwen_asr_gguf.inference.asr import QwenASREngine
     from core.server.engines.qwen_asr_gguf.inference.audio import load_audio
     from core.server.engines.qwen_asr_gguf.inference import llama
-    from core.server.engines.qwen_asr_gguf.inference.schema import (
-        ASREngineConfig,
-        AlignerConfig,
-    )
+    from core.server.engines.qwen_asr_gguf.inference.schema import ASREngineConfig
 
     load_started_at = time.time()
     requested_threads = args.threads if args.threads > 0 else None
@@ -264,16 +280,8 @@ def build_engine_from_args(args: argparse.Namespace) -> tuple[Any, Any, float]:
         chunk_size=args.chunk_size,
         memory_num=args.memory_num,
         verbose=False,
-        enable_aligner=True,
-        align_config=AlignerConfig(
-            model_dir=args.aligner_dir,
-            encoder_frontend_fn="qwen3_aligner_encoder_frontend.int4.onnx",
-            encoder_backend_fn="qwen3_aligner_encoder_backend.int4.onnx",
-            llm_fn="qwen3_aligner_llm.q5_k.gguf",
-            onnx_provider=args.onnx_provider,
-            llm_use_gpu=False,
-            dml_pad_to=max(1, int(args.chunk_size)),
-        ),
+        enable_aligner=False,
+        align_config=None,
     )
     engine = QwenASREngine(config)
     load_seconds = time.time() - load_started_at

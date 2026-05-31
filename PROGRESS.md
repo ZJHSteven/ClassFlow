@@ -83,6 +83,24 @@
   - `onnxruntime.get_available_providers()` 结果是 `['AzureExecutionProvider', 'CPUExecutionProvider']`；
   - 当前 `libllama.so` 也没有可见的 CUDA / Vulkan 等 GPU 后端；
   - 因此当前本地 ASR 的性能瓶颈主要仍在 CPU 推理，不存在“误开弱 GPU offload 反而拖慢”的现象。
+- 已完成：已按当前业务目标关闭本地 ASR 的 `Force Aligner`。
+  - 关闭位置：`tools/local_asr/local_qwen_asr_common.py`
+  - 当前本地 ASR 默认只产出纯文本，不再计算词级时间戳。
+  - 输出兼容策略：
+    - `timestamps` 固定为空数组；
+    - `tokens` 在无对齐模式下回退为“整段文本一个 token”；
+    - `duration_seconds=0`；
+    - `align_time=0.0`。
+  - 关闭后的真实冒烟样本：
+    - 输入：`/tmp/classflow_local_asr_smoke_10s.wav`
+    - 输出文本：`嗯，帮我干一个小事情啊。`
+    - `load_seconds≈4.72s`
+    - `transcribe_seconds≈29.51s`
+    - `encode_time≈4.88s`
+    - `prefill_time≈23.59s`
+    - `decode_time≈0.98s`
+    - `align_time=0.0`
+  - 说明：这一轮已经确认“关掉时间对齐后，后端标准化、JSON 输出、Rust 测试”都没有被打坏。
 - 已完成：后端接入 sidecar 时顺手修复了一个误杀问题：
   - 旧实现给本地 sidecar HTTP client 写死了 `30s` 总超时；
   - 在 N100 CPU 上，连 10 秒样本都可能超过 30 秒；
@@ -241,6 +259,7 @@
 - 决策AB：任务台首屏应先把列表稳稳拿下来，再补建 SSE，而不是首帧就让“列表 HTTP + SSE”同时抢链路；列表首次失败也不应立刻把页面打成最终错误态，而要先做有限次短重试。（原因：现网首屏 502 与 SSE 首连偶发失败都集中出现在首次打开页面的几秒内，这个时段最值得优先减压与加兜底。）
 - 决策AC：本地 ASR 的线程调优先通过 `ClassFlow` sidecar 运行时参数覆盖完成，不立即改写服务器上的 `CapsWriter` 运行目录源码。（原因：当前最重要的是快速验证 `2 核 vs 4 核` 的真实收益；运行时注入更易回滚，也不会把运行目录变成长期分叉版本。）
 - 决策AD：在线上默认配置里先不把 `CLASSFLOW_LOCAL_ASR_THREADS` 强行改成 `4`。（原因：在 N100 上的实测提升只有约 `1.4%`，不足以证明值得为了这点收益去压更多 CPU 给同机其他业务。）
+- 决策AE：当前 `ClassFlow` 本地 ASR 默认关闭 `Force Aligner`，优先服务“拿到稳定文本继续后处理”的主目标。（原因：现阶段不需要词级时间戳，而对齐阶段本身就占掉一段可观耗时，先关掉是最直接的吞吐优化。）
 - 决策W：这台校园机的后端常驻方式正式改为系统级 `systemd`，不再继续依赖 `systemd --user + linger` 作为最终方案。（原因：项目目标是“开机即在线、与 SSH / VS Code 会话彻底解耦”，系统级服务更符合守护进程的长期形态。）
 - 决策X：当前系统级服务先继续以 `zjhsteven` 身份运行，并沿用既有的 `/home/zjhsteven/ClassFlow` 与 `/home/zjhsteven/.local/state/classflow/*` 路径，不额外迁移到 `/opt/classflow` 或单独 `classflow` 用户。（原因：本轮重点是先消除用户会话耦合风险；沿用现有数据目录可以把迁移风险压到最低。）
 - 决策Y：Cloudflare Access 的收口顺序采用“先给前端入口和自动化准备好 Service Token，再考虑把后端 Tunnel 域名也纳入 Access”的渐进式方案。（原因：当前 Worker 还只会带应用自己的 Bearer Token，如果后端域名先被 Access 挡住，前端代理会立刻失效。）
