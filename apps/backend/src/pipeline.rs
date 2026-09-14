@@ -1167,10 +1167,18 @@ fn pick_string(root: &Value, paths: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::{
-        os::unix::process::ExitStatusExt,
         sync::{Arc, Mutex},
         time::Duration,
     };
+
+    // `ExitStatus::from_raw` 由平台扩展 trait 提供，而不是 `ExitStatus` 自身的
+    // 跨平台固有方法。CampusBox 是 Linux，因此早期测试只导入了 Unix 版本；
+    // Windows 开发机编译测试时会直接失败。这里按目标平台分别导入同名 trait，
+    // 让下面的测试逻辑保持不变，同时保证 Linux / Windows 都能编译运行。
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
 
     use async_trait::async_trait;
     use serde_json::json;

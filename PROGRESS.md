@@ -1,6 +1,7 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 已完成：`2026-09-14` 已将 CampusBox 上领先 `origin/main` 的 13 个本地 ASR/provider 提交回收至 Windows 主工作区；CampusBox/Linux 全量后端测试通过。同步时发现测试模块硬编码 Unix `ExitStatusExt`，现已改为按 `unix/windows` 条件导入，恢复 Windows 开发机的跨平台测试能力。
 - 现状：`2026-05-31` 本地 ASR 第一阶段代码接入和真实课程端到端冒烟都已完成；线上后端环境已经切到 `CLASSFLOW_ASR_PROVIDER=local_qwen`，并确认真实任务不再走 DashScope 上传与提交链路。
 - 已完成：Linux 侧本地 Qwen3 ASR 独立冒烟已经跑通。当前机器已从 `llama.cpp` `b7798` 源码编出 Linux 版 `libggml*.so / libllama.so`，并接到 `CapsWriter` 的 `qwen_asr_gguf/inference/bin/`；Python 虚拟环境位于 `/home/zjhsteven/CapsWriter-Offline/.venv`。
 - 已完成：真实中文音频样本 `CapsWriter-Offline/CapsWriter-Offline/2026/05/assets/(20260529-195742)嗯，帮我干一个小事情啊！.mp3` 已在本机 CPU 模式下得到非空转写结果：`嗯，帮我干一个小事情啊。`，单次总耗时约 `32.6` 秒。
