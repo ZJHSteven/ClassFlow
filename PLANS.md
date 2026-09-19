@@ -492,3 +492,21 @@
 - 已完成：已把新的 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` 写入 Worker secret，并重新部署到 `https://classflow-web.zhangjiahe0830.workers.dev`，当前版本号 `fe03c7e2-42ff-4a06-9e6d-93996c9db66c`。
 - 已完成：现网探针已确认 `classflow-web.zhangjiahe0830.workers.dev` 现在也会被 Cloudflare Access 重定向到登录页，说明 `workers.dev` 入口已不再匿名裸奔。
 - 已完成：带真实 Service Token 访问 `classflow.zjhstudio.com` 与 `classflow-web.zhangjiahe0830.workers.dev` 仍返回 `302`，且返回元数据里 `service_token_status=false`；这说明 Token 虽已创建，但尚未被挂到对应 Access 应用的 `Service Auth` 策略中，或挂到了错误应用。
+
+## 2026-09-19 SmartClass 登录态过夜保活实验 ExecPlan
+
+### 目标
+- 用当前 Chrome 中已经由用户本人登录的 SmartClass 会话做一晚上的低频保活实验，不复制、不落盘任何 Cookie 值或认证 token。
+- 每 10 分钟只访问一次正常的 `GET /UserSpace/CourseList.aspx` 作为心跳，再调用页面本身使用的 `GetCurrentUser` 接口判断认证是否仍有效。
+- 记录 `PowerCreatorCMSAuthenticationID`、`OnlineUser`、`platform_token` 的名称、会话属性与过期时间元数据，但绝不记录 Cookie 值。
+- 实验默认持续 12 小时，并临时阻止 Windows 系统睡眠（允许屏幕关闭），避免“机器睡着”把会话超时实验污染掉。
+
+### 判定方法
+1. 若连续 12 小时 `authenticated=true`，说明“10 分钟一次正常课程列表请求”至少能把当前登录态稳定维持过夜；后续再单独做无心跳对照，区分它究竟是保活成功还是登录本来就足够长。
+2. 若在固定时间突然从 `authenticated=true` 变为 `false`，而浏览器与网络仍正常，则优先怀疑服务端存在绝对登录寿命或其他不可由心跳续期的限制。
+3. 若同时出现浏览器不可连接、网络错误或长时间日志空档，则不能把该次失败直接归因于 SmartClass 会话机制。
+
+### 实现
+- 新增 `tools/smartclass/session_keepalive_probe.ps1`。
+- 日志写入仓库根目录的 `tmp/`（已被 `.gitignore` 忽略），使用 JSONL 逐次落盘；实验结束另写 summary JSON。
+- 先用单次模式做烟雾测试，再以隐藏 PowerShell 进程启动 12 小时正式实验。
