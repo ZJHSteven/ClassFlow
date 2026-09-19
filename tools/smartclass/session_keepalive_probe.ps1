@@ -82,11 +82,15 @@ function Invoke-BrowserHarness {
         [string]$SessionId = ''
     )
 
+    # browser-harness-js 在 Windows 上实际是一个 .cmd 包装器。
+    # 多行 JavaScript 如果直接作为命令行参数传给 .cmd，会再次经过 cmd.exe 的引号/换行解析，
+    # 很容易出现“命令成功退出但脚本内容被吃掉”的假成功。CLI 原生支持从 stdin 读取脚本，
+    # 因此这里统一走管道输入，让 PowerShell 不再参与 JavaScript 内容的命令行转义。
     if ([string]::IsNullOrWhiteSpace($SessionId)) {
-        $output = & $browserHarness $Code 2>&1
+        $output = $Code | & $browserHarness 2>&1
     }
     else {
-        $output = & $browserHarness '--session' $SessionId $Code 2>&1
+        $output = $Code | & $browserHarness '--session' $SessionId 2>&1
     }
 
     $exitCode = $LASTEXITCODE
