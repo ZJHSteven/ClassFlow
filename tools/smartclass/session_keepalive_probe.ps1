@@ -60,8 +60,10 @@ public static class ClassFlowPowerState {
 }
 '@
 
-$ES_CONTINUOUS = 0x80000000
-$ES_SYSTEM_REQUIRED = 0x00000001
+# PowerShell 会把十六进制 0x80000000 默认解释成有符号 Int32，随后做 -bor 时会得到负数。
+# Win32 SetThreadExecutionState 的参数却是 UInt32，因此这里显式按无符号十六进制解析，避免溢出。
+$ES_CONTINUOUS = [uint32]::Parse('80000000', [System.Globalization.NumberStyles]::HexNumber)
+$ES_SYSTEM_REQUIRED = [uint32]1
 
 function Invoke-BrowserHarness {
     <#
@@ -297,7 +299,8 @@ Write-JsonLine ([ordered]@{
     pid              = $PID
 })
 
-[void][ClassFlowPowerState]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED)
+$keepAwakeFlags = [uint32]([uint64]$ES_CONTINUOUS -bor [uint64]$ES_SYSTEM_REQUIRED)
+[void][ClassFlowPowerState]::SetThreadExecutionState($keepAwakeFlags)
 
 try {
     while ((Get-Date) -lt $deadline) {
