@@ -325,3 +325,4 @@
 - 注意：这一晚属于“保活组”实验；即使整晚不掉，也只能证明该策略在实际使用中能维持至少一晚，不能单凭这一组证明“不发心跳时一定会掉”。
 - 烟雾测试修正：首次运行在 `SetThreadExecutionState` 前即因 PowerShell 把 `0x80000000` 按有符号 `Int32` 处理而溢出；现已改为显式 `UInt32` 标志位。该次失败发生在正式探测循环之前，没有产生有效会话实验数据。
 - 烟雾测试修正：第二次运行发现 Windows 下 `browser-harness-js.cmd` 不适合把多行 JavaScript 直接作为命令行参数传入，参数会被 `cmd.exe` 二次解析而返回空输出；现统一改为通过 stdin 把脚本交给 `browser-harness-js`，避免命令行转义污染。
+- 正式实验已于 `2026-09-19 23:43:53 +08:00` 启动：PID `18160`，间隔 `10` 分钟，计划持续 `12` 小时；日志为 `tmp/smartclass-session-overnight-20260919.jsonl`。第一轮正式探针 `authenticated=true`、课程列表心跳 `HTTP 200`，关键 Cookie 日志仅包含名称/属性/过期时间元数据，没有 Cookie value。
