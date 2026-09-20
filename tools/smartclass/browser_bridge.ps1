@@ -200,8 +200,10 @@ return result.result.value;
     if ([string]::IsNullOrWhiteSpace($json)) {
         throw 'SmartClass 页面返回了空结果'
     }
-    # 先解析再重新序列化，可以在桥层尽早发现页面返回的不是合法 JSON。
-    return (($json | ConvertFrom-Json) | ConvertTo-Json -Depth 20 -Compress)
+    # 页面内部已经使用 JSON.stringify() 生成严格 JSON。这里不要再让 Windows PowerShell
+    # 对包含中文课程名的字符串做一次 ConvertFrom-Json/ConvertTo-Json 往返，否则旧控制台
+    # 代码页可能在二次解析前污染 UTF-8 文本。直接原样转发给 Rust/调用方最稳。
+    return $json
 }
 
 function Write-JsonResponse {
