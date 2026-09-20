@@ -559,3 +559,33 @@
 - Cloudflare：同一 tunnel token 是同一 Tunnel UUID 的 replica 凭据，不是“账号通用 token”；N100+N1 同 token 可以同时在线，但会作为同一 tunnel 的 replicas，不能保证请求落到哪一台，因而不适合确定性 A/B。
 - FRP：认证 token 可以复用；但当前 N100/N1 配置复制了相同 proxy name + remotePort，且没有 loadBalancer group。两台原样同时上线会发生代理注册/端口冲突；若要 HA 必须显式 loadBalancer group，若要 A/B 则使用独立 proxy 名和 remotePort。
 - 并行一周的目标拓扑是四个可选客户端节点：`n100-frp / n100-cf / n1-frp / n1-cf`。FRP 分配独立远端端口；Cloudflare 为两台主机使用不同 Tunnel UUID/hostname，避免 replica 随机落点和 SSH host-key 混用。
+
+## 2026-09-20 SmartClass 自动课程采集 Collector ExecPlan
+
+### 目标
+- 把当前已经验证稳定的 SmartClass 登录态保活逻辑正式接入 ClassFlow，使后端能每 10 分钟自动发现新录播并复用现有 intake/任务流水线处理。
+- 不新增第二套课程数据库；以现有 SQLite `tasks.segment_key UNIQUE` + `INSERT OR IGNORE` 作为唯一 overlap/去重真相源。
+- 首次启用时支持向历史时间窗口回扫，补齐最近约两周未进入 ClassFlow 的课程；后续轮询只增量发现新课。
+- 标准 SmartClass VOD 优先由课程列表返回的 `Cover` 路径推导同目录 `VGA.mp4`，不需要逐个打开播放页；异常/CloudVod 条目保留为后续 fallback，不做暴力枚举。
+
+### 已确定的设计
+1. Collector 作为 Rust 后端内部长期任务运行，与 worker 共用同一 `Repository` 和 `AppState`。
+2. 默认轮询间隔 10 分钟，可用环境变量关闭或调整；一次轮询只做一次课程列表查询，不加载图片/视频资源。
+3. 历史回扫采用“时间窗口 + overlap 停止”而不是新建课程表：从当前日期向过去查询、正规化为现有 `IntakeItem`、调用现有 `create_batch_with_tasks()`，由 `segment_key` 唯一约束负责幂等。
+4. 认证凭据不写入 ClassFlow 数据库；Collector 的会话提供方式与运行位置解耦，优先使用受限的本地会话桥接/浏览器 profile，而不是把 HttpOnly Cookie 明文复制到配置文件。
+5. 登录失效时只记录并退避，不高频重试；恢复登录后自动继续扫描。
+
+### 实施步骤
+1. 从当前登录页面核对 `GetMyVideoList` 的真实参数、分页字段和返回结构，确认是否需要逐页还是仅日期窗口。
+2. 扩展 `AppConfig`：Collector 开关、轮询间隔、历史回扫天数、SmartClass 基础地址、会话桥接地址/超时等。
+3. 新增 `smartclass/` 模块：API DTO、列表拉取、Cover -> VOD URL 正规化、日期/教师/课程字段映射。
+4. 新增 repository 批量 existence/overlap 辅助接口（若现有 intake 返回信息不足），但不建立新的课程持久化表。
+5. 在 `app.rs` 启动 Collector background loop，复用 `create_batch_with_tasks()` 入队；保证 Collector 异常不会拖垮 HTTP 服务。
+6. 增加单元/集成测试：分页/窗口、重复条目、历史补录、登录失效、502、空列表、异常 Cover、标准 VOD 推导。
+7. 跑 `cargo fmt --check`、`cargo check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test`。
+8. 核对 N100/N1 的最新部署状态；先在 N100 测试环境用当前有效登录态跑一次真实列表抓取与补录，再决定正式迁移到 N1。
+
+### 登录寿命实验改进
+- 同一服务端 Session 的多个 10/20/30/40 分钟探针不能视为独立并行实验，因为任一探针可能刷新同一个服务端会话。
+- 真并行实验必须使用彼此独立登录得到的服务端 Session/profile；后续实验工具应支持多个独立 Chrome profile。
+- 在只有一个登录态时，优先使用指数退避寻找 idle-timeout 量级：10 -> 20 -> 40 -> 80 -> 160 分钟；每轮成功后再加倍，失败后在上下界之间二分，比逐个固定间隔跑 24 小时更高效。
