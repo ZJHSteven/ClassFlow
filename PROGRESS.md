@@ -326,3 +326,14 @@
 - 烟雾测试修正：首次运行在 `SetThreadExecutionState` 前即因 PowerShell 把 `0x80000000` 按有符号 `Int32` 处理而溢出；现已改为显式 `UInt32` 标志位。该次失败发生在正式探测循环之前，没有产生有效会话实验数据。
 - 烟雾测试修正：第二次运行发现 Windows 下 `browser-harness-js.cmd` 不适合把多行 JavaScript 直接作为命令行参数传入，参数会被 `cmd.exe` 二次解析而返回空输出；现统一改为通过 stdin 把脚本交给 `browser-harness-js`，避免命令行转义污染。
 - 正式实验已于 `2026-09-19 23:43:53 +08:00` 启动：PID `18160`，间隔 `10` 分钟，计划持续 `12` 小时；日志为 `tmp/smartclass-session-overnight-20260919.jsonl`。第一轮正式探针 `authenticated=true`、课程列表心跳 `HTTP 200`，关键 Cookie 日志仅包含名称/属性/过期时间元数据，没有 Cookie value。
+
+## 2026-09-20 N1 远端 CapsWriter / 媒体生命周期重构
+- 已确认：重新 `git fetch origin --prune` 后，本地 `main` 相对 `origin/main` 为 `ahead 4 / behind 0`；`campusbox-snapshot-20260914` 相对 main 没有任何独有提交，所以本地 main 已包含此前从 N100 抢救回来的代码。
+- 已从 ChatGPT Archive SQLite 找回 2026-09-14 的迁移结论：对 8 个真实 SmartClass 片段 `ffprobe` 后，音轨全部为 `AAC / 8000Hz / mono / ~47.6kbps`，45 分钟压缩音轨约 `15~16MiB`。最终 checkpoint 方案明确为“原 AAC remux 到 M4A”，不是 WAV/FLAC。
+- 已确认当前代码尚未实现该方案：worker 仍使用 `source.mp4 + audio.wav`，FFmpeg 固定转 `16kHz/mono/pcm_s16le`；只有整任务成功时才 `cleanup_dir(work_dir)`，失败会长期同时残留 MP4 与 WAV。
+- 已确认当前 `AsrProvider` 抽象已经可复用，但 `local_qwen` 是同机 sidecar：会在 ClassFlow 主机启动 Python/CapsWriter 并向 `127.0.0.1` 发送本地音频路径，不适用于 N1 -> Windows 跨机 ASR。
+- 已确认 Windows 侧并非从零开始：`D:\Workspace\CapsWriterGateway` 的 `capswriter-asr` CLI 已实现且 7 项测试通过；更进一步的 `zjh/mic-preempt-headless-api` CapsWriter worktree 已实现 Bearer 鉴权的异步 HTTP 文件上传 API，内部继续复用 FileTranscriber/WS，并保持 `source=file`。
+- 已确认当前 Windows 6016 生产 CapsWriter 已具备 `mic > file` 抢占能力；开发 worktree 还包含 headless API 与真实抢占测试，因此 ClassFlow 远端任务应固定保持 `source=file`、文本任务默认不请求 timestamps。
+- 已确认 ARM64 构建链可用：迁移仓库私有目录中的便携 Zig + `cargo-zigbuild` 已成功生成约 22.7MB 的 ARM64 backend；该二进制来自重构前代码，只用于证明交叉编译链可行，最终部署必须在本轮改造完成后重建。
+- 设计已冻结：新增 `remote_capswriter` provider；N1 保存 `audio.m4a` checkpoint 并把文件流式上传 Windows Headless API；Windows 负责临时解码 PCM 与 GPU ASR；remux 成功并验证音轨后立即删除 MP4；ASR/后续阶段失败保留 M4A，整任务成功才清理。
+- 网络并行边界已重新确认：Cloudflare 同 tunnel token 会把 N100/N1 变成同一 Tunnel UUID 的 replicas，不能确定请求落哪台；FRP auth token 可复用，但当前两台复制了相同 proxy name + remotePort 且未配置 load-balancer，原样并行会冲突。并行验证应改成四个明确节点：`n100-frp / n100-cf / n1-frp / n1-cf`。

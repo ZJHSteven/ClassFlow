@@ -510,3 +510,52 @@
 - 新增 `tools/smartclass/session_keepalive_probe.ps1`。
 - 日志写入仓库根目录的 `tmp/`（已被 `.gitignore` 忽略），使用 JSONL 逐次落盘；实验结束另写 summary JSON。
 - 先用单次模式做烟雾测试，再以隐藏 PowerShell 进程启动 12 小时正式实验。
+
+## 2026-09-20 N1 远端 CapsWriter ASR + 压缩音频检查点 ExecPlan
+
+### 目标
+- N1 只承担 ClassFlow 下载、压缩音频检查点、任务状态、课程产物与远端 ASR 调度，不在 2GB RAM / 8GB eMMC 上加载 Qwen/CapsWriter 模型。
+- Windows RTX4060 作为远端 CapsWriter ASR 节点；ClassFlow 通过 HTTP 上传音频文件，所有请求固定保持 CapsWriter `source=file` 后台优先级，继续服从既有 `mic > file` 抢占调度。
+- 把当前 `source.mp4 -> audio.wav -> ASR -> 最终统一 cleanup` 改为 eMMC 友好的阶段生命周期：`source.mp4 -> 原 AAC remux 到 audio.m4a -> 校验 -> 立即删 MP4 -> 远端 ASR -> 全任务成功后删 M4A`。
+- M4A 在任务失败时保留，作为可以反复重发 ASR 的长期检查点；N1 不生成长期 WAV/FLAC。
+
+### 已确认事实
+- 本地 `main` 在重新 `git fetch origin --prune` 后为 `ahead 4 / behind 0`；`campusbox-snapshot-20260914` 没有任何 main 尚未包含的提交，所以当前本地 main 是 N100 抢救版本的超集。
+- 历史实测 8 个 SmartClass 45 分钟片段的音轨均为 `AAC / 8kHz / mono / ~47.6kbps`，原始音轨约 `15~16MiB/45min`；因此最终方案是原 AAC/M4A remux，而不是 WAV/FLAC。
+- 当前 ClassFlow 代码仍固定生成 `audio.wav`（16kHz/mono/PCM s16le），只有整任务成功才删除 work_dir；失败时 MP4 + WAV 会一起长期残留，尚未实现上述新生命周期。
+- 当前 `AsrProvider` 抽象已存在，但 `local_qwen` provider 会在 ClassFlow 同机启动 Python sidecar，并把本地文件路径发给 `127.0.0.1`；这不适用于 N1 -> Windows 跨机 ASR。
+- CapsWriter `zjh/mic-preempt-headless-api` 开发分支已经实现 Headless HTTP API：原始 body 上传、Bearer Token、异步 job/status/result、临时文件清理；内部继续走 FileTranscriber/WS，所有 API 任务天然是 `source=file`。
+- CapsWriterGateway CLI 也已完成并通过 7 项测试，但 HTTP API 当前更适合 N1，因为它直接解决跨机器文件上传与异步任务状态。
+- ARM64 交叉构建链已经验证可行：便携 Zig + `cargo-zigbuild` 可产出约 22.7MB 的 `aarch64-unknown-linux-gnu` backend；最终部署必须在本轮代码改完后重新构建。
+
+### 设计冻结
+1. 新增 `remote_capswriter` ASR provider，不复用/伪装 `local_qwen`。
+2. provider 请求协议：
+   - `POST {base}/v1/transcriptions`，raw body 流式上传音频，`X-Filename`，可选 `Authorization: Bearer ...`；
+   - 接收 `202` + job id；
+   - 轮询 `GET /v1/transcriptions/{id}`，直到 completed/failed；
+   - completed 后读取 `GET /v1/transcriptions/{id}/result`；
+   - 把 CapsWriter `text/text_accu/tokens/timestamps/duration` 映射到 `NormalizedTranscript`。
+3. provider 只接收音频 checkpoint 文件；Windows Headless API 内部负责 FFmpeg 解码为 CapsWriter 需要的 PCM，N1 不生成 PCM/WAV。
+4. 下载阶段 checkpoint 优先级：
+   - `audio.m4a` 已存在且非空：直接跳过 MP4 下载和 remux；
+   - 否则 `source.mp4` 已完整：直接 remux；
+   - 否则下载 MP4。
+5. remux 使用 `ffmpeg -map 0:a:0 -vn -c:a copy`，目标 M4A；成功后再用 `ffprobe` 验证存在可读音轨，然后删除 `source.mp4`。
+6. remux/验证失败时绝不删除 MP4；不静默转码成 WAV/FLAC。
+7. ASR 或后续产物阶段失败时保留 `audio.m4a`；只有整个任务成功、课程产物同步完成后才清理 work_dir。
+8. `dashscope` 暂时保留为备用 provider；N1 生产配置切到 `remote_capswriter`。`local_qwen` 兼容代码暂不删除，避免扩大本轮回归面。
+
+### 实施步骤
+1. 扩展 `AppConfig` / `AsrProviderKind` / provider 选择，增加远端 CapsWriter base URL、Bearer Token、上传超时、轮询间隔与总超时。
+2. 新增 `asr/remote_capswriter.rs`，使用 reqwest + ReaderStream 流式上传，不一次性读入内存；实现 job 状态轮询、错误映射与结果归一化。
+3. 将 `PipelineIo::extract_audio` 重构为压缩音频 checkpoint 提取，并增加必要的文件删除/音频验证能力；RealPipeline 用 ffmpeg remux + ffprobe。
+4. 重构 worker 文件名与恢复逻辑为 `audio.m4a`，成功 remux/验证后尽快删除 MP4。
+5. 扩展 API/backend 测试：覆盖 M4A checkpoint 命中跳过下载、remux 后删除 MP4、remux 失败保留 MP4、远端 CapsWriter 上传/轮询/结果/失败行为。
+6. 更新 `env.example`、部署说明与 `PROGRESS.md`；运行 `cargo fmt --check`、`cargo check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test`。
+7. 使用已验证的 `cargo-zigbuild` 重新构建 ARM64 release，部署到 N1；恢复 SQLite/backend.env 后再做端到端真实任务烟测。
+
+### 与 N100/N1 并行验证的网络边界
+- Cloudflare：同一 tunnel token 是同一 Tunnel UUID 的 replica 凭据，不是“账号通用 token”；N100+N1 同 token 可以同时在线，但会作为同一 tunnel 的 replicas，不能保证请求落到哪一台，因而不适合确定性 A/B。
+- FRP：认证 token 可以复用；但当前 N100/N1 配置复制了相同 proxy name + remotePort，且没有 loadBalancer group。两台原样同时上线会发生代理注册/端口冲突；若要 HA 必须显式 loadBalancer group，若要 A/B 则使用独立 proxy 名和 remotePort。
+- 并行一周的目标拓扑是四个可选客户端节点：`n100-frp / n100-cf / n1-frp / n1-cf`。FRP 分配独立远端端口；Cloudflare 为两台主机使用不同 Tunnel UUID/hostname，避免 replica 随机落点和 SSH host-key 混用。
