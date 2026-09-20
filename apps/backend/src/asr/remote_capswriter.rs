@@ -300,3 +300,160 @@ impl AsrProvider for RemoteCapsWriterAsrProvider {
         self.wait_for_result(&job_id).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use axum::{
+        Json, Router,
+        body::Bytes,
+        extract::{Path, State},
+        http::{HeaderMap, StatusCode},
+        routing::{get, post},
+    };
+    use serde_json::{Value, json};
+    use tempfile::tempdir;
+
+    use crate::{asr::provider::AsrProvider, config::AppConfig};
+
+    use super::{AsrInput, RemoteCapsWriterAsrProvider};
+
+    #[derive(Clone, Default)]
+    struct MockApiState {
+        upload_body: Arc<Mutex<Vec<u8>>>,
+        authorization: Arc<Mutex<Option<String>>>,
+        access_id: Arc<Mutex<Option<String>>>,
+        access_secret: Arc<Mutex<Option<String>>>,
+        polls: Arc<AtomicUsize>,
+    }
+
+    async fn submit(
+        State(state): State<MockApiState>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> (StatusCode, Json<Value>) {
+        *state.upload_body.lock().expect("upload body lock") = body.to_vec();
+        *state.authorization.lock().expect("authorization lock") = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        *state.access_id.lock().expect("access id lock") = headers
+            .get("cf-access-client-id")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        *state.access_secret.lock().expect("access secret lock") = headers
+            .get("cf-access-client-secret")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        (
+            StatusCode::ACCEPTED,
+            Json(json!({"id": "job-1", "status": "queued"})),
+        )
+    }
+
+    async fn status(
+        Path(job_id): Path<String>,
+        State(state): State<MockApiState>,
+    ) -> Json<Value> {
+        assert_eq!(job_id, "job-1");
+        let poll_index = state.polls.fetch_add(1, Ordering::SeqCst);
+        if poll_index == 0 {
+            Json(json!({"id": job_id, "status": "queued", "error": null}))
+        } else {
+            Json(json!({"id": job_id, "status": "completed", "error": null}))
+        }
+    }
+
+    async fn result(Path(job_id): Path<String>) -> Json<Value> {
+        assert_eq!(job_id, "job-1");
+        Json(json!({
+            "id": job_id,
+            "status": "completed",
+            "error": null,
+            "result": {
+                "text": "远端识别成功",
+                "text_accu": "远端识别成功",
+                "duration": 12.5,
+                "tokens": ["远端", "识别", "成功"],
+                "timestamps": [0.0, 0.4, 0.9],
+                "time_start": 1.0,
+                "time_submit": 2.0,
+                "time_complete": 3.0
+            }
+        }))
+    }
+
+    #[tokio::test]
+    async fn should_upload_poll_and_normalize_remote_capswriter_result() {
+        let state = MockApiState::default();
+        let app = Router::new()
+            .route("/v1/transcriptions", post(submit))
+            .route("/v1/transcriptions/{job_id}", get(status))
+            .route("/v1/transcriptions/{job_id}/result", get(result))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock API should bind");
+        let addr = listener.local_addr().expect("mock API should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("mock API should serve");
+        });
+
+        let temp = tempdir().expect("tempdir should exist");
+        let audio_path = temp.path().join("audio.m4a");
+        tokio::fs::write(&audio_path, b"fake-m4a-body")
+            .await
+            .expect("test audio should be written");
+
+        let mut config = AppConfig::from_env().expect("default config should parse");
+        config.remote_capswriter_base_url = format!("http://{addr}");
+        config.remote_capswriter_token = "caps-token".to_string();
+        config.remote_capswriter_access_client_id = "access-id".to_string();
+        config.remote_capswriter_access_client_secret = "access-secret".to_string();
+        config.remote_capswriter_poll_interval_secs = 0.01;
+        config.remote_capswriter_poll_timeout_secs = 5.0;
+        config.remote_capswriter_request_timeout_secs = 5.0;
+        config.remote_capswriter_upload_timeout_secs = 5.0;
+
+        let provider = RemoteCapsWriterAsrProvider::new(Arc::new(config));
+        let transcript = provider
+            .transcribe_audio(AsrInput {
+                audio_path,
+                task_id: "classflow-task".to_string(),
+                language: Some("zh".to_string()),
+                context: None,
+            })
+            .await
+            .expect("remote transcription should succeed");
+
+        assert_eq!(transcript.text_accu, "远端识别成功");
+        assert_eq!(transcript.duration_seconds, 12.5);
+        assert_eq!(transcript.tokens, vec!["远端", "识别", "成功"]);
+        assert_eq!(transcript.timestamps, vec![0.0, 0.4, 0.9]);
+        assert_eq!(
+            *state.upload_body.lock().expect("upload body lock"),
+            b"fake-m4a-body"
+        );
+        assert_eq!(
+            state.authorization.lock().expect("authorization lock").as_deref(),
+            Some("Bearer caps-token")
+        );
+        assert_eq!(
+            state.access_id.lock().expect("access id lock").as_deref(),
+            Some("access-id")
+        );
+        assert_eq!(
+            state.access_secret.lock().expect("access secret lock").as_deref(),
+            Some("access-secret")
+        );
+        assert!(state.polls.load(Ordering::SeqCst) >= 2);
+
+        server.abort();
+    }
+}
