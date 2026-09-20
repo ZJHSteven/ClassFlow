@@ -134,10 +134,6 @@ const expression = `(() => {
     if (typeof services === 'undefined' || typeof services.CreateGetMyVideosRequest !== 'function') {
         return JSON.stringify({ authenticated: false, total_count: 0, data: [], error: 'CourseList 页面脚本尚未就绪' });
     }
-    if (typeof strCookie !== 'undefined' && String(strCookie) === '0') {
-        return JSON.stringify({ authenticated: false, total_count: 0, data: [], error: 'SmartClass 页面当前未登录' });
-    }
-
     const request = services.CreateGetMyVideosRequest();
     request.PageSize = Number(p.pageSize);
     request.PageNumber = Number(p.pageNumber);
