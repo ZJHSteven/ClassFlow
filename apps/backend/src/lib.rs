@@ -29,6 +29,7 @@ pub mod network;
 pub mod pipeline;
 pub mod repository;
 pub mod routes;
+pub mod smartclass;
 pub mod worker;
 
 pub use app::{AppState, build_app, run_server};

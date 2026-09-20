@@ -16,8 +16,8 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         CourseDetailResponse, CourseListQuery, CourseSummaryResponse, IntakeBatchRequest,
-        IntakeBatchResponse, TaskDetailResponse, TaskDetailTaskResponse, TaskEventRecord,
-        TaskListQuery, TaskRecord, TaskStage, TaskStatus,
+        IntakeBatchResponse, IntakeItem, TaskDetailResponse, TaskDetailTaskResponse,
+        TaskEventRecord, TaskListQuery, TaskRecord, TaskStage, TaskStatus,
     },
 };
 
@@ -180,9 +180,9 @@ impl Repository {
         request: &IntakeBatchRequest,
         default_semester: &str,
     ) -> AppResult<IntakeBatchResponse> {
-        if request.source.trim() != "userscript" {
+        if !matches!(request.source.trim(), "userscript" | "smartclass") {
             return Err(AppError::BadRequest(
-                "source 当前仅支持 userscript".to_string(),
+                "source 当前仅支持 userscript / smartclass".to_string(),
             ));
         }
         if request.items.is_empty() {
@@ -273,6 +273,45 @@ impl Repository {
             task_ids,
             course_keys,
         })
+    }
+
+    /// 从候选录播中筛出数据库里真正还不存在的片段。
+    ///
+    /// Collector 会周期性回看最近几天，同一节课被重复看到是正常现象。
+    /// 这里复用正式入库完全相同的 `course_key + segment_key` 计算规则，
+    /// 避免每 10 分钟都创建一个没有任务的空 batch。
+    pub async fn filter_missing_intake_items(
+        &self,
+        items: &[IntakeItem],
+        semester: &str,
+    ) -> AppResult<Vec<IntakeItem>> {
+        let mut missing = Vec::new();
+
+        for item in items {
+            validate_intake_item(item)?;
+            let course_key =
+                build_course_key(semester, &item.date, &item.course_name, &item.teacher_name);
+            let segment_key = build_segment_key(
+                &course_key,
+                &item.new_id,
+                &item.start_time,
+                &item.end_time,
+                &item.mp4_url,
+            );
+            let exists = sqlx::query_scalar::<_, i64>(
+                "SELECT 1 FROM tasks WHERE segment_key = ? LIMIT 1",
+            )
+            .bind(segment_key)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some();
+
+            if !exists {
+                missing.push(item.clone());
+            }
+        }
+
+        Ok(missing)
     }
 
     pub async fn list_recoverable_task_ids(&self) -> AppResult<Vec<String>> {

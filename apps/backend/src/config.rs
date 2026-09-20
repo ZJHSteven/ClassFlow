@@ -122,6 +122,13 @@ pub struct AppConfig {
     pub network_health_stable_successes: usize,
     pub task_event_retention_days: u64,
     pub task_event_retention_rows_per_task: u64,
+    pub smartclass_collector_enabled: bool,
+    pub smartclass_bridge_base_url: String,
+    pub smartclass_poll_interval_secs: u64,
+    pub smartclass_initial_backfill_days: i64,
+    pub smartclass_incremental_lookback_days: i64,
+    pub smartclass_page_size: usize,
+    pub smartclass_request_timeout_secs: f64,
 }
 
 impl AppConfig {
@@ -339,6 +346,31 @@ impl AppConfig {
             task_event_retention_rows_per_task: env_or_parse(
                 "CLASSFLOW_TASK_EVENT_RETENTION_ROWS_PER_TASK",
                 200,
+            )?,
+            smartclass_collector_enabled: env_or_parse(
+                "CLASSFLOW_SMARTCLASS_COLLECTOR_ENABLED",
+                false,
+            )?,
+            smartclass_bridge_base_url: env_or(
+                "CLASSFLOW_SMARTCLASS_BRIDGE_BASE_URL",
+                "http://127.0.0.1:8790",
+            ),
+            smartclass_poll_interval_secs: env_or_parse(
+                "CLASSFLOW_SMARTCLASS_POLL_INTERVAL_SECS",
+                600,
+            )?,
+            smartclass_initial_backfill_days: env_or_parse(
+                "CLASSFLOW_SMARTCLASS_INITIAL_BACKFILL_DAYS",
+                21,
+            )?,
+            smartclass_incremental_lookback_days: env_or_parse(
+                "CLASSFLOW_SMARTCLASS_INCREMENTAL_LOOKBACK_DAYS",
+                2,
+            )?,
+            smartclass_page_size: env_or_parse("CLASSFLOW_SMARTCLASS_PAGE_SIZE", 12)?,
+            smartclass_request_timeout_secs: env_or_parse(
+                "CLASSFLOW_SMARTCLASS_REQUEST_TIMEOUT_SECS",
+                30.0,
             )?,
         })
     }

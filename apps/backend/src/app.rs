@@ -30,6 +30,7 @@ use crate::{
     pipeline::{PipelineIo, RealPipelineIo},
     repository::Repository,
     routes::build_router,
+    smartclass::spawn_smartclass_collector,
     worker::{TaskQueue, cleanup_stale_temp_dirs, spawn_workers},
 };
 
@@ -94,6 +95,8 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
     if removed > 0 {
         info!("启动时已清理过期临时目录数量: {}", removed);
     }
+
+    spawn_smartclass_collector(state.clone());
 
     let listener = tokio::net::TcpListener::bind(state.config.bind_addr).await?;
     info!("ClassFlow backend 正在监听 {}", state.config.bind_addr);
