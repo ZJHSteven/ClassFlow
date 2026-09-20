@@ -360,3 +360,6 @@
 - 生产环境 `CLASSFLOW_DEFAULT_SEMESTER` 已从旧的 `2025-2026-2` 修正为 `2026-2027-1`；随后重启 ClassFlow 触发首次 21 天回扫。
 - 23:11 首次回扫成功：`2026-08-31..2026-09-20` 共发现 21 条录播，`新增任务=21`，`cloud_vod跳过=0`，`invalid跳过=0`。
 - 回扫后 SQLite 实测：17 个任务处于 `pending/queued`，4 个任务已经进入 `running/downloading`；最先下载的包括医学人口学与流行病学，说明“发现 -> overlap -> 入队 -> worker 下载”整条 ClassFlow 链路已经实际运行。
+- 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
+- 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
+- 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
