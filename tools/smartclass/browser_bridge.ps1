@@ -34,6 +34,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# browser-harness-js 始终以 UTF-8 输出 JSON。Windows PowerShell/控制台如果仍按本地
+# 代码页解码，中文课程名会被转成 mojibake，极端情况下还会把不可表示字符替换成 `?`，
+# 从而直接破坏 JSON 结构。这里显式把 native stdin/stdout 统一为无 BOM UTF-8。
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $utf8
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+
 $browserHarness = (Get-Command 'browser-harness-js' -ErrorAction Stop).Source
 
 function Invoke-BrowserHarness {
