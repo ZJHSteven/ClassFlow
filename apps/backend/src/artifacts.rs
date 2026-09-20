@@ -713,6 +713,13 @@ mod tests {
             network_health_stable_successes: 1,
             task_event_retention_days: 30,
             task_event_retention_rows_per_task: 200,
+            smartclass_collector_enabled: false,
+            smartclass_bridge_base_url: "http://127.0.0.1:8790".to_string(),
+            smartclass_poll_interval_secs: 600,
+            smartclass_initial_backfill_days: 21,
+            smartclass_incremental_lookback_days: 2,
+            smartclass_page_size: 12,
+            smartclass_request_timeout_secs: 30.0,
         }
     }
 
