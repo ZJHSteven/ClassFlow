@@ -517,7 +517,7 @@ async fn intake_should_create_task_and_artifacts() {
 
 #[tokio::test]
 async fn retry_should_requeue_failed_task() {
-    let (state, _temp, counters) = build_test_state(true, false).await;
+    let (state, temp, counters) = build_test_state(true, false).await;
     let repo = state.repo.clone();
 
     let intake_response = build_app(state.clone())
@@ -578,6 +578,16 @@ async fn retry_should_requeue_failed_task() {
         failed_task.dashscope_task_id.as_deref(),
         Some("dashscope-mock-task-1"),
         "提交百炼成功后即使后续轮询失败，也应保留 task_id 检查点"
+    );
+
+    let failed_work_dir = temp.path().join("tmp").join("jobs").join(&task_id);
+    assert!(
+        failed_work_dir.join("audio.m4a").is_file(),
+        "转写失败后应保留压缩音频检查点，供后续重试直接复用"
+    );
+    assert!(
+        !failed_work_dir.join("source.mp4").exists(),
+        "M4A 检查点生成成功后应尽早删除体积更大的源视频"
     );
 
     let retry_response = build_app(state)
