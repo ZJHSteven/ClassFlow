@@ -358,7 +358,11 @@ async fn transcribe_with_direct_file_provider(
         .update_task_stage(
             task_id,
             TaskStage::UploadingAudio,
-            if state.config.asr_provider.eq_ignore_ascii_case("remote_capswriter") {
+            if state
+                .config
+                .asr_provider
+                .eq_ignore_ascii_case("remote_capswriter")
+            {
                 "准备把压缩音频上传到远端 CapsWriter"
             } else {
                 "当前使用本地 ASR，跳过云端音频上传阶段"
@@ -372,7 +376,11 @@ async fn transcribe_with_direct_file_provider(
         .update_task_stage(
             task_id,
             TaskStage::Transcribing,
-            if state.config.asr_provider.eq_ignore_ascii_case("remote_capswriter") {
+            if state
+                .config
+                .asr_provider
+                .eq_ignore_ascii_case("remote_capswriter")
+            {
                 "开始执行远端 CapsWriter ASR 转写"
             } else {
                 "开始执行本地 Qwen3 ASR 转写"

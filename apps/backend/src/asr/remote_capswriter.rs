@@ -1,4 +1,4 @@
-/*! 
+/*!
 远端 CapsWriter Headless HTTP API provider。
 
 面向 N1 -> Windows RTX4060 的跨机 ASR：ClassFlow 只持有本地压缩音频
@@ -92,7 +92,11 @@ impl RemoteCapsWriterAsrProvider {
                 &self.config.remote_capswriter_access_client_id,
             );
         }
-        if !self.config.remote_capswriter_access_client_secret.is_empty() {
+        if !self
+            .config
+            .remote_capswriter_access_client_secret
+            .is_empty()
+        {
             request = request.header(
                 "CF-Access-Client-Secret",
                 &self.config.remote_capswriter_access_client_secret,
@@ -152,7 +156,9 @@ impl RemoteCapsWriterAsrProvider {
             )
             .send()
             .await
-            .map_err(|error| AppError::External(format!("上传音频到远端 CapsWriter 失败: {error}")))?;
+            .map_err(|error| {
+                AppError::External(format!("上传音频到远端 CapsWriter 失败: {error}"))
+            })?;
 
         let status = response.status();
         let body = response.text().await.map_err(|error| {
@@ -218,11 +224,12 @@ impl RemoteCapsWriterAsrProvider {
             let status_value = self
                 .get_json(format!("{}/v1/transcriptions/{job_id}", self.base_url()))
                 .await?;
-            let status = serde_json::from_value::<JobStatusResponse>(status_value).map_err(|error| {
-                AppError::External(format!(
-                    "解析远端 CapsWriter job 状态失败: job_id={job_id}, error={error}"
-                ))
-            })?;
+            let status =
+                serde_json::from_value::<JobStatusResponse>(status_value).map_err(|error| {
+                    AppError::External(format!(
+                        "解析远端 CapsWriter job 状态失败: job_id={job_id}, error={error}"
+                    ))
+                })?;
             match status.status.as_str() {
                 "queued" | "running" => {
                     sleep(Duration::from_secs_f64(
@@ -251,11 +258,12 @@ impl RemoteCapsWriterAsrProvider {
                 self.base_url()
             ))
             .await?;
-        let envelope = serde_json::from_value::<JobResultEnvelope>(raw.clone()).map_err(|error| {
-            AppError::External(format!(
-                "解析远端 CapsWriter 最终结果失败: job_id={job_id}, error={error}"
-            ))
-        })?;
+        let envelope =
+            serde_json::from_value::<JobResultEnvelope>(raw.clone()).map_err(|error| {
+                AppError::External(format!(
+                    "解析远端 CapsWriter 最终结果失败: job_id={job_id}, error={error}"
+                ))
+            })?;
         if envelope.status != "completed" {
             return Err(AppError::External(format!(
                 "远端 CapsWriter 最终结果状态异常: job_id={job_id}, status={}, error={}",
@@ -264,7 +272,9 @@ impl RemoteCapsWriterAsrProvider {
             )));
         }
         let result = envelope.result.ok_or_else(|| {
-            AppError::External(format!("远端 CapsWriter completed 但缺少 result: job_id={job_id}"))
+            AppError::External(format!(
+                "远端 CapsWriter completed 但缺少 result: job_id={job_id}"
+            ))
         })?;
         let text_display = if result.text.trim().is_empty() {
             result.text_accu.clone()
@@ -355,10 +365,7 @@ mod tests {
         )
     }
 
-    async fn status(
-        Path(job_id): Path<String>,
-        State(state): State<MockApiState>,
-    ) -> Json<Value> {
+    async fn status(Path(job_id): Path<String>, State(state): State<MockApiState>) -> Json<Value> {
         assert_eq!(job_id, "job-1");
         let poll_index = state.polls.fetch_add(1, Ordering::SeqCst);
         if poll_index == 0 {
@@ -441,7 +448,11 @@ mod tests {
             b"fake-m4a-body"
         );
         assert_eq!(
-            state.authorization.lock().expect("authorization lock").as_deref(),
+            state
+                .authorization
+                .lock()
+                .expect("authorization lock")
+                .as_deref(),
             Some("Bearer caps-token")
         );
         assert_eq!(
@@ -449,7 +460,11 @@ mod tests {
             Some("access-id")
         );
         assert_eq!(
-            state.access_secret.lock().expect("access secret lock").as_deref(),
+            state
+                .access_secret
+                .lock()
+                .expect("access secret lock")
+                .as_deref(),
             Some("access-secret")
         );
         assert!(state.polls.load(Ordering::SeqCst) >= 2);

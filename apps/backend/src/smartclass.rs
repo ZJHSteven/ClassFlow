@@ -202,7 +202,10 @@ impl SmartClassCollector {
     ) -> AppResult<BridgePage> {
         let url = format!(
             "{}/v1/smartclass/videos",
-            self.state.config.smartclass_bridge_base_url.trim_end_matches('/')
+            self.state
+                .config
+                .smartclass_bridge_base_url
+                .trim_end_matches('/')
         );
         let response = self
             .client
@@ -288,9 +291,7 @@ fn cover_to_vga_url(cover: &str) -> AppResult<String> {
     let prefix = without_query
         .strip_suffix("/000.jpg")
         .or_else(|| without_query.strip_suffix("/000.JPG"))
-        .ok_or_else(|| {
-            AppError::External(format!("无法从 Cover 推导 VGA.mp4: {without_query}"))
-        })?;
+        .ok_or_else(|| AppError::External(format!("无法从 Cover 推导 VGA.mp4: {without_query}")))?;
     Ok(format!("{prefix}/VGA.mp4"))
 }
 
@@ -304,7 +305,8 @@ mod tests {
             new_id: "ecba497b532442df8681b4c1aaa6f85d".to_string(),
             start_time: "2026-09-16 18:55:00".to_string(),
             stop_time: "2026-09-16 19:40:00".to_string(),
-            cover: "https://tmuvod.smartclass.cn:8010/cunchu01/2026/09/16/66531474/2/000.jpg?x=1".to_string(),
+            cover: "https://tmuvod.smartclass.cn:8010/cunchu01/2026/09/16/66531474/2/000.jpg?x=1"
+                .to_string(),
             course_name: "医学人口学".to_string(),
             teachers: "韩钰".to_string(),
             cloud_vod: false,

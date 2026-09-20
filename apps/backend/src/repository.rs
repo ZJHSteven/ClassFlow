@@ -298,13 +298,12 @@ impl Repository {
                 &item.end_time,
                 &item.mp4_url,
             );
-            let exists = sqlx::query_scalar::<_, i64>(
-                "SELECT 1 FROM tasks WHERE segment_key = ? LIMIT 1",
-            )
-            .bind(segment_key)
-            .fetch_optional(&self.pool)
-            .await?
-            .is_some();
+            let exists =
+                sqlx::query_scalar::<_, i64>("SELECT 1 FROM tasks WHERE segment_key = ? LIMIT 1")
+                    .bind(segment_key)
+                    .fetch_optional(&self.pool)
+                    .await?
+                    .is_some();
 
             if !exists {
                 missing.push(item.clone());

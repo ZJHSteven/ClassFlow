@@ -21,9 +21,7 @@ use tracing::{info, warn};
 
 use crate::{
     artifacts::{ArtifactStore, build_artifact_store},
-    asr::{
-        AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider, RemoteCapsWriterAsrProvider,
-    },
+    asr::{AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider, RemoteCapsWriterAsrProvider},
     config::AppConfig,
     error::AppResult,
     network::NetworkHealthGate,

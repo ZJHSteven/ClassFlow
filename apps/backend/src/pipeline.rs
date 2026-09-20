@@ -682,13 +682,15 @@ impl PipelineIo for RealPipelineIo {
         }
 
         let _ = fs::remove_file(target_audio_path).await;
-        fs::rename(&temp_audio_path, target_audio_path).await.map_err(|error| {
-            AppError::Io(format!(
-                "提交压缩音频检查点失败: from={}, to={}, error={error}",
-                temp_audio_path.display(),
-                target_audio_path.display()
-            ))
-        })?;
+        fs::rename(&temp_audio_path, target_audio_path)
+            .await
+            .map_err(|error| {
+                AppError::Io(format!(
+                    "提交压缩音频检查点失败: from={}, to={}, error={error}",
+                    temp_audio_path.display(),
+                    target_audio_path.display()
+                ))
+            })?;
 
         Ok(())
     }
