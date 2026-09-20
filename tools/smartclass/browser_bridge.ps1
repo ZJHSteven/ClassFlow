@@ -29,7 +29,8 @@
 
 [CmdletBinding()]
 param(
-    [string]$ListenPrefix = 'http://127.0.0.1:8790/'
+    [string]$ListenPrefix = 'http://127.0.0.1:8790/',
+    [int]$BrowserDebugPort = 9222
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,8 +71,9 @@ function Get-SmartClassSessionId {
         每次请求都重新 attach，避免旧 session 因刷新/重建而失效。
         如果标签页被关闭，只创建正常 CourseList 页面，不尝试自动登录。
     #>
-    $code = @'
-await session.connect();
+    $code = @"
+const wsUrl = await resolveWsUrl({ port: $BrowserDebugPort, host: '127.0.0.1' });
+await session.connect({ wsUrl });
 let tabs = await listPageTargets();
 let target = tabs.find(t => t.url.includes('tmu.smartclass.cn/UserSpace/CourseList.aspx'));
 if (!target) {
@@ -80,7 +82,7 @@ if (!target) {
     target = { targetId: created.targetId };
 }
 return String(await session.attach(target.targetId));
-'@
+"@
 
     $sessionId = Invoke-BrowserHarness -Code $code
     if ([string]::IsNullOrWhiteSpace($sessionId)) {
