@@ -181,15 +181,15 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
     // 只有最终 audio.m4a 已存在且非空时才允许删除源视频。这样 remux/ffprobe
     // 失败时 source.mp4 一定保留；而重试命中 M4A checkpoint 时，也会顺手清掉
     // 可能因上次断电而残留的 MP4，避免 8GB eMMC 长期承受双份媒体占用。
-    if file_exists_and_non_empty(&extracted_audio).await? {
-        if let Err(error) = remove_file_if_present(&source_video).await {
-            state
-                .repo
-                .mark_task_failed(task_id, TaskStage::ExtractingAudio, &error.to_string())
-                .await?;
-            state.notify_task_list_changed();
-            return Err(error);
-        }
+    if file_exists_and_non_empty(&extracted_audio).await?
+        && let Err(error) = remove_file_if_present(&source_video).await
+    {
+        state
+            .repo
+            .mark_task_failed(task_id, TaskStage::ExtractingAudio, &error.to_string())
+            .await?;
+        state.notify_task_list_changed();
+        return Err(error);
     }
 
     state
