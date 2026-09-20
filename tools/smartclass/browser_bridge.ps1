@@ -155,7 +155,7 @@ const expression = `(() => {
                         authenticated: false,
                         total_count: 0,
                         data: [],
-                        error: `CourseList heartbeat HTTP ${heartbeat.status}`
+                        error: 'CourseList heartbeat HTTP ' + heartbeat.status
                     }));
                     return;
                 }
