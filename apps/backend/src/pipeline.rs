@@ -616,28 +616,79 @@ impl PipelineIo for RealPipelineIo {
             fs::create_dir_all(parent).await?;
         }
 
+        // 先写临时文件并验证，再原子提交最终 checkpoint。这样即使设备在 remux
+        // 过程中断电，也不会把一个半截文件误判成可复用的历史音频。
+        let temp_audio_path = target_audio_path.with_extension("m4a.part");
+        let _ = fs::remove_file(&temp_audio_path).await;
+
         let output = Command::new("ffmpeg")
             .arg("-y")
             .arg("-i")
             .arg(source_video_path)
+            .arg("-map")
+            .arg("0:a:0")
             .arg("-vn")
-            .arg("-ac")
-            .arg("1")
-            .arg("-ar")
-            .arg("16000")
             .arg("-c:a")
-            .arg("pcm_s16le")
-            .arg(target_audio_path)
+            .arg("copy")
+            .arg("-f")
+            .arg("ipod")
+            .arg(&temp_audio_path)
             .output()
             .await
             .map_err(|error| AppError::External(format!("调用 ffmpeg 失败: {error}")))?;
 
         if !output.status.success() {
+            let _ = fs::remove_file(&temp_audio_path).await;
             return Err(AppError::External(format!(
-                "ffmpeg 抽音频失败: {}",
+                "ffmpeg 无损 remux 原音轨失败: {}",
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
+
+        let metadata = fs::metadata(&temp_audio_path).await.map_err(|error| {
+            AppError::Io(format!(
+                "读取 remux 后音频检查点失败: path={}, error={error}",
+                temp_audio_path.display()
+            ))
+        })?;
+        if metadata.len() == 0 {
+            let _ = fs::remove_file(&temp_audio_path).await;
+            return Err(AppError::External(
+                "ffmpeg remux 成功但音频检查点为空".to_string(),
+            ));
+        }
+
+        let probe = Command::new("ffprobe")
+            .arg("-v")
+            .arg("error")
+            .arg("-select_streams")
+            .arg("a:0")
+            .arg("-show_entries")
+            .arg("stream=codec_name")
+            .arg("-of")
+            .arg("default=noprint_wrappers=1:nokey=1")
+            .arg(&temp_audio_path)
+            .output()
+            .await
+            .map_err(|error| AppError::External(format!("调用 ffprobe 失败: {error}")))?;
+        let codec_name = String::from_utf8_lossy(&probe.stdout).trim().to_string();
+        if !probe.status.success() || codec_name.is_empty() {
+            let _ = fs::remove_file(&temp_audio_path).await;
+            return Err(AppError::External(format!(
+                "ffprobe 校验压缩音频检查点失败: stdout={}, stderr={}",
+                String::from_utf8_lossy(&probe.stdout),
+                String::from_utf8_lossy(&probe.stderr)
+            )));
+        }
+
+        let _ = fs::remove_file(target_audio_path).await;
+        fs::rename(&temp_audio_path, target_audio_path).await.map_err(|error| {
+            AppError::Io(format!(
+                "提交压缩音频检查点失败: from={}, to={}, error={error}",
+                temp_audio_path.display(),
+                target_audio_path.display()
+            ))
+        })?;
 
         Ok(())
     }
@@ -713,7 +764,7 @@ impl PipelineIo for RealPipelineIo {
                 let filename = audio_path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .unwrap_or("audio.wav");
+                    .unwrap_or("audio.m4a");
                 let object_key = format!(
                     "{}/{}_{}",
                     upload_dir.trim_matches('/'),
