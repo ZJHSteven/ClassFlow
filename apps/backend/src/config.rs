@@ -94,6 +94,14 @@ pub struct AppConfig {
     pub local_asr_idle_shutdown_secs: u64,
     pub local_asr_start_timeout_secs: f64,
     pub local_asr_task_timeout_secs: f64,
+    pub remote_capswriter_base_url: String,
+    pub remote_capswriter_token: String,
+    pub remote_capswriter_access_client_id: String,
+    pub remote_capswriter_access_client_secret: String,
+    pub remote_capswriter_request_timeout_secs: f64,
+    pub remote_capswriter_upload_timeout_secs: f64,
+    pub remote_capswriter_poll_interval_secs: f64,
+    pub remote_capswriter_poll_timeout_secs: f64,
     pub r2_bucket: String,
     pub r2_endpoint: String,
     pub r2_access_key_id: String,
@@ -241,6 +249,36 @@ impl AppConfig {
             local_asr_task_timeout_secs: env_or_parse(
                 "CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS",
                 0.0,
+            )?,
+            remote_capswriter_base_url: env_or(
+                "CLASSFLOW_REMOTE_CAPSWRITER_BASE_URL",
+                "http://127.0.0.1:6020",
+            ),
+            remote_capswriter_token: env::var("CLASSFLOW_REMOTE_CAPSWRITER_TOKEN")
+                .unwrap_or_default(),
+            remote_capswriter_access_client_id: env::var(
+                "CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_ID",
+            )
+            .unwrap_or_default(),
+            remote_capswriter_access_client_secret: env::var(
+                "CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_SECRET",
+            )
+            .unwrap_or_default(),
+            remote_capswriter_request_timeout_secs: env_or_parse(
+                "CLASSFLOW_REMOTE_CAPSWRITER_REQUEST_TIMEOUT_SECS",
+                30.0,
+            )?,
+            remote_capswriter_upload_timeout_secs: env_or_parse(
+                "CLASSFLOW_REMOTE_CAPSWRITER_UPLOAD_TIMEOUT_SECS",
+                900.0,
+            )?,
+            remote_capswriter_poll_interval_secs: env_or_parse(
+                "CLASSFLOW_REMOTE_CAPSWRITER_POLL_INTERVAL_SECS",
+                1.0,
+            )?,
+            remote_capswriter_poll_timeout_secs: env_or_parse(
+                "CLASSFLOW_REMOTE_CAPSWRITER_POLL_TIMEOUT_SECS",
+                3600.0,
             )?,
             r2_bucket: env::var("CLASSFLOW_R2_BUCKET").unwrap_or_default(),
             r2_endpoint: env::var("CLASSFLOW_R2_ENDPOINT").unwrap_or_default(),
