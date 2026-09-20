@@ -90,7 +90,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
 
     let work_dir = state.config.temp_root.join("jobs").join(task_id);
     let source_video = work_dir.join("source.mp4");
-    let extracted_audio = work_dir.join("audio.wav");
+    let extracted_audio = work_dir.join("audio.m4a");
 
     if let Some(parent) = source_video.parent() {
         fs::create_dir_all(parent).await?;
@@ -152,7 +152,7 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         .update_task_stage(
             task_id,
             TaskStage::ExtractingAudio,
-            "开始使用 ffmpeg 抽取音频",
+            "开始无损提取原音轨到 M4A 检查点",
         )
         .await?;
     state.notify_task_list_changed();
@@ -176,6 +176,20 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
             .await?;
         state.notify_task_list_changed();
         return Err(error);
+    }
+
+    // 只有最终 audio.m4a 已存在且非空时才允许删除源视频。这样 remux/ffprobe
+    // 失败时 source.mp4 一定保留；而重试命中 M4A checkpoint 时，也会顺手清掉
+    // 可能因上次断电而残留的 MP4，避免 8GB eMMC 长期承受双份媒体占用。
+    if file_exists_and_non_empty(&extracted_audio).await? {
+        if let Err(error) = remove_file_if_present(&source_video).await {
+            state
+                .repo
+                .mark_task_failed(task_id, TaskStage::ExtractingAudio, &error.to_string())
+                .await?;
+            state.notify_task_list_changed();
+            return Err(error);
+        }
     }
 
     state
@@ -695,6 +709,17 @@ async fn file_exists_and_non_empty(path: &Path) -> AppResult<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(AppError::Io(format!(
             "读取检查点文件失败: path={}, error={error}",
+            path.display()
+        ))),
+    }
+}
+
+async fn remove_file_if_present(path: &Path) -> AppResult<()> {
+    match fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(AppError::Io(format!(
+            "删除已被 M4A 检查点替代的源视频失败: path={}, error={error}",
             path.display()
         ))),
     }
