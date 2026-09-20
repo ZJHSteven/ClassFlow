@@ -118,11 +118,11 @@ function Get-SmartClassVideoPage {
         pageSize   = $PageSize
     } | ConvertTo-Json -Compress
 
-    # 参数先由 PowerShell 序列化成 JSON，再嵌进 CDP 脚本；不会把用户输入直接拼入 JS 字符串。
-    $code = @"
-const params = $paramsJson;
+    # 参数先由 PowerShell 序列化成 JSON，再替换进一个固定占位符。
+    # 这里故意使用“单引号 here-string”，避免 PowerShell 解释 JavaScript 模板字符串里的 `$` / `${...}`。
+    $codeTemplate = @'
 const expression = `(() => {
-    const p = ${JSON.stringify(params)};
+    const p = __CLASSFLOW_PARAMS__;
     if (typeof services === 'undefined' || typeof services.CreateGetMyVideosRequest !== 'function') {
         return JSON.stringify({ authenticated: false, total_count: 0, data: [], error: 'CourseList 页面脚本尚未就绪' });
     }
@@ -160,7 +160,8 @@ const result = await session.Runtime.evaluate({
     returnByValue: true
 });
 return result.result.value;
-"@
+'@
+    $code = $codeTemplate.Replace('__CLASSFLOW_PARAMS__', $paramsJson)
 
     $json = Invoke-BrowserHarness -Code $code -SessionId $sessionId
     if ([string]::IsNullOrWhiteSpace($json)) {
