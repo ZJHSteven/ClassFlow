@@ -337,3 +337,20 @@
 - 已确认 ARM64 构建链可用：迁移仓库私有目录中的便携 Zig + `cargo-zigbuild` 已成功生成约 22.7MB 的 ARM64 backend；该二进制来自重构前代码，只用于证明交叉编译链可行，最终部署必须在本轮改造完成后重建。
 - 设计已冻结：新增 `remote_capswriter` provider；N1 保存 `audio.m4a` checkpoint 并把文件流式上传 Windows Headless API；Windows 负责临时解码 PCM 与 GPU ASR；remux 成功并验证音轨后立即删除 MP4；ASR/后续阶段失败保留 M4A，整任务成功才清理。
 - 网络并行边界已重新确认：Cloudflare 同 tunnel token 会把 N100/N1 变成同一 Tunnel UUID 的 replicas，不能确定请求落哪台；FRP auth token 可复用，但当前两台复制了相同 proxy name + remotePort 且未配置 load-balancer，原样并行会冲突。并行验证应改成四个明确节点：`n100-frp / n100-cf / n1-frp / n1-cf`。
+
+## 2026-09-20 SmartClass 自动采集器落地
+- 已确认 SmartClass 个人录播接口真实分页协议：`GetMyVideoList` 使用 `PageSize=12`、`PageNumber=1..N`，响应为 `Data[] + TotalCount`；前端自己也是用 `ceil(TotalCount/PageSize)` 驱动分页。
+- 已确认当前三个已观察状态的角色边界：`OnlineUser` 每次正常课程列表访问约续到 +3 分钟，但过夜实验中每轮之间都会过期而认证仍正常，所以它不是主登录凭据；`platform_token` 约每 30 分钟滚动并延长到约 +60 分钟，也不是“60 分钟后必掉登录”的硬上限；真正主登录仍与 `PowerCreatorCMSAuthenticationID`/服务端 Session 生命周期相关。
+- 新证据：2026-09-20 晚，过夜 10 分钟保活实验停止数小时后，原 Chrome SmartClass 会话已经变为未登录。这说明登录态并非无限期存活，后续仍值得用独立 Session 做 idle/absolute timeout 实验。
+- 并行实验结论：同一 Session 下同时跑 10/20/30/40 分钟探针会互相续命，不能当独立实验；真正并行必须使用独立登录得到的不同服务端 Session/profile。单独实验更高效的策略是指数退避 `10 -> 20 -> 40 -> 80 -> 160` 分钟，再在首个失败区间二分。
+- Rust 后端已新增 SmartClass Collector：第一次回扫 21 天，之后每 10 分钟回看最近 2 天，并完整处理所有分页。
+- Collector 不新增第二套课程数据库，直接复用现有 `tasks.segment_key UNIQUE`、`filter_missing_intake_items()` 与 `create_batch_with_tasks()`；已有课程自动 overlap，只有缺失片段才会生成 batch/任务并入队。
+- 标准传统录播用 `Cover` 去查询参数后把 `/000.jpg` 替换为同目录 `/VGA.mp4`；`CloudVod=true` 暂时明确跳过，避免错误猜路径或扫描其他录播。
+- 新增 `tools/smartclass/browser_bridge.ps1`：仅监听 `127.0.0.1:8790`，通过 CDP 附加真实 CourseList 页面，调用页面自己的 `services.CreateGetMyVideosRequest()`；不读取/保存 Cookie value、密码、`platform_token` 或 `csrkToken`。
+- 浏览器桥每轮第一页在官方 API 前先做一次 `GET /UserSpace/CourseList.aspx`，与过夜实验已经验证有效的 10 分钟保活行为保持一致；第 2 页以后不重复 heartbeat。
+- 本地验证全部通过：`cargo fmt --check`、`cargo check`、`cargo test`（24 个单元测试 + 11 个 API 集成测试）、`cargo clippy --all-targets --all-features -- -D warnings`。
+- N100 `campus-box` 已通过 `59.110.9.119:26000` 恢复访问并 fast-forward 到 `b6f19d2`；N100 端 `cargo check` 与 `cargo test` 均通过，单元 24/24、API 集成 11/11。
+- N100 已重新构建 release；生产 SQLite `/home/zjhsteven/.local/state/classflow/data/classflow.db` 当前约 206 条历史任务，重启前没有 `pending/running` 任务。
+- N100 `/etc/classflow/backend.env` 已启用 SmartClass Collector：600 秒轮询、21 天首次回扫、2 天增量回看、本机桥 `127.0.0.1:8790`。服务于 2026-09-20 22:52 +08 重启成功并保持 active。
+- 已建立临时 Windows -> N100 反向 SSH：N100 的 `127.0.0.1:8790` 可实际访问 Windows 浏览器桥；`/health` 成功，课程列表请求也成功到达页面。由于当前 SmartClass 已未登录，Collector 第一轮正确记录“未授权”并等待 10 分钟，没有误创建任务。
+- 当前临时测试形态依赖 Windows 浏览器桥与反向 SSH；最终无人值守方案应在 N100/N1 安装 Chromium，使用独立持久 profile 正常登录一次后让本机桥长期保活。当前 N100 尚未安装 Chromium/Chrome。

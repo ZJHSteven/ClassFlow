@@ -589,3 +589,14 @@
 - 同一服务端 Session 的多个 10/20/30/40 分钟探针不能视为独立并行实验，因为任一探针可能刷新同一个服务端会话。
 - 真并行实验必须使用彼此独立登录得到的服务端 Session/profile；后续实验工具应支持多个独立 Chrome profile。
 - 在只有一个登录态时，优先使用指数退避寻找 idle-timeout 量级：10 -> 20 -> 40 -> 80 -> 160 分钟；每轮成功后再加倍，失败后在上下界之间二分，比逐个固定间隔跑 24 小时更高效。
+
+### 当前实施状态（2026-09-20 晚）
+- 已完成：确认 `GetMyVideoList` 使用 `PageSize / PageNumber` 分页，响应包含 `Data[] + TotalCount`，官方页面默认 `PageSize=12`。
+- 已完成：Rust Collector 已接入现有 SQLite/intake/queue，不新增课程表；首次回扫 21 天，后续每 10 分钟回看最近 2 天。
+- 已完成：标准 `CloudVod=false` 录播使用 `Cover -> 同目录 VGA.mp4`；`CloudVod=true` 暂跳过，不猜测目录、不枚举相邻 ScheduleID。
+- 已完成：Windows 浏览器桥通过页面官方 `CreateGetMyVideosRequest()` 发请求，Rust 不生成 `csrkToken`，桥也不导出 Cookie/token。
+- 已完成：本地 `cargo fmt/check/test/clippy` 全绿；N100 同步后 `cargo check/test` 全绿（24 个单元测试 + 11 个 API 集成测试）。
+- 已完成：N100 已 fast-forward 到最新 `main`，构建 release，并在无 pending/running 任务时启用 Collector；当前轮询间隔 600 秒。
+- 已完成：临时反向 SSH 已把 N100 `127.0.0.1:8790` 映射到 Windows 浏览器桥，跨机 `/health` 与视频列表请求链路已实际验证。
+- 当前阻塞：原 SmartClass 登录态在 12 小时保活实验结束后的下午/晚间已自然失效；Collector 当前正确进入“未授权后等待下一轮”状态，不误入队。
+- 后续：用户重新正常登录 SmartClass 后，当前临时链路会自动在下一轮开始 21 天补录；最终无人值守形态改为 N100/N1 本机独立 Chromium profile + 本机桥，去除对 Windows 与反向 SSH 的依赖。
