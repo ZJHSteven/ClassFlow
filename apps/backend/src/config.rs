@@ -141,7 +141,7 @@ impl AppConfig {
             bind_addr,
             db_url: env_or("CLASSFLOW_DB_URL", "sqlite://./data/classflow.db?mode=rwc"),
             bearer_token: env_or("CLASSFLOW_BEARER_TOKEN", "classflow-dev-token"),
-            default_semester: env_or("CLASSFLOW_DEFAULT_SEMESTER", "2025-2026-2"),
+            default_semester: env_or("CLASSFLOW_DEFAULT_SEMESTER", "2026-2027-1"),
             temp_root: PathBuf::from(env_or("CLASSFLOW_TEMP_ROOT", "./tmp")),
             local_artifact_root: PathBuf::from(env_or(
                 "CLASSFLOW_LOCAL_ARTIFACT_ROOT",

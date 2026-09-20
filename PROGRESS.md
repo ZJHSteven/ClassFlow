@@ -354,3 +354,9 @@
 - N100 `/etc/classflow/backend.env` 已启用 SmartClass Collector：600 秒轮询、21 天首次回扫、2 天增量回看、本机桥 `127.0.0.1:8790`。服务于 2026-09-20 22:52 +08 重启成功并保持 active。
 - 已建立临时 Windows -> N100 反向 SSH：N100 的 `127.0.0.1:8790` 可实际访问 Windows 浏览器桥；`/health` 成功，课程列表请求也成功到达页面。由于当前 SmartClass 已未登录，Collector 第一轮正确记录“未授权”并等待 10 分钟，没有误创建任务。
 - 当前临时测试形态依赖 Windows 浏览器桥与反向 SSH；最终无人值守方案应在 N100/N1 安装 Chromium，使用独立持久 profile 正常登录一次后让本机桥长期保活。当前 N100 尚未安装 Chromium/Chrome。
+- 23:10 后已重新确认 Windows `Chrome-CDP` 的真实登录实例位于 `D:\AppData\Chrome\Chrome-CDP\User Data`、远程调试端口 `9222`；桥已固定绑定该端口，不再依赖自动浏览器探测。
+- 已修复两个真实运行问题：登录后旧 CourseList 标签页的 `strCookie=0` 会造成误判，现改为以官方 `CreateGetMyVideosRequest()` 实际结果判定；Windows native stdout 编码会破坏中文 JSON，现桥进程显式统一 UTF-8。
+- N100 通过浏览器桥实测 `2026-09-01..2026-09-20` 返回 `authenticated=true`、`TotalCount=21`、第一页 12 条，第一条课程为“医学人口学”，说明“登录态 -> 反向 SSH -> 浏览器桥 -> SmartClass 官方课程列表”链路已打通。
+- 生产环境 `CLASSFLOW_DEFAULT_SEMESTER` 已从旧的 `2025-2026-2` 修正为 `2026-2027-1`；随后重启 ClassFlow 触发首次 21 天回扫。
+- 23:11 首次回扫成功：`2026-08-31..2026-09-20` 共发现 21 条录播，`新增任务=21`，`cloud_vod跳过=0`，`invalid跳过=0`。
+- 回扫后 SQLite 实测：17 个任务处于 `pending/queued`，4 个任务已经进入 `running/downloading`；最先下载的包括医学人口学与流行病学，说明“发现 -> overlap -> 入队 -> worker 下载”整条 ClassFlow 链路已经实际运行。
