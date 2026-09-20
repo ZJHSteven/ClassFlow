@@ -71,9 +71,15 @@ function Get-SmartClassSessionId {
         每次请求都重新 attach，避免旧 session 因刷新/重建而失效。
         如果标签页被关闭，只创建正常 CourseList 页面，不尝试自动登录。
     #>
+    $browserVersion = Invoke-RestMethod -Uri "http://127.0.0.1:$BrowserDebugPort/json/version" -TimeoutSec 5
+    $wsUrl = [string]$browserVersion.webSocketDebuggerUrl
+    if ([string]::IsNullOrWhiteSpace($wsUrl)) {
+        throw "Chrome 调试端口 $BrowserDebugPort 没有返回 webSocketDebuggerUrl"
+    }
+    $escapedWsUrl = $wsUrl.Replace("'", "\\'")
+
     $code = @"
-const wsUrl = await resolveWsUrl({ port: $BrowserDebugPort, host: '127.0.0.1' });
-await session.connect({ wsUrl });
+await session.connect({ wsUrl: '$escapedWsUrl' });
 let tabs = await listPageTargets();
 let target = tabs.find(t => t.url.includes('tmu.smartclass.cn/UserSpace/CourseList.aspx'));
 if (!target) {
