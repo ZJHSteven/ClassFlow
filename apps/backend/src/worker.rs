@@ -187,8 +187,8 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         )
         .await?;
     state.notify_task_list_changed();
-    let transcript = if is_local_qwen_provider(&state) {
-        transcribe_with_local_provider(&state, &task, task_id, &extracted_audio).await?
+    let transcript = if is_direct_file_provider(&state) {
+        transcribe_with_direct_file_provider(&state, &task, task_id, &extracted_audio).await?
     } else {
         transcribe_with_dashscope_flow(
             &state,
@@ -311,15 +311,14 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn is_local_qwen_provider(state: &AppState) -> bool {
-    state
-        .config
-        .asr_provider
-        .trim()
-        .eq_ignore_ascii_case("local_qwen")
+fn is_direct_file_provider(state: &AppState) -> bool {
+    matches!(
+        state.config.asr_provider.trim().to_lowercase().as_str(),
+        "local_qwen" | "remote_capswriter"
+    )
 }
 
-async fn transcribe_with_local_provider(
+async fn transcribe_with_direct_file_provider(
     state: &AppState,
     task: &TaskRecord,
     task_id: &str,
@@ -333,7 +332,7 @@ async fn transcribe_with_local_provider(
             .update_task_stage(
                 task_id,
                 TaskStage::Transcribing,
-                "检测到历史本地转写检查点，跳过重复调用本地 ASR",
+                "检测到历史转写检查点，跳过重复 ASR",
             )
             .await?;
         state.notify_task_list_changed();
@@ -345,7 +344,11 @@ async fn transcribe_with_local_provider(
         .update_task_stage(
             task_id,
             TaskStage::UploadingAudio,
-            "当前使用本地 ASR，跳过云端音频上传阶段",
+            if state.config.asr_provider.eq_ignore_ascii_case("remote_capswriter") {
+                "准备把压缩音频上传到远端 CapsWriter"
+            } else {
+                "当前使用本地 ASR，跳过云端音频上传阶段"
+            },
         )
         .await?;
     state.notify_task_list_changed();
@@ -355,7 +358,11 @@ async fn transcribe_with_local_provider(
         .update_task_stage(
             task_id,
             TaskStage::Transcribing,
-            "开始执行本地 Qwen3 ASR 转写",
+            if state.config.asr_provider.eq_ignore_ascii_case("remote_capswriter") {
+                "开始执行远端 CapsWriter ASR 转写"
+            } else {
+                "开始执行本地 Qwen3 ASR 转写"
+            },
         )
         .await?;
     state.notify_task_list_changed();
@@ -369,7 +376,7 @@ async fn transcribe_with_local_provider(
             context: Some(task.raw_title.clone()),
         })
         .await
-        .map_err(|error| AppError::External(format!("本地 ASR 转写失败: {error}")))?;
+        .map_err(|error| AppError::External(format!("ASR 转写失败: {error}")))?;
 
     let transcript_json = serde_json::to_value(&result)
         .map_err(|error| AppError::Internal(format!("转写结果 JSON 化失败: {error}")))?;
