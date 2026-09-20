@@ -139,19 +139,48 @@ const expression = `(() => {
     request.EndDate = p.endDate;
     request.IncludePublic = '';
 
-    return new Promise(resolve => {
-        request.send()
-            .done(result => resolve(JSON.stringify({
-                authenticated: true,
-                total_count: Number(result && result.TotalCount || 0),
-                data: Array.isArray(result && result.Data) ? result.Data : []
-            })))
-            .fail(error => resolve(JSON.stringify({
+    return new Promise(async resolve => {
+        try {
+            // 昨晚的过夜实验已经实测：正常 GET CourseList.aspx 会刷新 SmartClass 的在线状态，
+            // 因此每轮第一页查询前先做一次相同的轻量 heartbeat。分页 2+ 不重复，避免额外流量。
+            if (Number(p.pageNumber) === 1) {
+                const heartbeat = await fetch('/UserSpace/CourseList.aspx', {
+                    method: 'GET',
+                    credentials: 'include',
+                    cache: 'no-store',
+                    redirect: 'follow'
+                });
+                if (!heartbeat.ok) {
+                    resolve(JSON.stringify({
+                        authenticated: false,
+                        total_count: 0,
+                        data: [],
+                        error: `CourseList heartbeat HTTP ${heartbeat.status}`
+                    }));
+                    return;
+                }
+            }
+
+            request.send()
+                .done(result => resolve(JSON.stringify({
+                    authenticated: true,
+                    total_count: Number(result && result.TotalCount || 0),
+                    data: Array.isArray(result && result.Data) ? result.Data : []
+                })))
+                .fail(error => resolve(JSON.stringify({
+                    authenticated: false,
+                    total_count: 0,
+                    data: [],
+                    error: typeof error === 'string' ? error : 'GetMyVideoList 请求失败'
+                })));
+        } catch (error) {
+            resolve(JSON.stringify({
                 authenticated: false,
                 total_count: 0,
                 data: [],
-                error: typeof error === 'string' ? error : 'GetMyVideoList 请求失败'
-            })));
+                error: String(error)
+            }));
+        }
     });
 })()`;
 const result = await session.Runtime.evaluate({
