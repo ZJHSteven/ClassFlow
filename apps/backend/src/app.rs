@@ -21,7 +21,9 @@ use tracing::{info, warn};
 
 use crate::{
     artifacts::{ArtifactStore, build_artifact_store},
-    asr::{AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider},
+    asr::{
+        AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider, RemoteCapsWriterAsrProvider,
+    },
     config::AppConfig,
     error::AppResult,
     network::NetworkHealthGate,
@@ -129,6 +131,7 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
         match config.asr_provider.trim().to_lowercase().as_str() {
             "dashscope" => Arc::new(DashScopeAsrProvider::new(pipeline.clone())),
             "local_qwen" => Arc::new(LocalQwenAsrProvider::new(config_arc.clone())),
+            "remote_capswriter" => Arc::new(RemoteCapsWriterAsrProvider::new(config_arc.clone())),
             other => {
                 return Err(crate::error::AppError::Config(format!(
                     "不支持的 CLASSFLOW_ASR_PROVIDER: {other}"

@@ -13,9 +13,11 @@ ASR provider 抽象层。
 pub mod dashscope;
 pub mod local_qwen;
 pub mod provider;
+pub mod remote_capswriter;
 pub mod types;
 
 pub use dashscope::DashScopeAsrProvider;
 pub use local_qwen::LocalQwenAsrProvider;
 pub use provider::AsrProvider;
+pub use remote_capswriter::RemoteCapsWriterAsrProvider;
 pub use types::{AsrInput, AsrProviderKind};

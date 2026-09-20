@@ -11,6 +11,7 @@ use std::path::PathBuf;
 pub enum AsrProviderKind {
     DashScope,
     LocalQwen,
+    RemoteCapsWriter,
 }
 
 impl AsrProviderKind {
@@ -19,6 +20,7 @@ impl AsrProviderKind {
         match self {
             Self::DashScope => "dashscope",
             Self::LocalQwen => "local_qwen",
+            Self::RemoteCapsWriter => "remote_capswriter",
         }
     }
 }
