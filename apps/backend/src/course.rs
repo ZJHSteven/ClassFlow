@@ -316,6 +316,34 @@ mod tests {
     }
 
     #[test]
+    fn should_normalize_zero_second_time_without_losing_real_seconds() {
+        assert_eq!(normalize_segment_time("08:00"), "08:00");
+        assert_eq!(normalize_segment_time("08:00:00"), "08:00");
+        assert_eq!(normalize_segment_time("08:00:07"), "08:00:07");
+    }
+
+    #[test]
+    fn should_treat_hhmm_and_hhmmss_as_the_same_segment_identity() {
+        let course_key = build_course_key("2026-2027-1", "2026-09-21", "实验诊断学", "王倩");
+        let compact = build_segment_key(
+            &course_key,
+            "same-new-id",
+            "08:00",
+            "08:45",
+            "https://example.test/VGA.mp4",
+        );
+        let with_seconds = build_segment_key(
+            &course_key,
+            "same-new-id",
+            "08:00:00",
+            "08:45:00",
+            "https://example.test/VGA.mp4",
+        );
+
+        assert_eq!(compact, with_seconds);
+    }
+
+    #[test]
     fn should_sort_segments_by_start_time_then_new_id() {
         let mut tasks = vec![
             demo_task("10:00", "10:45", TaskStatus::Succeeded, Some("第二节")),
