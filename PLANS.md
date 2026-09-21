@@ -27,6 +27,15 @@
 - 既有后端测试全部通过，新回归测试通过。
 - 当前生产 N100 继续处理 2026-09-21 新任务，Collector 保持关闭，避免在 Bridge 登录态修复前再次回扫。
 
+### 当前状态（2026-09-22）
+- 已完成：线上 SQLite 已做一致性备份并通过 `PRAGMA quick_check`。
+- 已完成：确认并清理 15 条同 NewID 的重复 backfill 任务；其中 8 条已完成重复任务对应的 R2 单节 Markdown/JSON 已删除，5 个受影响课程的 manifest/merged 总稿已用剩余正常任务重建。
+- 已完成：生产 `CLASSFLOW_SMARTCLASS_COLLECTOR_ENABLED=false`，Bridge 登录态问题留待后续单独处理。
+- 已完成：`normalize_segment_time()`、规范化 `segment_key`、SmartClass intake 时间标准化、旧数据库 `NewID` 兼容去重均已实现。
+- 已完成：新增 `HH:MM` / `HH:MM:SS` 等价和旧 `segment_key` 兼容回归测试。
+- 已完成：`cargo fmt --check`、`cargo check`、`cargo test`、`cargo clippy --all-targets --all-features -- -D warnings` 全部通过；单元测试 27 项、API 集成测试 11 项均通过。
+- 暂不部署：N100 正在处理 2026-09-21 的真实新任务，本轮不为代码升级再次重启生产后端；在重新启用 Collector 前再选择空闲窗口部署即可。
+
 ## 2026-05-29 本地 ASR 接入 ExecPlan
 
 ### 目标

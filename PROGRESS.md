@@ -1,6 +1,16 @@
 # 项目状态快照
 
 ## 当前结论（必须最新）
+- 已完成：`2026-09-22` 排查并修复 N100 重启后的 SmartClass 历史重复回灌。根因是旧任务时间使用 `HH:MM`、Collector 回传 `HH:MM:SS`，而旧 `segment_key` 直接哈希原始时间字符串，导致同一 NewID 被视为新片段。
+- 已完成：生产 SQLite 已备份到 `/home/zjhsteven/classflow-backups/classflow-before-dup-clean-20260922-0101.db`，备份 `PRAGMA quick_check=ok`；另保留 `/home/zjhsteven/classflow-backups/duplicate-task-cleanup-20260922.json` 作为 15 条重复任务的清理审计清单。
+- 已完成：15 条确认重复任务已从 N100 SQLite 删除，其中包含 `pending=1 / running=4 / failed=2 / succeeded=8`；对应运行中本地临时目录已清理，已完成重复任务产生的 R2 单节 Markdown/JSON 也已删除。
+- 已完成：删除重复行后，已调用 ClassFlow 自身 `sync_course_artifacts()` 重建 5 个受影响课程的 manifest 与 merged/course.md，避免课程总稿继续包含重复片段。Cloudflare 部署侧仅绑定 `classflow-artifacts` R2，没有 D1 数据库绑定；任务元数据仍以 N100 SQLite 为准。
+- 已完成：生产 `CLASSFLOW_SMARTCLASS_COLLECTOR_ENABLED=false` 并已重启生效，日志明确显示 `SmartClass Collector 未启用`；Bridge 登录态过期问题暂不处理，避免恢复前再次 backfill。
+- 已恢复：清理后数据库中只剩 2026-09-21 的 5 条真实新任务。4 个 worker 已正常取走前 4 条并进入转写阶段，最后 1 条正常排队；`实验诊断学 08:00` 已实际进入本地 Qwen sidecar，确认生产流水线恢复工作。
+- 已完成：代码层加入三层防护：`normalize_segment_time()` 将零秒 `HH:MM:SS` 规范为 `HH:MM`；`build_segment_key()` 使用规范化时间；Repository 在 `segment_key` 之外用上游稳定 `NewID` 兼容旧数据库记录，避免旧哈希再次被补录。
+- 已完成：SmartClass `video_to_intake_item()` 入库前统一课时时间格式；新增 `HH:MM` / `HH:MM:SS` 等价、非零秒保留、旧 `segment_key + 同 NewID` 兼容去重回归测试。
+- 已完成：本轮代码验证全部通过：`cargo fmt --check`、`cargo check`、`cargo test`、`cargo clippy --all-targets --all-features -- -D warnings`；后端单元测试 27 项、API 集成测试 11 项全部通过。
+- 当前部署策略：修复代码已提交到 Windows 主仓库，但为了不打断正在转写的 2026-09-21 新任务，暂不再次重启 N100 部署新二进制；Collector 当前关闭，因此旧 bug 不会再次触发。重新启用 Collector 前应先在空闲窗口部署该修复。
 - 已完成：`2026-09-14` 已将 CampusBox 上领先 `origin/main` 的 13 个本地 ASR/provider 提交回收至 Windows 主工作区；CampusBox/Linux 全量后端测试通过。同步时发现测试模块硬编码 Unix `ExitStatusExt`，现已改为按 `unix/windows` 条件导入，恢复 Windows 开发机的跨平台测试能力。
 - 现状：`2026-05-31` 本地 ASR 第一阶段代码接入和真实课程端到端冒烟都已完成；线上后端环境已经切到 `CLASSFLOW_ASR_PROVIDER=local_qwen`，并确认真实任务不再走 DashScope 上传与提交链路。
 - 已完成：Linux 侧本地 Qwen3 ASR 独立冒烟已经跑通。当前机器已从 `llama.cpp` `b7798` 源码编出 Linux 版 `libggml*.so / libllama.so`，并接到 `CapsWriter` 的 `qwen_asr_gguf/inference/bin/`；Python 虚拟环境位于 `/home/zjhsteven/CapsWriter-Offline/.venv`。
