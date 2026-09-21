@@ -223,6 +223,22 @@ impl Repository {
                 &item.mp4_url,
             );
 
+            // `segment_key` 是当前代码生成的规范身份；`new_id` 是上游录像本身的
+            // 稳定身份。两者同时检查，可以兼容升级前已经用旧时间字符串算法
+            // 写入数据库的任务，防止同一个 NewID 在代码升级后再次被创建。
+            let already_exists = sqlx::query_scalar::<_, i64>(
+                "SELECT 1 FROM tasks WHERE segment_key = ? OR new_id = ? LIMIT 1",
+            )
+            .bind(&segment_key)
+            .bind(&item.new_id)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+
+            if already_exists {
+                continue;
+            }
+
             let task_id = Uuid::new_v4().to_string();
             let inserted = sqlx::query(
                 r#"
@@ -298,12 +314,14 @@ impl Repository {
                 &item.end_time,
                 &item.mp4_url,
             );
-            let exists =
-                sqlx::query_scalar::<_, i64>("SELECT 1 FROM tasks WHERE segment_key = ? LIMIT 1")
-                    .bind(segment_key)
-                    .fetch_optional(&self.pool)
-                    .await?
-                    .is_some();
+            let exists = sqlx::query_scalar::<_, i64>(
+                "SELECT 1 FROM tasks WHERE segment_key = ? OR new_id = ? LIMIT 1",
+            )
+            .bind(segment_key)
+            .bind(&item.new_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some();
 
             if !exists {
                 missing.push(item.clone());
@@ -1074,6 +1092,48 @@ mod tests {
             .expect("第二次写入也应该返回成功响应");
 
         assert_eq!(first.accepted_count, 1);
+        assert_eq!(second.accepted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn should_deduplicate_legacy_segment_key_by_new_id() {
+        let repo = repo().await;
+        let request = demo_request();
+
+        let first = repo
+            .create_batch_with_tasks(&request, "2025-2026-2")
+            .await
+            .expect("首次写入应成功");
+        assert_eq!(first.accepted_count, 1);
+
+        // 模拟升级前已经落库的旧记录：其 segment_key 来自旧的时间字符串算法，
+        // 因而故意与当前规范化算法生成的 key 不同。
+        sqlx::query("UPDATE tasks SET segment_key = ? WHERE id = ?")
+            .bind("legacy-pre-time-normalization-key")
+            .bind(&first.task_ids[0])
+            .execute(&repo.pool)
+            .await
+            .expect("应能构造旧版 segment_key 场景");
+
+        let mut legacy_equivalent = request.items[0].clone();
+        legacy_equivalent.start_time = "08:00:00".into();
+        legacy_equivalent.end_time = "08:45:00".into();
+
+        let missing = repo
+            .filter_missing_intake_items(&[legacy_equivalent.clone()], "2025-2026-2")
+            .await
+            .expect("Collector 去重检查应成功");
+        assert!(missing.is_empty());
+
+        let replay = IntakeBatchRequest {
+            semester: None,
+            source: "smartclass".into(),
+            items: vec![legacy_equivalent],
+        };
+        let second = repo
+            .create_batch_with_tasks(&replay, "2025-2026-2")
+            .await
+            .expect("旧记录兼容去重应正常返回");
         assert_eq!(second.accepted_count, 0);
     }
 
