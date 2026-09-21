@@ -8,7 +8,7 @@
 3. 后端与前端只要围绕同一套字段展示，就不会出现“目录名一套、页面显示另一套”的错位。
 */
 
-use chrono::Utc;
+use chrono::{NaiveTime, Timelike, Utc};
 use serde_json::json;
 
 use crate::models::{CourseSummaryResponse, NormalizedTranscript, TaskRecord, TaskStatus};
@@ -22,6 +22,35 @@ pub fn build_course_key(
     format!("{semester}|{date}|{course_name}|{teacher_name}")
 }
 
+/// 把课程片段时间规范成稳定字符串，避免同一时刻因为展示精度不同而产生不同身份。
+///
+/// SmartClass 的不同入口历史上同时出现过 `08:00` 和 `08:00:00`。这两个字符串
+/// 语义上都是同一个整分时刻，但如果直接参与哈希，就会制造两个不同的
+/// `segment_key`，最终让 Collector 把同一录像再次入队。
+///
+/// 规范化规则刻意保持保守：
+///
+/// 1. 能识别为标准时刻时，零秒统一写成 `HH:MM`；
+/// 2. 秒数非零时保留 `HH:MM:SS`，避免真的存在秒级差异时错误合并；
+/// 3. 无法识别的旧数据原样返回，让异常值仍保持原来的可追踪性，而不是静默改义。
+pub fn normalize_segment_time(value: &str) -> String {
+    let trimmed = value.trim();
+
+    for pattern in ["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"] {
+        if let Ok(time) = NaiveTime::parse_from_str(trimmed, pattern) {
+            return if time.second() == 0 && time.nanosecond() == 0 {
+                time.format("%H:%M").to_string()
+            } else if time.nanosecond() == 0 {
+                time.format("%H:%M:%S").to_string()
+            } else {
+                time.format("%H:%M:%S%.f").to_string()
+            };
+        }
+    }
+
+    trimmed.to_string()
+}
+
 pub fn build_segment_key(
     course_key: &str,
     new_id: &str,
@@ -31,14 +60,19 @@ pub fn build_segment_key(
 ) -> String {
     use sha2::{Digest, Sha256};
 
+    // 片段身份必须基于“时刻语义”而不是调用方恰好采用的显示格式。
+    // 这样历史 `08:00` 与 Collector 新返回的 `08:00:00` 会落到同一个哈希。
+    let normalized_start_time = normalize_segment_time(start_time);
+    let normalized_end_time = normalize_segment_time(end_time);
+
     let mut hasher = Sha256::new();
     hasher.update(course_key.as_bytes());
     hasher.update(b"::");
     hasher.update(new_id.as_bytes());
     hasher.update(b"::");
-    hasher.update(start_time.as_bytes());
+    hasher.update(normalized_start_time.as_bytes());
     hasher.update(b"::");
-    hasher.update(end_time.as_bytes());
+    hasher.update(normalized_end_time.as_bytes());
     hasher.update(b"::");
     hasher.update(mp4_url.as_bytes());
     format!("{:x}", hasher.finalize())
