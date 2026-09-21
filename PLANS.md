@@ -1,5 +1,32 @@
 # ExecPlan
 
+## 2026-09-22 SmartClass 时间格式去重修复 ExecPlan
+
+### 背景
+- 2026-09-20 N100 重启后，SmartClass Collector 首次执行 21 天 backfill。
+- 历史任务中的课时常为 `HH:MM`，Collector 新回传值为 `HH:MM:SS`。
+- 当前 `segment_key` 直接把原始 `start_time/end_time` 字符串参与哈希，导致 `08:00` 与 `08:00:00` 被视为不同片段，重复任务进入本地 ASR 单槽队列。
+- 2026-09-22 已在线清理 15 条确认重复任务、对应 R2 重复单节产物，并重建受影响课程聚合产物；SmartClass Collector 暂时关闭，真实 2026-09-21 新任务已恢复执行。
+
+### 目标
+1. 让 `HH:MM` 与零秒的 `HH:MM:SS` 在片段身份上等价。
+2. Collector 入库前统一标准化时间展示，避免同一数据库继续出现两套时间格式。
+3. 为重复去重场景增加回归测试，覆盖 `08:00` / `08:00:00`。
+4. 不在本轮自动重新开启 SmartClass Collector；Bridge 登录态问题留到后续单独处理。
+
+### 实施步骤
+1. 在课程身份构造层增加时间规范化函数，并让 `build_segment_key()` 使用规范化后的起止时间。
+2. SmartClass `video_to_intake_item()` 将解析出的时间规范为稳定格式后再生成 `IntakeItem`。
+3. 增加单元测试：同一课程、NewID、URL 下，`HH:MM` 与 `HH:MM:SS` 生成相同 `segment_key`；Collector 标准时间输出符合预期。
+4. 执行 `cargo fmt --check`、`cargo test`、`cargo clippy --all-targets --all-features -- -D warnings`。
+5. 更新 `PROGRESS.md`，记录线上清理结果和代码修复状态。
+
+### 验收标准
+- `08:00` 与 `08:00:00` 不再生成两个不同任务身份。
+- SmartClass 新任务写入后时间格式稳定。
+- 既有后端测试全部通过，新回归测试通过。
+- 当前生产 N100 继续处理 2026-09-21 新任务，Collector 保持关闭，避免在 Bridge 登录态修复前再次回扫。
+
 ## 2026-05-29 本地 ASR 接入 ExecPlan
 
 ### 目标
