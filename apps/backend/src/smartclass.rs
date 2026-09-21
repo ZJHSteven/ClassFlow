@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use crate::{
     AppState,
+    course::normalize_segment_time,
     error::{AppError, AppResult},
     models::{IntakeBatchRequest, IntakeItem},
 };
@@ -246,6 +247,12 @@ fn video_to_intake_item(video: SmartClassVideo) -> AppResult<Option<IntakeItem>>
 
     let (date, start_time) = split_datetime(&video.start_time, "StartTime")?;
     let (_, end_time) = split_datetime(&video.stop_time, "StopTime")?;
+
+    // SmartClass 当前接口常返回 `HH:MM:SS`，而历史 userscript/旧任务大量使用
+    // `HH:MM`。在进入统一 intake 结构前先标准化，既让 UI/产物路径保持一致，
+    // 也避免后续任何尚未经过 segment_key 的字符串比较再次踩到格式差异。
+    let start_time = normalize_segment_time(start_time);
+    let end_time = normalize_segment_time(end_time);
     let mp4_url = cover_to_vga_url(&video.cover)?;
     let course_name = non_empty(&video.course_name)
         .or_else(|| non_empty(&video.title))
@@ -262,8 +269,8 @@ fn video_to_intake_item(video: SmartClassVideo) -> AppResult<Option<IntakeItem>>
         course_name: course_name.to_string(),
         teacher_name: teacher_name.to_string(),
         date: date.to_string(),
-        start_time: start_time.to_string(),
-        end_time: end_time.to_string(),
+        start_time,
+        end_time,
         raw_title: non_empty(&video.title).unwrap_or(course_name).to_string(),
     }))
 }
@@ -331,8 +338,8 @@ mod tests {
         assert_eq!(item.course_name, "医学人口学");
         assert_eq!(item.teacher_name, "韩钰");
         assert_eq!(item.date, "2026-09-16");
-        assert_eq!(item.start_time, "18:55:00");
-        assert_eq!(item.end_time, "19:40:00");
+        assert_eq!(item.start_time, "18:55");
+        assert_eq!(item.end_time, "19:40");
         assert!(item.mp4_url.ends_with("/66531474/2/VGA.mp4"));
     }
 
