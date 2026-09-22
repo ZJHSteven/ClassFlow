@@ -34,7 +34,7 @@
 - 已完成：`normalize_segment_time()`、规范化 `segment_key`、SmartClass intake 时间标准化、旧数据库 `NewID` 兼容去重均已实现。
 - 已完成：新增 `HH:MM` / `HH:MM:SS` 等价和旧 `segment_key` 兼容回归测试。
 - 已完成：`cargo fmt --check`、`cargo check`、`cargo test`、`cargo clippy --all-targets --all-features -- -D warnings` 全部通过；单元测试 27 项、API 集成测试 11 项均通过。
-- 暂不部署：N100 正在处理 2026-09-21 的真实新任务，本轮不为代码升级再次重启生产后端；在重新启用 Collector 前再选择空闲窗口部署即可。
+- 已部署：`2026-09-22 15:38 CST` 在确认 2026-09-21 的 5 条真实任务全部完成、当前无 pending/running 任务后完成生产部署。Windows/GitHub/N100 代码已统一到 `2d7edc1`；N100 Linux 侧 27 个单元测试 + 11 个 API 集成测试通过，release 构建成功，服务重启后健康检查正常，Collector 继续保持关闭。
 
 ## 2026-05-29 本地 ASR 接入 ExecPlan
 

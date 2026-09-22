@@ -10,7 +10,7 @@
 - 已完成：代码层加入三层防护：`normalize_segment_time()` 将零秒 `HH:MM:SS` 规范为 `HH:MM`；`build_segment_key()` 使用规范化时间；Repository 在 `segment_key` 之外用上游稳定 `NewID` 兼容旧数据库记录，避免旧哈希再次被补录。
 - 已完成：SmartClass `video_to_intake_item()` 入库前统一课时时间格式；新增 `HH:MM` / `HH:MM:SS` 等价、非零秒保留、旧 `segment_key + 同 NewID` 兼容去重回归测试。
 - 已完成：本轮代码验证全部通过：`cargo fmt --check`、`cargo check`、`cargo test`、`cargo clippy --all-targets --all-features -- -D warnings`；后端单元测试 27 项、API 集成测试 11 项全部通过。
-- 当前部署策略：修复代码已提交到 Windows 主仓库，但为了不打断正在转写的 2026-09-21 新任务，暂不再次重启 N100 部署新二进制；Collector 当前关闭，因此旧 bug 不会再次触发。重新启用 Collector 前应先在空闲窗口部署该修复。
+- 已部署：`2026-09-22 15:38 CST` 已将去重修复同步到 GitHub 与 N100，N100 release 构建成功并重启 `classflow-backend.service`；4 个 worker 正常启动，`/api/v1/health` 返回 `ok`，生产 Git HEAD 为 `2d7edc1`。部署前后队列均为空，未打断任何任务；`CLASSFLOW_SMARTCLASS_COLLECTOR_ENABLED=false` 继续保持，日志明确显示 `SmartClass Collector 未启用`。
 - 已完成：`2026-09-14` 已将 CampusBox 上领先 `origin/main` 的 13 个本地 ASR/provider 提交回收至 Windows 主工作区；CampusBox/Linux 全量后端测试通过。同步时发现测试模块硬编码 Unix `ExitStatusExt`，现已改为按 `unix/windows` 条件导入，恢复 Windows 开发机的跨平台测试能力。
 - 现状：`2026-05-31` 本地 ASR 第一阶段代码接入和真实课程端到端冒烟都已完成；线上后端环境已经切到 `CLASSFLOW_ASR_PROVIDER=local_qwen`，并确认真实任务不再走 DashScope 上传与提交链路。
 - 已完成：Linux 侧本地 Qwen3 ASR 独立冒烟已经跑通。当前机器已从 `llama.cpp` `b7798` 源码编出 Linux 版 `libggml*.so / libllama.so`，并接到 `CapsWriter` 的 `qwen_asr_gguf/inference/bin/`；Python 虚拟环境位于 `/home/zjhsteven/CapsWriter-Offline/.venv`。
