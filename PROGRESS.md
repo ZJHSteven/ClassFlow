@@ -347,6 +347,7 @@
 - 2026-10-07 协议收口：Windows Rust CapsWriterGateway 已升级为通用 `/v1/transcriptions` job 资源 API；ClassFlow provider 同步改为优先从 `GET /v1/transcriptions/{id}` 的 completed 资源直接读取 result，旧 `/result` 仅作为滚动升级兼容回退。
 - 2026-10-07 新增“一次提交尝试内”的 `Idempotency-Key`：同一次 HTTP 上传若响应丢失可安全重发，不重复创建 GPU job；人工/任务级重新尝试会生成新 key，因此不会被旧 failed job 永久锁死。
 - 2026-10-07 已完成本轮 Rust 格式化，正在继续跑 `remote_capswriter` 定向测试与全量 Clippy。
+- 2026-10-07 `cargo fmt --check`、`cargo test ... remote_capswriter`、`cargo clippy --all-targets --all-features -- -D warnings` 已全部通过；定向测试确认新版 provider 会携带单次提交幂等键、直接从 completed job 资源读取 result，并且不会再访问兼容 `/result` 路径。
 - 已确认 ARM64 构建链可用：迁移仓库私有目录中的便携 Zig + `cargo-zigbuild` 已成功生成约 22.7MB 的 ARM64 backend；该二进制来自重构前代码，只用于证明交叉编译链可行，最终部署必须在本轮改造完成后重建。
 - 设计已冻结：新增 `remote_capswriter` provider；N1 保存 `audio.m4a` checkpoint 并把文件流式上传 Windows Headless API；Windows 负责临时解码 PCM 与 GPU ASR；remux 成功并验证音轨后立即删除 MP4；ASR/后续阶段失败保留 M4A，整任务成功才清理。
 - 网络并行边界已重新确认：Cloudflare 同 tunnel token 会把 N100/N1 变成同一 Tunnel UUID 的 replicas，不能确定请求落哪台；FRP auth token 可复用，但当前两台复制了相同 proxy name + remotePort 且未配置 load-balancer，原样并行会冲突。并行验证应改成四个明确节点：`n100-frp / n100-cf / n1-frp / n1-cf`。
