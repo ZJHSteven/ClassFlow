@@ -1,5 +1,95 @@
 # ExecPlan
 
+## 2026-10-07 N1 正式迁移 + Windows 远端 ASR + 自动笔记三阶段总计划
+
+### 当前重新核验结论
+- 本轮目标不是重新发明 ClassFlow，而是把 2026-09-20 已经完成的大部分代码真正收口到长期生产形态：**N1 负责轻量调度与缓存，Windows RTX4060 负责重型 ASR**。
+- `ClassFlow main` 已包含 `remote_capswriter` provider、`audio.m4a` 检查点、原 AAC 无损 remux、`ffprobe` 校验、成功后尽早删除 MP4、失败保留 M4A，以及远端异步 job 协议与测试。此前计划里“待实现”的 Phase 1 核心实际上已经落进 main。
+- Windows 生产 CapsWriter 已完成全阶段抢占式调度；ClassFlow/微信/批量文件统一保持低优先级 `source=file`，生产 CapsWriter 核心本阶段视为稳定内核。
+- Windows `CapsWriterGateway` Rust 服务已在 `127.0.0.1:6017` 常驻并通过真实文件转写，但目前只有同步 `POST /v1/transcribe`。ClassFlow 已实现异步 `POST /v1/transcriptions -> GET status -> GET result`，所以优先给**现有 Rust Gateway 增加异步 job 兼容层**，不启用旧 Python Headless API 分支。
+- N1 实机根分区约 `6.4 GiB`，已用约 `2.1 GiB`、可用约 `4.3 GiB`；内存约 `1.8 GiB`。N1 不长期保存 WAV，也不加载 Qwen/CapsWriter 模型。
+- N1 已完成单 Mihomo 化：系统 Mihomo 同时承担 Meta TUN、规则处理、FRP 的 6000 listener 与 Cloudflare 的 18080 listener；`s-ui` 与旧 `tmu-ws-backup` 已停用。N100 故意保留旧双 Mihomo + S-UI 结构作为救援机。
+- 四条管理 SSH 已于 2026-10-07 实测连通：`campus-box-frp`、`campus-box-cf`、`n1-campus-frp`、`n1-campus-cf`。
+- N1 IPv6/TUN 已恢复正常；同一天津医大校内限制页实测 IPv4 仍被判校外、IPv6 可正常访问，因此 N1 的 TMU listener 继续保留目标校内域名强制 IPv6。
+- N100 当前 IPv6 到目标 literal address 的数据面可通，但 `curl -6` 经主机名出现解析异常，所以不能记为“IPv6 端到端完全正常”。
+- Wi-Fi：N1 最近 24 小时未见 deauth/auth timeout；N100 今晚仍出现 `DEAUTH_LEAVING`、关联超时和 AP 切换。两台 RSSI 都很强，旧结论继续成立：主要故障边界在校园 AP/控制器漫游/状态机，不是单纯信号弱。
+- N1 的 `classflow-backend.service` 当前仍 `inactive + disabled`；生产仍在 N100。
+
+### 总体架构
+```text
+SmartClass
+   │  每 10 分钟自动发现（Phase 2）
+   ▼
+N1 / ClassFlow
+   ├─ SQLite 可重试任务队列
+   ├─ source.mp4 -> 原 AAC 无损 remux -> audio.m4a
+   ├─ ffprobe 成功后立即删 MP4
+   └─ audio.m4a 作为可重放 ASR checkpoint
+               │ HTTPS / Cloudflare Tunnel
+               ▼
+Windows / Rust CapsWriterGateway
+   ├─ 异步 job API
+   └─ 统一文件型入口
+               ▼
+CapsWriter Server :6016
+   └─ source=file / P1，mic/P0 可全阶段抢占
+```
+
+### Phase 1：N1 正式迁移 + Windows 远端 ASR
+1. 给 `CapsWriterGateway` 增加 ClassFlow 已有 provider 期待的异步接口：
+   - `POST /v1/transcriptions`：raw body + `X-Filename`，返回 job id；
+   - `GET /v1/transcriptions/{id}`：`queued/running/completed/failed`；
+   - `GET /v1/transcriptions/{id}/result`：最终结构化结果；
+   - 保留 `/v1/transcribe`，不破坏 WeChatCLI/本机脚本。
+2. Windows Cloudflare Tunnel 稳定 hostname -> `127.0.0.1:6017`；Cloudflare Access + Gateway Bearer 双层鉴权。ClassFlow 已预留 Access Client ID/Secret。
+3. N1 用短 M4A 走公网入口做真实提交/轮询/取结果，并验证中途断网后 N1 checkpoint 仍可重放。
+4. 把“远端暂不可达/笔记本离线”建模成可重试等待，而不是丢任务；重试必须复用 `audio.m4a`，禁止重新下载视频。
+5. 前端显示“等待远端 ASR / 上传中 / 已提交 / 转写中 / 重试等待 / 完成 / 失败”。
+6. ARM64 构建并部署 N1；迁移当前生产 SQLite/backend.env；切换前确保没有不可恢复的 running task。
+7. N1 真课端到端验收后停 N100 ClassFlow 为救援状态；两台不同时消费同一生产任务库。
+8. 增加 eMMC 水位与孤儿缓存清理：保留任务引用的失败 M4A，清理无引用孤儿 MP4/M4A，避免 8GB eMMC 被异常任务填满。
+
+#### Phase 1 验收
+- Windows 在线时，一条真课可完整 `发现/入队 -> 下载 -> M4A -> 远端 ASR -> artifacts -> cleanup`。
+- Windows 离线/合盖/断网时，任务不丢、M4A 不丢、不重复下载 MP4；恢复后可重试完成。
+- 本机 mic 使用 CapsWriter 时，远端 ClassFlow file 仍是后台任务并能被抢占。
+- N1 重启后未完成任务可从 SQLite + M4A checkpoint 恢复。
+
+### Phase 2：SmartClass 全自动发现
+- 已有：Rust Collector、分页、Cover -> `VGA.mp4`、10 分钟轮询、历史回扫、登录失效退避、时间格式去重均已实现；2026-09-22 已修复重启后的重复回灌。
+- 当前尾巴不是 Collector 没写，而是登录态/浏览器桥无人值守化；生产 Collector 当前故意关闭。
+- 目标：N1 本机独立持久 Chrome/Chromium profile + 会话桥，不再依赖 Windows 反向 SSH；每 10 分钟自动发现新课，登录失效只进入明确退避状态。
+- userscript/SmartClass Downloader 保留为调试与救援入口，不再是日常必经步骤。
+
+#### Phase 2 验收
+- 连续一个正常上课日无需人工点下载/提交，新课自动进入 ClassFlow。
+- N1/后端重启不回灌历史任务，同一 NewID/时间片只有一个任务身份。
+- 登录失效/恢复可观测，不把 Cookie/token 明文写入仓库或 env。
+
+### Phase 3：Windows 自动维护课程 Audio/Notes 笔记仓库
+```text
+<学期笔记根目录>/
+  <课程名>/
+    Audio/<日期-课次>.md
+    Notes/<日期-课次>.md
+```
+1. Windows 轻量 daemon 定期读取 ClassFlow 已完成任务/课程产物，只拉新增或变化内容。
+2. ASR 文本稳定命名写入 `Audio/`，用本地 manifest 保证幂等。
+3. 对尚无笔记的 Audio，使用现有 `chatgpt-archive actor send` Phase 4 能力提交到 ChatGPT 网页端“录音转笔记” Project。
+4. turn 完成后拉取最终笔记写入 `Notes/`；异常终止、Chrome 重启、steering 后都必须可恢复且不重复生成。
+5. 每批成功后 Git add/commit/push；失败保留队列和源 Audio，下次继续。
+6. Phase 3 不阻塞 N1 主链；笔记 daemon 离线时，课程下载/ASR checkpoint/任务状态仍自洽。
+
+### 本轮立即执行顺序（2026-10-07）
+1. 已完成：恢复关键历史聊天并对齐最后结论。
+2. 已完成：核验 N1/N100 网络、IPv6、Wi-Fi、磁盘、四条 SSH 与 ClassFlow 服务现状。
+3. 已完成：确认 `remote_capswriter + M4A checkpoint` 已存在 main，不重复实现。
+4. 正在做：扩展 Windows Rust `CapsWriterGateway` 异步 job API并跑完整回归。
+5. 待执行：配置/验证 Cloudflare 公网 hostname，完成 N1 -> Windows 真实短音频冒烟。
+6. 待执行：补 ClassFlow“远端临时离线 = 可重试等待”与前端状态语义。
+7. 待执行：ARM64 构建、部署 N1、迁移生产 SQLite并真课切流。
+8. Phase 1 稳定后再启用 N1 SmartClass Collector；Phase 3 最后实施，避免同时引入三个新故障域。
+
 ## 2026-09-22 SmartClass 时间格式去重修复 ExecPlan
 
 ### 背景
