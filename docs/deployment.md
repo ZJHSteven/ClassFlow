@@ -112,6 +112,8 @@ CLASSFLOW_REMOTE_CAPSWRITER_REQUEST_TIMEOUT_SECS=30
 CLASSFLOW_REMOTE_CAPSWRITER_UPLOAD_TIMEOUT_SECS=900
 CLASSFLOW_REMOTE_CAPSWRITER_POLL_INTERVAL_SECS=1
 CLASSFLOW_REMOTE_CAPSWRITER_POLL_TIMEOUT_SECS=3600
+CLASSFLOW_REMOTE_CAPSWRITER_RETRY_WAIT_SECS=30
+CLASSFLOW_REMOTE_CAPSWRITER_RETRY_MAX_WAIT_SECS=300
 
 # 与其他受 Cloudflare Access 保护的后端调用共用同一枚 Service Token 即可。
 CF_ACCESS_CLIENT_ID=replace-with-access-client-id
@@ -129,6 +131,17 @@ CF_ACCESS_CLIENT_SECRET=replace-with-access-client-secret
 `GET /v1/transcriptions/{id}`。当状态为 `completed` 时，同一个 job 资源直接带 `result`；
 `GET /v1/transcriptions/{id}/result` 只作为旧服务端滚动升级兼容路径。ClassFlow 每次实际提交尝试会生成
 独立 `Idempotency-Key`，网络在 202 响应前断开时可安全重发同一 M4A，而人工/任务级重新尝试仍会生成新 key。
+
+ClassFlow 还会把 Gateway 返回的远端 job id 写入 SQLite。这样恢复边界不只是 `audio.m4a`：
+
+1. 上传前断线：保留 M4A，稍后重新上传；
+2. 上传成功 / 202 返回后断线：保留 `remote_capswriter_job_id`，恢复后继续轮询原 job；
+3. Gateway 重启导致旧 job 404：只清远端 job id，保留 M4A 后重新提交；
+4. 已拿到文本后后处理失败：优先复用数据库里的 transcript checkpoint，不再碰 GPU。
+
+可恢复的远端故障不会把任务改成 failed，而会进入 `pending + retry_waiting`，按
+`CLASSFLOW_REMOTE_CAPSWRITER_RETRY_WAIT_SECS` 指数退避到 `..._MAX_WAIT_SECS`。因此笔记本合盖、
+离线或 Tunnel 短时不可达时不会占死 worker，也不会要求人工点重试；后端重启时 pending 任务仍会自动恢复入队。
 
 2026-10-08 已在 N1 用真实 103176-byte M4A 完成跨公网闭环：提交得到 queued job，随后轮询到
 `completed`，返回完整中文文本、duration、tokens、timestamps；链路实际覆盖 N1 -> Cloudflare ->

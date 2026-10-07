@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use http_body::Frame;
 use http_body_util::StreamBody;
-use reqwest::{Body, Client, RequestBuilder};
+use reqwest::{Body, Client, RequestBuilder, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::{fs, time::sleep};
@@ -29,7 +29,10 @@ use crate::{
     models::NormalizedTranscript,
 };
 
-use super::{provider::AsrProvider, types::AsrInput};
+use super::{
+    provider::AsrProvider,
+    types::{AsrInput, AsrProgressEvent},
+};
 
 #[derive(Debug, Deserialize)]
 struct SubmitResponse {
@@ -128,6 +131,7 @@ impl RemoteCapsWriterAsrProvider {
             .and_then(|value| value.to_str())
             .unwrap_or("audio.m4a")
             .to_string();
+        input.report(AsrProgressEvent::Uploading);
         // 一个 `transcribe_audio()` 调用只生成一个幂等键；网络层如果出现“文件其实已被
         // Gateway 接收，但 202 响应丢了”的歧义，我们可以安全重发同一文件，而不会
         // 在 Windows 上创建第二个 GPU job。真正的 ClassFlow 任务人工重试会进入新的
@@ -164,7 +168,7 @@ impl RemoteCapsWriterAsrProvider {
                     sleep(Duration::from_millis(500)).await;
                 }
                 Err(error) => {
-                    return Err(AppError::External(format!(
+                    return Err(AppError::RetryableExternal(format!(
                         "上传音频到远端 CapsWriter 失败: first_error={}, retry_error={error}",
                         last_transport_error.unwrap_or_else(|| "unknown".to_string())
                     )));
@@ -174,12 +178,15 @@ impl RemoteCapsWriterAsrProvider {
 
         let status = response.status();
         let body = response.text().await.map_err(|error| {
-            AppError::External(format!("读取远端 CapsWriter 提交响应失败: {error}"))
+            AppError::RetryableExternal(format!("读取远端 CapsWriter 提交响应失败: {error}"))
         })?;
         if !status.is_success() {
-            return Err(AppError::External(format!(
-                "远端 CapsWriter 提交失败: http={status}, body={body}"
-            )));
+            let message = format!("远端 CapsWriter 提交失败: http={status}, body={body}");
+            return if is_retryable_http_status(status) {
+                Err(AppError::RetryableExternal(message))
+            } else {
+                Err(AppError::External(message))
+            };
         }
         let submitted = serde_json::from_str::<SubmitResponse>(&body).map_err(|error| {
             AppError::External(format!(
@@ -191,6 +198,9 @@ impl RemoteCapsWriterAsrProvider {
                 "远端 CapsWriter 提交成功但缺少 job id".to_string(),
             ));
         }
+        input.report(AsrProgressEvent::Submitted {
+            job_id: submitted.id.clone(),
+        });
         Ok(submitted.id)
     }
 
@@ -203,15 +213,25 @@ impl RemoteCapsWriterAsrProvider {
             )
             .send()
             .await
-            .map_err(|error| AppError::External(format!("请求远端 CapsWriter 失败: {error}")))?;
+            .map_err(|error| {
+                AppError::RetryableExternal(format!("请求远端 CapsWriter 失败: {error}"))
+            })?;
         let status = response.status();
         let body = response.text().await.map_err(|error| {
-            AppError::External(format!("读取远端 CapsWriter 响应失败: {error}"))
+            AppError::RetryableExternal(format!("读取远端 CapsWriter 响应失败: {error}"))
         })?;
-        if !status.is_success() {
-            return Err(AppError::External(format!(
-                "远端 CapsWriter 请求失败: http={status}, body={body}"
+        if status == StatusCode::NOT_FOUND {
+            return Err(AppError::NotFound(format!(
+                "远端 CapsWriter job 不存在: body={body}"
             )));
+        }
+        if !status.is_success() {
+            let message = format!("远端 CapsWriter 请求失败: http={status}, body={body}");
+            return if is_retryable_http_status(status) {
+                Err(AppError::RetryableExternal(message))
+            } else {
+                Err(AppError::External(message))
+            };
         }
         serde_json::from_str::<Value>(&body).map_err(|error| {
             AppError::External(format!(
@@ -220,14 +240,19 @@ impl RemoteCapsWriterAsrProvider {
         })
     }
 
-    async fn wait_for_result(&self, job_id: &str) -> AppResult<NormalizedTranscript> {
+    async fn wait_for_result(
+        &self,
+        input: &AsrInput,
+        job_id: &str,
+    ) -> AppResult<NormalizedTranscript> {
         let started_at = Instant::now();
+        let mut last_reported_status = String::new();
         loop {
             if self.config.remote_capswriter_poll_timeout_secs > 0.0
                 && started_at.elapsed()
                     >= Duration::from_secs_f64(self.config.remote_capswriter_poll_timeout_secs)
             {
-                return Err(AppError::External(format!(
+                return Err(AppError::RetryableExternal(format!(
                     "等待远端 CapsWriter 转写超时: job_id={job_id}, timeout_secs={}",
                     self.config.remote_capswriter_poll_timeout_secs
                 )));
@@ -244,17 +269,43 @@ impl RemoteCapsWriterAsrProvider {
                 },
             )?;
             match job.status.as_str() {
-                "queued" | "running" => {
+                "queued" => {
+                    if last_reported_status != "queued" {
+                        input.report(AsrProgressEvent::Queued {
+                            job_id: job_id.to_string(),
+                        });
+                        last_reported_status = "queued".to_string();
+                    }
+                    sleep(Duration::from_secs_f64(
+                        self.config.remote_capswriter_poll_interval_secs.max(0.05),
+                    ))
+                    .await;
+                }
+                "running" => {
+                    if last_reported_status != "running" {
+                        input.report(AsrProgressEvent::Running {
+                            job_id: job_id.to_string(),
+                        });
+                        last_reported_status = "running".to_string();
+                    }
                     sleep(Duration::from_secs_f64(
                         self.config.remote_capswriter_poll_interval_secs.max(0.05),
                     ))
                     .await;
                 }
                 "failed" => {
-                    return Err(AppError::External(format!(
+                    let message = format!(
                         "远端 CapsWriter 转写失败: job_id={job_id}, error={}",
                         display_remote_error(job.error.as_ref())
-                    )));
+                    );
+                    if remote_error_retryable(job.error.as_ref()) {
+                        input.report(AsrProgressEvent::JobInvalidated {
+                            job_id: job_id.to_string(),
+                            reason: message.clone(),
+                        });
+                        return Err(AppError::RetryableExternal(message));
+                    }
+                    return Err(AppError::External(message));
                 }
                 "completed" => {
                     // 新版通用 Gateway 的 canonical job 资源在 completed 时直接携带 result，
@@ -316,6 +367,24 @@ fn display_remote_error(error: Option<&Value>) -> String {
     error.to_string()
 }
 
+fn remote_error_retryable(error: Option<&Value>) -> bool {
+    error
+        .and_then(|value| value.get("retryable"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn is_retryable_http_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    ) || status.is_server_error()
+}
+
 fn normalize_result(
     job_id: &str,
     result: CapsWriterResult,
@@ -350,9 +419,22 @@ fn normalize_result(
 #[async_trait]
 impl AsrProvider for RemoteCapsWriterAsrProvider {
     async fn transcribe_audio(&self, input: AsrInput) -> AppResult<NormalizedTranscript> {
+        if let Some(saved_job_id) = input.resume_job_id.clone() {
+            match self.wait_for_result(&input, &saved_job_id).await {
+                Ok(result) => return Ok(result),
+                Err(AppError::NotFound(_)) => {
+                    input.report(AsrProgressEvent::JobInvalidated {
+                        job_id: saved_job_id.clone(),
+                        reason: "远端 Gateway 已无该 job，保留 M4A 并重新提交".to_string(),
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
         let idempotency_key = format!("classflow:{}:{}", input.task_id, Uuid::new_v4());
         let job_id = self.submit_audio(&input, &idempotency_key).await?;
-        self.wait_for_result(&job_id).await
+        self.wait_for_result(&input, &job_id).await
     }
 }
 
@@ -373,7 +455,10 @@ mod tests {
     use serde_json::{Value, json};
     use tempfile::tempdir;
 
-    use crate::{asr::provider::AsrProvider, config::AppConfig};
+    use crate::{
+        asr::{provider::AsrProvider, types::AsrProgressEvent},
+        config::AppConfig,
+    };
 
     use super::{AsrInput, RemoteCapsWriterAsrProvider};
 
@@ -421,6 +506,8 @@ mod tests {
         let poll_index = state.polls.fetch_add(1, Ordering::SeqCst);
         if poll_index == 0 {
             Json(json!({"id": job_id, "status": "queued", "error": null}))
+        } else if poll_index == 1 {
+            Json(json!({"id": job_id, "status": "running", "error": null}))
         } else {
             Json(json!({
                 "id": job_id,
@@ -492,12 +579,15 @@ mod tests {
         config.remote_capswriter_upload_timeout_secs = 5.0;
 
         let provider = RemoteCapsWriterAsrProvider::new(Arc::new(config));
+        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
         let transcript = provider
             .transcribe_audio(AsrInput {
                 audio_path,
                 task_id: "classflow-task".to_string(),
                 language: Some("zh".to_string()),
                 context: None,
+                resume_job_id: None,
+                progress: Some(progress_tx),
             })
             .await
             .expect("remote transcription should succeed");
@@ -538,8 +628,84 @@ mod tests {
                 .as_deref()
                 .is_some_and(|value| value.starts_with("classflow:classflow-task:"))
         );
-        assert!(state.polls.load(Ordering::SeqCst) >= 2);
+        assert!(state.polls.load(Ordering::SeqCst) >= 3);
         assert_eq!(state.result_gets.load(Ordering::SeqCst), 0);
+
+        let events = std::iter::from_fn(|| progress_rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(matches!(events.first(), Some(AsrProgressEvent::Uploading)));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AsrProgressEvent::Submitted { job_id } if job_id == "job-1"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AsrProgressEvent::Queued { job_id } if job_id == "job-1"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AsrProgressEvent::Running { job_id } if job_id == "job-1"
+        )));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn should_resume_saved_remote_job_without_reuploading_audio() {
+        let state = MockApiState::default();
+        let app = Router::new()
+            .route("/v1/transcriptions", post(submit))
+            .route("/v1/transcriptions/{job_id}", get(status))
+            .with_state(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock API should bind");
+        let addr = listener.local_addr().expect("mock API should have address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("mock API should serve");
+        });
+
+        let temp = tempdir().expect("tempdir should exist");
+        let audio_path = temp.path().join("audio.m4a");
+        tokio::fs::write(&audio_path, b"must-not-be-uploaded")
+            .await
+            .expect("test audio should be written");
+
+        let mut config = AppConfig::from_env().expect("default config should parse");
+        config.remote_capswriter_base_url = format!("http://{addr}");
+        config.remote_capswriter_poll_interval_secs = 0.01;
+        config.remote_capswriter_poll_timeout_secs = 5.0;
+        config.remote_capswriter_request_timeout_secs = 5.0;
+
+        let provider = RemoteCapsWriterAsrProvider::new(Arc::new(config));
+        let transcript = provider
+            .transcribe_audio(AsrInput {
+                audio_path,
+                task_id: "resume-task".to_string(),
+                language: Some("zh".to_string()),
+                context: None,
+                resume_job_id: Some("job-1".to_string()),
+                progress: None,
+            })
+            .await
+            .expect("saved job should resume");
+
+        assert_eq!(transcript.text_accu, "远端识别成功");
+        assert!(
+            state
+                .upload_body
+                .lock()
+                .expect("upload body lock")
+                .is_empty()
+        );
+        assert!(
+            state
+                .idempotency_key
+                .lock()
+                .expect("idempotency key lock")
+                .is_none()
+        );
 
         server.abort();
     }

@@ -66,8 +66,11 @@ pub enum TaskStage {
     Queued,
     Downloading,
     ExtractingAudio,
+    WaitingRemoteAsr,
     UploadingAudio,
+    RemoteAsrQueued,
     Transcribing,
+    RetryWaiting,
     StoringArtifacts,
     MergingCourse,
     Cleanup,
@@ -80,8 +83,11 @@ impl TaskStage {
             Self::Queued => "queued",
             Self::Downloading => "downloading",
             Self::ExtractingAudio => "extracting_audio",
+            Self::WaitingRemoteAsr => "waiting_remote_asr",
             Self::UploadingAudio => "uploading_audio",
+            Self::RemoteAsrQueued => "remote_asr_queued",
             Self::Transcribing => "transcribing",
+            Self::RetryWaiting => "retry_waiting",
             Self::StoringArtifacts => "storing_artifacts",
             Self::MergingCourse => "merging_course",
             Self::Cleanup => "cleanup",
@@ -115,6 +121,12 @@ pub struct TaskRecord {
     pub uploaded_source_url_saved_at: Option<DateTime<Utc>>,
     pub dashscope_task_id: Option<String>,
     pub dashscope_task_id_saved_at: Option<DateTime<Utc>>,
+    /// Windows CapsWriterGateway 的异步 job checkpoint。
+    ///
+    /// 这两个字段和本地 `audio.m4a` 一起构成远端 ASR 的 durable resume 边界：
+    /// N1 在提交成功后断网时，下次先继续轮询旧 job，而不是重复提交 GPU 任务。
+    pub remote_capswriter_job_id: Option<String>,
+    pub remote_capswriter_job_id_saved_at: Option<DateTime<Utc>>,
     pub segment_markdown_path: Option<String>,
     pub segment_json_path: Option<String>,
     pub course_manifest_path: Option<String>,

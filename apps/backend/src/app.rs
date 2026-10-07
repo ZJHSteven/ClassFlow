@@ -81,17 +81,21 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
         )
         .await?;
 
+    let temp_jobs_root = state.config.temp_root.join("jobs");
+    // 启动清理必须发生在 recoverable task 重新入队之前，否则 cleaner 可能与刚启动的
+    // worker 同时操作同一 work_dir。清理器会查询 SQLite，只删除真正无引用/可重建的
+    // 陈旧缓存，并保留仍被任务引用的 M4A checkpoint。
+    let removed =
+        cleanup_stale_temp_dirs(&temp_jobs_root, state.config.cleanup_hours, &state.repo).await?;
+    if removed > 0 {
+        info!("启动时已清理过期临时目录数量: {}", removed);
+    }
+
     let recoverable_task_ids = state.repo.list_recoverable_task_ids().await?;
     for task_id in recoverable_task_ids {
         if let Err(error) = state.queue.enqueue(task_id.clone()) {
             warn!("恢复任务重新入队失败: task_id={}, error={}", task_id, error);
         }
-    }
-
-    let temp_jobs_root = state.config.temp_root.join("jobs");
-    let removed = cleanup_stale_temp_dirs(&temp_jobs_root, state.config.cleanup_hours).await?;
-    if removed > 0 {
-        info!("启动时已清理过期临时目录数量: {}", removed);
     }
 
     spawn_smartclass_collector(state.clone());

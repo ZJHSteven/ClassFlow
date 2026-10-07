@@ -29,6 +29,12 @@ pub enum AppError {
     BadRequest(String),
     #[error("外部服务错误: {0}")]
     External(String),
+    /// 外部依赖当前不可用，但保留本地 checkpoint 后可以安全稍后重试。
+    ///
+    /// 与普通 `External` 分开，是为了让 worker 能把“笔记本合盖 / Tunnel 暂不可达 /
+    /// 远端 5xx”建模成 pending + retry_waiting，而不是永久 failed。
+    #[error("外部服务暂不可用: {0}")]
+    RetryableExternal(String),
     #[error("数据库错误: {0}")]
     Database(String),
     #[error("IO 错误: {0}")]
@@ -66,7 +72,7 @@ impl IntoResponse for AppError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::BadRequest(_) | Self::Config(_) => StatusCode::BAD_REQUEST,
-            Self::External(_) => StatusCode::BAD_GATEWAY,
+            Self::External(_) | Self::RetryableExternal(_) => StatusCode::BAD_GATEWAY,
             Self::Database(_) | Self::Io(_) | Self::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

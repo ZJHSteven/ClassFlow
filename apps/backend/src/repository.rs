@@ -51,7 +51,8 @@ new_id, raw_title, attempt_count, last_error, uploaded_source_url,
 segment_markdown_path, segment_json_path, course_manifest_path, merged_markdown_path,
 transcript_text, transcript_json, started_at, completed_at, created_at, updated_at,
 progress_percent, transferred_bytes, total_bytes, rate_bytes_per_sec, eta_seconds,
-uploaded_source_url_saved_at, dashscope_task_id, dashscope_task_id_saved_at
+uploaded_source_url_saved_at, dashscope_task_id, dashscope_task_id_saved_at,
+remote_capswriter_job_id, remote_capswriter_job_id_saved_at
 "#;
 
 impl Repository {
@@ -147,6 +148,10 @@ impl Repository {
         self.ensure_optional_task_column("dashscope_task_id", "TEXT")
             .await?;
         self.ensure_optional_task_column("dashscope_task_id_saved_at", "TEXT")
+            .await?;
+        self.ensure_optional_task_column("remote_capswriter_job_id", "TEXT")
+            .await?;
+        self.ensure_optional_task_column("remote_capswriter_job_id_saved_at", "TEXT")
             .await?;
 
         Ok(())
@@ -500,6 +505,26 @@ impl Repository {
             .await
     }
 
+    /// 把可安全恢复的外部依赖失败变成“等待重试”，而不是永久失败。
+    ///
+    /// status 使用 pending，因此后端重启后 `list_recoverable_task_ids()` 会自动重新入队；
+    /// stage 单独使用 retry_waiting，前端可以明确告诉用户“任务没丢，只是在等远端恢复”。
+    pub async fn mark_task_retry_waiting(&self, task_id: &str, reason: &str) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE tasks SET status = ?, stage = ?, last_error = ?, completed_at = NULL, updated_at = ?, progress_percent = NULL, transferred_bytes = NULL, total_bytes = NULL, rate_bytes_per_sec = NULL, eta_seconds = NULL WHERE id = ?",
+        )
+        .bind(TaskStatus::Pending.as_str())
+        .bind(TaskStage::RetryWaiting.as_str())
+        .bind(reason)
+        .bind(&now)
+        .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        self.add_task_event(task_id, TaskStage::RetryWaiting.as_str(), "warning", reason)
+            .await
+    }
+
     /**
      * 保存“上传阶段已经完成”的断点信息。
      *
@@ -585,6 +610,55 @@ impl Repository {
         .await?;
         self.add_task_event(task_id, TaskStage::Transcribing.as_str(), "info", reason)
             .await
+    }
+
+    /// 保存 Windows CapsWriterGateway 已接受的异步 job id。
+    pub async fn save_remote_capswriter_job_checkpoint(
+        &self,
+        task_id: &str,
+        job_id: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE tasks SET remote_capswriter_job_id = ?, remote_capswriter_job_id_saved_at = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(job_id)
+        .bind(&now)
+        .bind(&now)
+        .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        self.add_task_event(
+            task_id,
+            TaskStage::RemoteAsrQueued.as_str(),
+            "info",
+            &format!("远端 ASR job 已提交并保存检查点: {job_id}"),
+        )
+        .await
+    }
+
+    /// Gateway 重启后内存 job 可能不存在，或 job 已进入可重试 failed。
+    /// 这里只清远端 job id，不碰本地 M4A checkpoint。
+    pub async fn clear_remote_capswriter_job_checkpoint(
+        &self,
+        task_id: &str,
+        reason: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE tasks SET remote_capswriter_job_id = NULL, remote_capswriter_job_id_saved_at = NULL, updated_at = ? WHERE id = ?",
+        )
+        .bind(&now)
+        .bind(task_id)
+        .execute(&self.pool)
+        .await?;
+        self.add_task_event(
+            task_id,
+            TaskStage::WaitingRemoteAsr.as_str(),
+            "warning",
+            reason,
+        )
+        .await
     }
 
     /**
@@ -881,8 +955,11 @@ fn parse_stage(value: &str) -> AppResult<TaskStage> {
         "queued" => Ok(TaskStage::Queued),
         "downloading" => Ok(TaskStage::Downloading),
         "extracting_audio" => Ok(TaskStage::ExtractingAudio),
+        "waiting_remote_asr" => Ok(TaskStage::WaitingRemoteAsr),
         "uploading_audio" => Ok(TaskStage::UploadingAudio),
+        "remote_asr_queued" => Ok(TaskStage::RemoteAsrQueued),
         "transcribing" => Ok(TaskStage::Transcribing),
+        "retry_waiting" => Ok(TaskStage::RetryWaiting),
         "storing_artifacts" => Ok(TaskStage::StoringArtifacts),
         "merging_course" => Ok(TaskStage::MergingCourse),
         "cleanup" => Ok(TaskStage::Cleanup),
@@ -970,6 +1047,11 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         dashscope_task_id_saved_at: parse_optional_datetime(try_get_optional_string(
             row,
             "dashscope_task_id_saved_at",
+        )?)?,
+        remote_capswriter_job_id: try_get_optional_string(row, "remote_capswriter_job_id")?,
+        remote_capswriter_job_id_saved_at: parse_optional_datetime(try_get_optional_string(
+            row,
+            "remote_capswriter_job_id_saved_at",
         )?)?,
         segment_markdown_path: row.get("segment_markdown_path"),
         segment_json_path: row.get("segment_json_path"),
@@ -1155,6 +1237,46 @@ mod tests {
         assert_eq!(task.status, TaskStatus::Pending);
         assert_eq!(task.stage, TaskStage::Queued);
         assert!(task.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn should_persist_remote_job_and_keep_retry_waiting_recoverable() {
+        let repo = repo().await;
+        let response = repo
+            .create_batch_with_tasks(&demo_request(), "2025-2026-2")
+            .await
+            .expect("写入成功");
+        let task_id = &response.task_ids[0];
+
+        repo.save_remote_capswriter_job_checkpoint(task_id, "tr_resume_me")
+            .await
+            .expect("应保存远端 job checkpoint");
+        repo.mark_task_retry_waiting(task_id, "Windows 暂时离线")
+            .await
+            .expect("应进入等待重试");
+
+        let task = repo.get_task(task_id).await.expect("任务应存在");
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert_eq!(task.stage, TaskStage::RetryWaiting);
+        assert_eq!(
+            task.remote_capswriter_job_id.as_deref(),
+            Some("tr_resume_me")
+        );
+        assert!(task.remote_capswriter_job_id_saved_at.is_some());
+        assert_eq!(task.last_error.as_deref(), Some("Windows 暂时离线"));
+
+        let recoverable = repo
+            .list_recoverable_task_ids()
+            .await
+            .expect("应查询可恢复任务");
+        assert!(recoverable.iter().any(|id| id == task_id));
+
+        repo.clear_remote_capswriter_job_checkpoint(task_id, "Gateway 已重启")
+            .await
+            .expect("应清理失效 job");
+        let cleared = repo.get_task(task_id).await.expect("任务应存在");
+        assert!(cleared.remote_capswriter_job_id.is_none());
+        assert!(cleared.remote_capswriter_job_id_saved_at.is_none());
     }
 
     #[tokio::test]

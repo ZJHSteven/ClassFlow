@@ -7,6 +7,8 @@ worker 层和 provider 实现层。
 
 use std::path::PathBuf;
 
+use tokio::sync::mpsc::UnboundedSender;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AsrProviderKind {
     DashScope,
@@ -35,4 +37,28 @@ pub struct AsrInput {
     pub language: Option<String>,
     /// 附加上下文，后续可用于给本地模型提供提示。
     pub context: Option<String>,
+    /// 远端异步 ASR 的已保存 job id；为空表示需要新建 job。
+    pub resume_job_id: Option<String>,
+    /// provider 向 worker 汇报阶段变化的轻量通道。
+    ///
+    /// 本地 / DashScope provider 可以忽略；remote_capswriter 用它把“上传中 / 已提交 /
+    /// queued / running / job 失效”及时同步回任务数据库和前端。
+    pub progress: Option<UnboundedSender<AsrProgressEvent>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AsrProgressEvent {
+    Uploading,
+    Submitted { job_id: String },
+    Queued { job_id: String },
+    Running { job_id: String },
+    JobInvalidated { job_id: String, reason: String },
+}
+
+impl AsrInput {
+    pub fn report(&self, event: AsrProgressEvent) {
+        if let Some(progress) = &self.progress {
+            let _ = progress.send(event);
+        }
+    }
 }

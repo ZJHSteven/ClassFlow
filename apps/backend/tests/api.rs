@@ -241,6 +241,8 @@ async fn build_test_state(
         remote_capswriter_upload_timeout_secs: 900.0,
         remote_capswriter_poll_interval_secs: 0.1,
         remote_capswriter_poll_timeout_secs: 60.0,
+        remote_capswriter_retry_wait_secs: 0.1,
+        remote_capswriter_retry_max_wait_secs: 1.0,
         r2_bucket: String::new(),
         r2_endpoint: String::new(),
         r2_access_key_id: String::new(),

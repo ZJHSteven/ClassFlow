@@ -41,7 +41,7 @@ CapsWriter Server :6016
    - `GET /v1/transcriptions/{id}`：`queued/running/completed/failed`；
    - `GET /v1/transcriptions/{id}/result`：最终结构化结果；
    - 保留 `/v1/transcribe`，不破坏 WeChatCLI/本机脚本。
-2. Windows Cloudflare Tunnel 稳定 hostname -> `127.0.0.1:6017`；Cloudflare Access + Gateway Bearer 双层鉴权。ClassFlow 已预留 Access Client ID/Secret。
+2. Windows Cloudflare Tunnel 稳定 hostname -> `127.0.0.1:6017`；生产公网入口由 Cloudflare Access Service Token 保护。Gateway Bearer 能力保留为可选附加层，但当前 `asr.zjhstudio.com` 不要求 N1 再分发第二份静态 secret。
 3. N1 用短 M4A 走公网入口做真实提交/轮询/取结果，并验证中途断网后 N1 checkpoint 仍可重放。
 4. 把“远端暂不可达/笔记本离线”建模成可重试等待，而不是丢任务；重试必须复用 `audio.m4a`，禁止重新下载视频。
 5. 前端显示“等待远端 ASR / 上传中 / 已提交 / 转写中 / 重试等待 / 完成 / 失败”。
@@ -84,9 +84,9 @@ CapsWriter Server :6016
 1. 已完成：恢复关键历史聊天并对齐最后结论。
 2. 已完成：核验 N1/N100 网络、IPv6、Wi-Fi、磁盘、四条 SSH 与 ClassFlow 服务现状。
 3. 已完成：确认 `remote_capswriter + M4A checkpoint` 已存在 main，不重复实现。
-4. 正在做：扩展 Windows Rust `CapsWriterGateway` 异步 job API并跑完整回归。
-5. 待执行：配置/验证 Cloudflare 公网 hostname，完成 N1 -> Windows 真实短音频冒烟。
-6. 待执行：补 ClassFlow“远端临时离线 = 可重试等待”与前端状态语义。
+4. 已完成：Windows Rust `CapsWriterGateway` 已收口为通用 sync + async Transcription API；幂等键、job 资源、兼容 `/result`、能力查询与真实 6016 冒烟均已完成。
+5. 已完成：`asr.zjhstudio.com`、Cloudflare Tunnel、Access application 已配置；N1 真实 103176-byte M4A 已完成 N1 -> Cloudflare -> 6017 -> 6016 -> N1 的 queued -> completed 跨公网闭环。
+6. 正在做：补 ClassFlow“远端临时离线 = 可重试等待”与前端状态语义，确保笔记本合盖/断网不会把任务永久打成失败，也不会占死 worker。
 7. 待执行：ARM64 构建、部署 N1、迁移生产 SQLite并真课切流。
 8. Phase 1 稳定后再启用 N1 SmartClass Collector；Phase 3 最后实施，避免同时引入三个新故障域。
 

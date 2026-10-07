@@ -102,6 +102,8 @@ pub struct AppConfig {
     pub remote_capswriter_upload_timeout_secs: f64,
     pub remote_capswriter_poll_interval_secs: f64,
     pub remote_capswriter_poll_timeout_secs: f64,
+    pub remote_capswriter_retry_wait_secs: f64,
+    pub remote_capswriter_retry_max_wait_secs: f64,
     pub r2_bucket: String,
     pub r2_endpoint: String,
     pub r2_access_key_id: String,
@@ -296,6 +298,14 @@ impl AppConfig {
             remote_capswriter_poll_timeout_secs: env_or_parse(
                 "CLASSFLOW_REMOTE_CAPSWRITER_POLL_TIMEOUT_SECS",
                 3600.0,
+            )?,
+            remote_capswriter_retry_wait_secs: env_or_parse(
+                "CLASSFLOW_REMOTE_CAPSWRITER_RETRY_WAIT_SECS",
+                30.0,
+            )?,
+            remote_capswriter_retry_max_wait_secs: env_or_parse(
+                "CLASSFLOW_REMOTE_CAPSWRITER_RETRY_MAX_WAIT_SECS",
+                300.0,
             )?,
             r2_bucket: env::var("CLASSFLOW_R2_BUCKET").unwrap_or_default(),
             r2_endpoint: env::var("CLASSFLOW_R2_ENDPOINT").unwrap_or_default(),
