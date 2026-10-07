@@ -236,12 +236,13 @@ impl RemoteCapsWriterAsrProvider {
             let status_value = self
                 .get_json(format!("{}/v1/transcriptions/{job_id}", self.base_url()))
                 .await?;
-            let job =
-                serde_json::from_value::<JobResourceResponse>(status_value.clone()).map_err(|error| {
+            let job = serde_json::from_value::<JobResourceResponse>(status_value.clone()).map_err(
+                |error| {
                     AppError::External(format!(
                         "解析远端 CapsWriter job 状态失败: job_id={job_id}, error={error}"
                     ))
-                })?;
+                },
+            )?;
             match job.status.as_str() {
                 "queued" | "running" => {
                     sleep(Duration::from_secs_f64(
@@ -405,10 +406,7 @@ mod tests {
             .get("cf-access-client-secret")
             .and_then(|value| value.to_str().ok())
             .map(ToOwned::to_owned);
-        *state
-            .idempotency_key
-            .lock()
-            .expect("idempotency key lock") = headers
+        *state.idempotency_key.lock().expect("idempotency key lock") = headers
             .get("idempotency-key")
             .and_then(|value| value.to_str().ok())
             .map(ToOwned::to_owned);
@@ -439,10 +437,7 @@ mod tests {
         }
     }
 
-    async fn result(
-        Path(job_id): Path<String>,
-        State(state): State<MockApiState>,
-    ) -> Json<Value> {
+    async fn result(Path(job_id): Path<String>, State(state): State<MockApiState>) -> Json<Value> {
         assert_eq!(job_id, "job-1");
         state.result_gets.fetch_add(1, Ordering::SeqCst);
         Json(json!({
