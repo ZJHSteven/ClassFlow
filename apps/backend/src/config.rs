@@ -263,14 +263,24 @@ impl AppConfig {
             ),
             remote_capswriter_token: env::var("CLASSFLOW_REMOTE_CAPSWRITER_TOKEN")
                 .unwrap_or_default(),
-            remote_capswriter_access_client_id: env::var(
-                "CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_ID",
-            )
-            .unwrap_or_default(),
-            remote_capswriter_access_client_secret: env::var(
-                "CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_SECRET",
-            )
-            .unwrap_or_default(),
+            // 远端 ASR 与 artifact proxy 当前都由同一个 Cloudflare Access Service
+            // Token 保护。优先允许 ASR 专用变量覆盖；若未配置，则复用通用
+            // CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET，避免 N1 为同一枚凭据维护
+            // 两套环境变量副本。
+            remote_capswriter_access_client_id: env_or_any(
+                &[
+                    "CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_ID",
+                    "CF_ACCESS_CLIENT_ID",
+                ],
+                "",
+            ),
+            remote_capswriter_access_client_secret: env_or_any(
+                &[
+                    "CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_SECRET",
+                    "CF_ACCESS_CLIENT_SECRET",
+                ],
+                "",
+            ),
             remote_capswriter_request_timeout_secs: env_or_parse(
                 "CLASSFLOW_REMOTE_CAPSWRITER_REQUEST_TIMEOUT_SECS",
                 30.0,

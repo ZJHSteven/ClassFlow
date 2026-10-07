@@ -99,7 +99,42 @@ npx wrangler whoami
 - 如果 userscript 直连后端 Tunnel 域名，那么脚本里的 `Bearer Token` 也必须填这同一个值。
 - 如果 userscript 访问的是 Worker 域名，则推荐让脚本侧 `Bearer Token` 留空，由 Worker 代为补上。
 
-### 3.1 本地 ASR 模式额外配置
+### 3.1 N1 生产远端 ASR（推荐）
+
+当前 N1 生产不再让 N100 本机加载 Qwen3-ASR，而是把压缩后的 `audio.m4a` 作为可重放 checkpoint，
+通过 Windows RTX4060 上的通用 CapsWriterGateway 异步 Job API 转写。推荐配置：
+
+```env
+CLASSFLOW_ASR_PROVIDER=remote_capswriter
+CLASSFLOW_REMOTE_CAPSWRITER_BASE_URL=https://asr.zjhstudio.com
+CLASSFLOW_REMOTE_CAPSWRITER_TOKEN=
+CLASSFLOW_REMOTE_CAPSWRITER_REQUEST_TIMEOUT_SECS=30
+CLASSFLOW_REMOTE_CAPSWRITER_UPLOAD_TIMEOUT_SECS=900
+CLASSFLOW_REMOTE_CAPSWRITER_POLL_INTERVAL_SECS=1
+CLASSFLOW_REMOTE_CAPSWRITER_POLL_TIMEOUT_SECS=3600
+
+# 与其他受 Cloudflare Access 保护的后端调用共用同一枚 Service Token 即可。
+CF_ACCESS_CLIENT_ID=replace-with-access-client-id
+CF_ACCESS_CLIENT_SECRET=replace-with-access-client-secret
+```
+
+鉴权边界如下：
+
+- `asr.zjhstudio.com` 由独立 Cloudflare Access application 保护；没有 Service Token 的公网请求会在边缘返回 403。
+- Windows Gateway 只监听 `127.0.0.1:6017`，公网只能通过 `win-laptop` Cloudflare Tunnel 到达。
+- Gateway 自己仍支持可选 Bearer Token，但当前生产不要求 N1 再维护第二份静态 secret；`CLASSFLOW_REMOTE_CAPSWRITER_TOKEN` 保持空即可。
+- 如果设置了 `CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_ID/SECRET`，它们优先于通用 `CF_ACCESS_CLIENT_ID/SECRET`；否则后端自动复用通用变量。
+
+异步协议的 canonical 形状是：`POST /v1/transcriptions` 创建 job，然后轮询
+`GET /v1/transcriptions/{id}`。当状态为 `completed` 时，同一个 job 资源直接带 `result`；
+`GET /v1/transcriptions/{id}/result` 只作为旧服务端滚动升级兼容路径。ClassFlow 每次实际提交尝试会生成
+独立 `Idempotency-Key`，网络在 202 响应前断开时可安全重发同一 M4A，而人工/任务级重新尝试仍会生成新 key。
+
+2026-10-08 已在 N1 用真实 103176-byte M4A 完成跨公网闭环：提交得到 queued job，随后轮询到
+`completed`，返回完整中文文本、duration、tokens、timestamps；链路实际覆盖 N1 -> Cloudflare ->
+Windows 6017 -> CapsWriter 6016 -> N1。
+
+### 3.2 本地 ASR 模式额外配置
 
 如果你要把转写从 DashScope 切到本地 `CapsWriter + Qwen3-ASR`，除了上面的通用变量，还需要确认下面这些项：
 
@@ -142,7 +177,7 @@ CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0
 - 当前 `ClassFlow` 这条本地 ASR 链路默认已经关闭 `Force Aligner`，因此不会再产出真实词级时间戳；`CLASSFLOW_LOCAL_ASR_ALIGNER_DIR` 目前只是为了兼容既有配置保留，运行时不再参与推理。
 - `CLASSFLOW_LOCAL_ASR_TASK_TIMEOUT_SECS=0` 表示不做固定总超时硬杀；当前 CPU 模式下 45 分钟课程的本地推理会明显慢于短样本冒烟，属于预期现象。
 
-### 3.2 本地 ASR 运行前提
+### 3.3 本地 ASR 运行前提
 
 当前这台 Ubuntu 24.04.3 机器上，本地 ASR 跑通依赖下面这些现实前提：
 
