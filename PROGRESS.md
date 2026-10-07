@@ -350,6 +350,7 @@
 - 2026-10-07 `cargo fmt --check`、`cargo test ... remote_capswriter`、`cargo clippy --all-targets --all-features -- -D warnings` 已全部通过；定向测试确认新版 provider 会携带单次提交幂等键、直接从 completed job 资源读取 result，并且不会再访问兼容 `/result` 路径。
 - 2026-10-08 真实跨机数据面已验收：N1 上 103176-byte M4A 经 `https://asr.zjhstudio.com` + Cloudflare Access 上传到 Windows 通用 Gateway，job `tr_ed106ae56d624b3b9b78b99b6984e79c` 从 queued 进入 completed，返回 16.4693125s 的完整中文文本/tokens/timestamps；证明 N1 -> Cloudflare -> 6017 -> 6016 -> N1 闭环成立。
 - 2026-10-08 生产鉴权配置收口为 Cloudflare Access 单一公网边界：`CLASSFLOW_REMOTE_CAPSWRITER_TOKEN` 可留空；远端 ASR Access 凭据现支持在未设置专用变量时自动复用 `CF_ACCESS_CLIENT_ID/CF_ACCESS_CLIENT_SECRET`，减少 N1 上同一 Service Token 的重复配置。
+- 2026-10-08 本轮最终回归已通过：`cargo fmt --check` 成功；backend 单元测试 27/27、API 集成测试 11/11 全绿；`cargo clippy --all-targets --all-features -- -D warnings` 通过。通用远端 ASR 改造未破坏既有 DashScope、本地 ASR、SSE、artifact 与任务重试链路。
 - 已确认 ARM64 构建链可用：迁移仓库私有目录中的便携 Zig + `cargo-zigbuild` 已成功生成约 22.7MB 的 ARM64 backend；该二进制来自重构前代码，只用于证明交叉编译链可行，最终部署必须在本轮改造完成后重建。
 - 设计已冻结：新增 `remote_capswriter` provider；N1 保存 `audio.m4a` checkpoint 并把文件流式上传 Windows Headless API；Windows 负责临时解码 PCM 与 GPU ASR；remux 成功并验证音轨后立即删除 MP4；ASR/后续阶段失败保留 M4A，整任务成功才清理。
 - 网络并行边界已重新确认：Cloudflare 同 tunnel token 会把 N100/N1 变成同一 Tunnel UUID 的 replicas，不能确定请求落哪台；FRP auth token 可复用，但当前两台复制了相同 proxy name + remotePort 且未配置 load-balancer，原样并行会冲突。并行验证应改成四个明确节点：`n100-frp / n100-cf / n1-frp / n1-cf`。
