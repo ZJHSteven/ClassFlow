@@ -21,6 +21,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::{fs, time::sleep};
 use tokio_util::io::ReaderStream;
+use uuid::Uuid;
 
 use crate::{
     config::AppConfig,
@@ -36,17 +37,11 @@ struct SubmitResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct JobStatusResponse {
+struct JobResourceResponse {
     status: String,
     #[serde(default)]
-    error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct JobResultEnvelope {
-    status: String,
+    error: Option<Value>,
     #[serde(default)]
-    error: Option<String>,
     result: Option<CapsWriterResult>,
 }
 
@@ -113,7 +108,7 @@ impl RemoteCapsWriterAsrProvider {
         }
     }
 
-    async fn submit_audio(&self, input: &AsrInput) -> AppResult<String> {
+    async fn submit_audio(&self, input: &AsrInput, idempotency_key: &str) -> AppResult<String> {
         let metadata = fs::metadata(&input.audio_path).await.map_err(|error| {
             AppError::Io(format!(
                 "读取远端 CapsWriter 输入文件元数据失败: path={}, error={error}",
@@ -133,32 +128,49 @@ impl RemoteCapsWriterAsrProvider {
             .and_then(|value| value.to_str())
             .unwrap_or("audio.m4a")
             .to_string();
-        let file = fs::File::open(&input.audio_path).await.map_err(|error| {
-            AppError::Io(format!(
-                "打开远端 CapsWriter 输入文件失败: path={}, error={error}",
-                input.audio_path.display()
-            ))
-        })?;
-        let stream = ReaderStream::new(file).map_ok(Frame::data);
-        let body = Body::wrap(StreamBody::new(stream));
-
-        let request = self
-            .client
-            .post(format!("{}/v1/transcriptions", self.base_url()))
-            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-            .header(reqwest::header::CONTENT_LENGTH, metadata.len())
-            .header("X-Filename", filename)
-            .body(body);
-        let response = self
-            .request_timeout(
-                self.with_auth(request),
-                self.config.remote_capswriter_upload_timeout_secs,
-            )
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::External(format!("上传音频到远端 CapsWriter 失败: {error}"))
+        // 一个 `transcribe_audio()` 调用只生成一个幂等键；网络层如果出现“文件其实已被
+        // Gateway 接收，但 202 响应丢了”的歧义，我们可以安全重发同一文件，而不会
+        // 在 Windows 上创建第二个 GPU job。真正的 ClassFlow 任务人工重试会进入新的
+        // provider 调用并生成新 key，因此不会永远命中旧的 failed job。
+        let mut last_transport_error = None;
+        let response = loop {
+            let file = fs::File::open(&input.audio_path).await.map_err(|error| {
+                AppError::Io(format!(
+                    "打开远端 CapsWriter 输入文件失败: path={}, error={error}",
+                    input.audio_path.display()
+                ))
             })?;
+            let stream = ReaderStream::new(file).map_ok(Frame::data);
+            let body = Body::wrap(StreamBody::new(stream));
+            let request = self
+                .client
+                .post(format!("{}/v1/transcriptions", self.base_url()))
+                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                .header(reqwest::header::CONTENT_LENGTH, metadata.len())
+                .header("X-Filename", &filename)
+                .header("Idempotency-Key", idempotency_key)
+                .body(body);
+            match self
+                .request_timeout(
+                    self.with_auth(request),
+                    self.config.remote_capswriter_upload_timeout_secs,
+                )
+                .send()
+                .await
+            {
+                Ok(response) => break response,
+                Err(error) if last_transport_error.is_none() => {
+                    last_transport_error = Some(error.to_string());
+                    sleep(Duration::from_millis(500)).await;
+                }
+                Err(error) => {
+                    return Err(AppError::External(format!(
+                        "上传音频到远端 CapsWriter 失败: first_error={}, retry_error={error}",
+                        last_transport_error.unwrap_or_else(|| "unknown".to_string())
+                    )));
+                }
+            }
+        };
 
         let status = response.status();
         let body = response.text().await.map_err(|error| {
@@ -224,13 +236,13 @@ impl RemoteCapsWriterAsrProvider {
             let status_value = self
                 .get_json(format!("{}/v1/transcriptions/{job_id}", self.base_url()))
                 .await?;
-            let status =
-                serde_json::from_value::<JobStatusResponse>(status_value).map_err(|error| {
+            let job =
+                serde_json::from_value::<JobResourceResponse>(status_value.clone()).map_err(|error| {
                     AppError::External(format!(
                         "解析远端 CapsWriter job 状态失败: job_id={job_id}, error={error}"
                     ))
                 })?;
-            match status.status.as_str() {
+            match job.status.as_str() {
                 "queued" | "running" => {
                     sleep(Duration::from_secs_f64(
                         self.config.remote_capswriter_poll_interval_secs.max(0.05),
@@ -240,10 +252,20 @@ impl RemoteCapsWriterAsrProvider {
                 "failed" => {
                     return Err(AppError::External(format!(
                         "远端 CapsWriter 转写失败: job_id={job_id}, error={}",
-                        status.error.unwrap_or_else(|| "unknown".to_string())
+                        display_remote_error(job.error.as_ref())
                     )));
                 }
-                "completed" => break,
+                "completed" => {
+                    // 新版通用 Gateway 的 canonical job 资源在 completed 时直接携带 result，
+                    // 因此 ClassFlow 正常路径只需要轮询一个 URL，不再强制多打一枪 /result。
+                    if let Some(result) = job.result {
+                        return normalize_result(job_id, result, status_value);
+                    }
+
+                    // 兼容 2026-09-20 旧三段式协议：若服务端 completed 但状态资源没有
+                    // 内嵌 result，再回退到 `/result`。这样服务端/客户端可以独立滚动升级。
+                    break;
+                }
                 other => {
                     return Err(AppError::External(format!(
                         "远端 CapsWriter 返回未知 job 状态: job_id={job_id}, status={other}"
@@ -259,7 +281,7 @@ impl RemoteCapsWriterAsrProvider {
             ))
             .await?;
         let envelope =
-            serde_json::from_value::<JobResultEnvelope>(raw.clone()).map_err(|error| {
+            serde_json::from_value::<JobResourceResponse>(raw.clone()).map_err(|error| {
                 AppError::External(format!(
                     "解析远端 CapsWriter 最终结果失败: job_id={job_id}, error={error}"
                 ))
@@ -268,7 +290,7 @@ impl RemoteCapsWriterAsrProvider {
             return Err(AppError::External(format!(
                 "远端 CapsWriter 最终结果状态异常: job_id={job_id}, status={}, error={}",
                 envelope.status,
-                envelope.error.unwrap_or_default()
+                display_remote_error(envelope.error.as_ref())
             )));
         }
         let result = envelope.result.ok_or_else(|| {
@@ -276,37 +298,59 @@ impl RemoteCapsWriterAsrProvider {
                 "远端 CapsWriter completed 但缺少 result: job_id={job_id}"
             ))
         })?;
-        let text_display = if result.text.trim().is_empty() {
-            result.text_accu.clone()
-        } else {
-            result.text.clone()
-        };
-        let text_accu = if result.text_accu.trim().is_empty() {
-            text_display.clone()
-        } else {
-            result.text_accu.clone()
-        };
-        if text_accu.trim().is_empty() {
-            return Err(AppError::External(format!(
-                "远端 CapsWriter 返回空文本: job_id={job_id}"
-            )));
-        }
-
-        Ok(NormalizedTranscript {
-            text_display,
-            text_accu,
-            tokens: result.tokens,
-            timestamps: result.timestamps,
-            duration_seconds: result.duration,
-            raw_task_output: raw,
-        })
+        normalize_result(job_id, result, raw)
     }
+}
+
+fn display_remote_error(error: Option<&Value>) -> String {
+    let Some(error) = error else {
+        return "unknown".to_string();
+    };
+    if let Some(message) = error.as_str() {
+        return message.to_string();
+    }
+    if let Some(message) = error.get("message").and_then(Value::as_str) {
+        return message.to_string();
+    }
+    error.to_string()
+}
+
+fn normalize_result(
+    job_id: &str,
+    result: CapsWriterResult,
+    raw_task_output: Value,
+) -> AppResult<NormalizedTranscript> {
+    let text_display = if result.text.trim().is_empty() {
+        result.text_accu.clone()
+    } else {
+        result.text.clone()
+    };
+    let text_accu = if result.text_accu.trim().is_empty() {
+        text_display.clone()
+    } else {
+        result.text_accu.clone()
+    };
+    if text_accu.trim().is_empty() {
+        return Err(AppError::External(format!(
+            "远端 CapsWriter 返回空文本: job_id={job_id}"
+        )));
+    }
+
+    Ok(NormalizedTranscript {
+        text_display,
+        text_accu,
+        tokens: result.tokens,
+        timestamps: result.timestamps,
+        duration_seconds: result.duration,
+        raw_task_output,
+    })
 }
 
 #[async_trait]
 impl AsrProvider for RemoteCapsWriterAsrProvider {
     async fn transcribe_audio(&self, input: AsrInput) -> AppResult<NormalizedTranscript> {
-        let job_id = self.submit_audio(&input).await?;
+        let idempotency_key = format!("classflow:{}:{}", input.task_id, Uuid::new_v4());
+        let job_id = self.submit_audio(&input, &idempotency_key).await?;
         self.wait_for_result(&job_id).await
     }
 }
@@ -338,7 +382,9 @@ mod tests {
         authorization: Arc<Mutex<Option<String>>>,
         access_id: Arc<Mutex<Option<String>>>,
         access_secret: Arc<Mutex<Option<String>>>,
+        idempotency_key: Arc<Mutex<Option<String>>>,
         polls: Arc<AtomicUsize>,
+        result_gets: Arc<AtomicUsize>,
     }
 
     async fn submit(
@@ -359,6 +405,13 @@ mod tests {
             .get("cf-access-client-secret")
             .and_then(|value| value.to_str().ok())
             .map(ToOwned::to_owned);
+        *state
+            .idempotency_key
+            .lock()
+            .expect("idempotency key lock") = headers
+            .get("idempotency-key")
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
         (
             StatusCode::ACCEPTED,
             Json(json!({"id": "job-1", "status": "queued"})),
@@ -371,12 +424,27 @@ mod tests {
         if poll_index == 0 {
             Json(json!({"id": job_id, "status": "queued", "error": null}))
         } else {
-            Json(json!({"id": job_id, "status": "completed", "error": null}))
+            Json(json!({
+                "id": job_id,
+                "status": "completed",
+                "error": null,
+                "result": {
+                    "text": "远端识别成功",
+                    "text_accu": "远端识别成功",
+                    "duration": 12.5,
+                    "tokens": ["远端", "识别", "成功"],
+                    "timestamps": [0.0, 0.4, 0.9]
+                }
+            }))
         }
     }
 
-    async fn result(Path(job_id): Path<String>) -> Json<Value> {
+    async fn result(
+        Path(job_id): Path<String>,
+        State(state): State<MockApiState>,
+    ) -> Json<Value> {
         assert_eq!(job_id, "job-1");
+        state.result_gets.fetch_add(1, Ordering::SeqCst);
         Json(json!({
             "id": job_id,
             "status": "completed",
@@ -467,7 +535,16 @@ mod tests {
                 .as_deref(),
             Some("access-secret")
         );
+        assert!(
+            state
+                .idempotency_key
+                .lock()
+                .expect("idempotency key lock")
+                .as_deref()
+                .is_some_and(|value| value.starts_with("classflow:classflow-task:"))
+        );
         assert!(state.polls.load(Ordering::SeqCst) >= 2);
+        assert_eq!(state.result_gets.load(Ordering::SeqCst), 0);
 
         server.abort();
     }
