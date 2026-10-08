@@ -371,6 +371,11 @@
 - 网络并行边界已重新确认：Cloudflare 同 tunnel token 会把 N100/N1 变成同一 Tunnel UUID 的 replicas，不能确定请求落哪台；FRP auth token 可复用，但当前两台复制了相同 proxy name + remotePort 且未配置 load-balancer，原样并行会冲突。并行验证应改成四个明确节点：`n100-frp / n100-cf / n1-frp / n1-cf`。
 
 ## 2026-09-20 SmartClass 自动采集器落地
+- 2026-10-08 Phase 2 重新逆向完成关键突破：从当前线上 `CourseList.aspx` 直接读取 `getcsrf.toString()`、`services.CreateGetMyVideosRequest()` 并通过 CDP Network 抓真实请求。确认长期 Browser Bridge 并非必要，最终架构改为 N1 纯 HTTP Session Manager。
+- 当前 `getcsrf()` 已完整还原：`/config.json` 的 `domainConfig` 为 AES-256-CBC/PKCS#7 hex 密文；运行时 key=`80bdbdbaf7494add99198960d715d41b`、IV=`bdbaf7494add9919`。网页解密得到当前 `csrkKey=s0k6e5a1t3i46kglaz9`；使用 Node 原生 `crypto.createDecipheriv('aes-256-cbc', ...)` 完全独立解密得到同一值，证明不需要 DOM/Chromium。
+- `csrkToken` 算法也已完整确认：取 `Date.now()+TimeDif` 的 13 位时间戳，每位数字 `d` 取 `csrkKey[d]` 拼接；`TimeDif` 由 `/Home/GettimeDif` 校准。线上 bundle 明确显示 `platform_token` 通过 `/Home/GetInteractiveAuth` 获取，并以 5 分钟 `key-expire` 刷新；无 token 时 ajax 全局头使用 `skip_token_verify` 完成 bootstrap。
+- CDP Network 已抓到真实 GetMyVideoList：GET 请求、query 含 `csrkToken/Sort/StartDate/EndDate/PageSize/PageNumber/...`，header 含 `platform_token`、`X-Requested-With`、`Content-Language`、Referer。当前旧 Chrome Session 已过期，原始响应为 HTTP 200 + `{status:302, localtion:'/login.aspx?...'}`，因此新版 Session Manager 会显式建模 `auth_required`。
+- 登录页也已拆出轻量恢复路径：账号登录 POST `/Home/Login`；验证码 GET `/home/VerifyImage2` 返回验证码 id + base64 PNG；`enHelp.En()` 与配置解密使用同一 AES-256-CBC key/IV，输出 hex 密文。由此首次/过期重新登录可以在 N1 纯 HTTP 完成，人工只负责验证码/凭据输入，不需要常驻 Chromium。
 - 已确认 SmartClass 个人录播接口真实分页协议：`GetMyVideoList` 使用 `PageSize=12`、`PageNumber=1..N`，响应为 `Data[] + TotalCount`；前端自己也是用 `ceil(TotalCount/PageSize)` 驱动分页。
 - 已确认当前三个已观察状态的角色边界：`OnlineUser` 每次正常课程列表访问约续到 +3 分钟，但过夜实验中每轮之间都会过期而认证仍正常，所以它不是主登录凭据；`platform_token` 约每 30 分钟滚动并延长到约 +60 分钟，也不是“60 分钟后必掉登录”的硬上限；真正主登录仍与 `PowerCreatorCMSAuthenticationID`/服务端 Session 生命周期相关。
 - 新证据：2026-09-20 晚，过夜 10 分钟保活实验停止数小时后，原 Chrome SmartClass 会话已经变为未登录。这说明登录态并非无限期存活，后续仍值得用独立 Session 做 idle/absolute timeout 实验。

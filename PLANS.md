@@ -57,14 +57,23 @@ CapsWriter Server :6016
 
 ### Phase 2：SmartClass 全自动发现
 - 已有：Rust Collector、分页、Cover -> `VGA.mp4`、10 分钟轮询、历史回扫、登录失效退避、时间格式去重均已实现；2026-09-22 已修复重启后的重复回灌。
-- 当前尾巴不是 Collector 没写，而是登录态/浏览器桥无人值守化；生产 Collector 当前故意关闭。
-- 目标：N1 本机独立持久 Chrome/Chromium profile + 会话桥，不再依赖 Windows 反向 SSH；每 10 分钟自动发现新课，登录失效只进入明确退避状态。
+- 2026-10-08 已重新逆向当前线上 SmartClass：长期 Chromium **不再是默认终局**。`getcsrf()`、`platform_token`、时间校准和账号登录所需加解密都可以脱离 DOM/浏览器复刻，因此 Phase 2 改为 N1 本机 **纯 Rust HTTP Session Manager**。
+- 当前线上协议已确认：
+  - `domainConfig` 是 hex 编码的 AES-256-CBC/PKCS#7 密文，客户端固定 ASCII key=`80bdbdbaf7494add99198960d715d41b`、IV=`bdbaf7494add9919`；独立 Node 原生 crypto 已解出与网页 `enHelp.De()` 完全一致的 `csrkKey`。
+  - `csrkToken` = `(当前毫秒时间 + TimeDif)` 的 13 位十进制数字逐位作为 `csrkKey` 下标取字符；`TimeDif` 由 `GET /Home/GettimeDif?csrkToken=...` 返回的服务端时间校准。
+  - `platform_token` 由 `GET /Home/GetInteractiveAuth?csrkToken=...` 返回；网页自身每 5 分钟刷新一次。没有 token 时请求头使用 `skip_token_verify: skip_token_verify` 完成 bootstrap。
+  - `GetMyVideoList` 为 GET `/Webapi/V1/Video/GetMyVideoList`，URL query 包含 `csrkToken` 与课程过滤/分页参数；header 需 `platform_token`、`X-Requested-With: XMLHttpRequest`、`Content-Language: zh-CN` 和 CourseList Referer。
+  - Session 失效时 API 会 HTTP 200 但业务 body 为 `{status:302, localtion:"/login.aspx?..."}`，Rust 必须把它识别为 `auth_required`，而不是普通解析失败。
+  - 登录页账号登录 POST `/Home/Login`；图形验证码 GET `/home/VerifyImage2` 返回 id + base64 PNG；用户名/密码使用同一 AES-256-CBC key/IV 加密为 hex 后提交。
+- 目标：N1 维护 0600 持久 session/cookie jar、10 分钟 heartbeat、动态 csrk/platform token、纯 HTTP `GetMyVideoList`；Collector 直接调用 Session Manager，不再依赖 Windows reverse SSH / `browser_bridge.ps1`。
+- 登录失效时进入明确 `auth_required` 状态，并提供受现有 ClassFlow/Cloudflare Access 保护的轻量验证码 + 登录入口；登录成功后 session 自动持久化并恢复 Collector。Chrome/CDP 只保留调试/协议验证用途。
 - userscript/SmartClass Downloader 保留为调试与救援入口，不再是日常必经步骤。
 
 #### Phase 2 验收
 - 连续一个正常上课日无需人工点下载/提交，新课自动进入 ClassFlow。
 - N1/后端重启不回灌历史任务，同一 NewID/时间片只有一个任务身份。
-- 登录失效/恢复可观测，不把 Cookie/token 明文写入仓库或 env。
+- 登录失效/恢复可观测；Cookie/session 仅保存到 N1 0600 状态文件，不把 Cookie/token 明文写入仓库、日志或 env。
+- 关闭 Windows SmartClass 标签页/bridge 后，N1 仍能独立完成 `heartbeat -> refresh platform token -> GetMyVideoList`；只有真正的 Session 过期才需要一次人工验证码/登录。
 
 ### Phase 3：Windows 自动维护课程 Audio/Notes 笔记仓库
 ```text
