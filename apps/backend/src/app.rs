@@ -29,6 +29,7 @@ use crate::{
     repository::Repository,
     routes::build_router,
     smartclass::spawn_smartclass_collector,
+    smartclass_session::SmartClassSessionManager,
     worker::{TaskQueue, cleanup_stale_temp_dirs, spawn_workers},
 };
 
@@ -40,6 +41,10 @@ pub struct AppState {
     pub pipeline: Arc<dyn PipelineIo>,
     pub asr_provider: Arc<dyn AsrProvider>,
     pub network_health: Arc<NetworkHealthGate>,
+    /// `direct_http` 模式下的 SmartClass 会话管理器。
+    ///
+    /// `browser_bridge` 作为救援模式时这里为空，Collector 会走旧的 8790 bridge。
+    pub smartclass_session: Option<Arc<SmartClassSessionManager>>,
     pub queue: TaskQueue,
     pub task_list_events: broadcast::Sender<()>,
 }
@@ -132,6 +137,22 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
     let pipeline: Arc<dyn PipelineIo> =
         Arc::new(RealPipelineIo::new(config.clone(), network_health.clone()));
     let config_arc = Arc::new(config.clone());
+    let smartclass_session = match config
+        .smartclass_transport
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "direct_http" => Some(Arc::new(
+            SmartClassSessionManager::new(config_arc.clone()).await?,
+        )),
+        "browser_bridge" => None,
+        other => {
+            return Err(crate::error::AppError::Config(format!(
+                "不支持的 CLASSFLOW_SMARTCLASS_TRANSPORT: {other}"
+            )));
+        }
+    };
     let asr_provider: Arc<dyn AsrProvider> =
         match config.asr_provider.trim().to_lowercase().as_str() {
             "dashscope" => Arc::new(DashScopeAsrProvider::new(pipeline.clone())),
@@ -153,6 +174,7 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
         pipeline,
         asr_provider,
         network_health,
+        smartclass_session,
         queue: placeholder_queue,
         task_list_events,
     };

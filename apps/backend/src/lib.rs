@@ -30,6 +30,7 @@ pub mod pipeline;
 pub mod repository;
 pub mod routes;
 pub mod smartclass;
+pub mod smartclass_session;
 pub mod worker;
 
 pub use app::{AppState, build_app, run_server};

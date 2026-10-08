@@ -18,6 +18,7 @@ use crate::{
     course::normalize_segment_time,
     error::{AppError, AppResult},
     models::{IntakeBatchRequest, IntakeItem},
+    smartclass_session::SmartClassVideo,
 };
 
 #[derive(Debug, Deserialize)]
@@ -29,26 +30,6 @@ struct BridgePage {
     data: Vec<SmartClassVideo>,
     #[serde(default)]
     error: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SmartClassVideo {
-    #[serde(rename = "Title", default)]
-    title: String,
-    #[serde(rename = "NewID", default)]
-    new_id: String,
-    #[serde(rename = "StartTime", default)]
-    start_time: String,
-    #[serde(rename = "StopTime", default)]
-    stop_time: String,
-    #[serde(rename = "Cover", default)]
-    cover: String,
-    #[serde(rename = "CourseName", default)]
-    course_name: String,
-    #[serde(rename = "Teachers", default)]
-    teachers: String,
-    #[serde(rename = "CloudVod", default)]
-    cloud_vod: bool,
 }
 
 #[derive(Clone)]
@@ -195,6 +176,55 @@ impl SmartClassCollector {
     }
 
     async fn fetch_page(
+        &self,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+        page_number: usize,
+        page_size: usize,
+    ) -> AppResult<BridgePage> {
+        match self
+            .state
+            .config
+            .smartclass_transport
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "direct_http" => {
+                let manager = self.state.smartclass_session.as_ref().ok_or_else(|| {
+                    AppError::Config(
+                        "SmartClass direct_http 已启用，但 Session Manager 未初始化".to_string(),
+                    )
+                })?;
+                let page = manager
+                    .fetch_video_page(
+                        &start_date.to_string(),
+                        &end_date.to_string(),
+                        page_number,
+                        page_size,
+                    )
+                    .await?;
+                Ok(BridgePage {
+                    authenticated: true,
+                    total_count: page.total_count,
+                    data: page.data,
+                    error: None,
+                })
+            }
+            "browser_bridge" => {
+                self.fetch_page_from_browser_bridge(start_date, end_date, page_number, page_size)
+                    .await
+            }
+            other => Err(AppError::Config(format!(
+                "不支持的 CLASSFLOW_SMARTCLASS_TRANSPORT: {other}"
+            ))),
+        }
+    }
+
+    /// 旧的 Windows/CDP bridge 保留为救援路径。
+    ///
+    /// 正常生产默认不会走这里；只有显式配置 `browser_bridge` 时才访问 8790。
+    async fn fetch_page_from_browser_bridge(
         &self,
         start_date: NaiveDate,
         end_date: NaiveDate,

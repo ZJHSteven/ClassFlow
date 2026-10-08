@@ -28,6 +28,7 @@ use crate::{
     app::AppState,
     error::{AppError, AppResult},
     models::{CourseListQuery, IntakeBatchRequest, TaskListQuery, TaskStatus},
+    smartclass_session::SmartClassLoginRequest,
     worker::sync_course_artifacts,
 };
 
@@ -49,6 +50,9 @@ pub fn build_router(state: AppState) -> Router {
             get(get_course_artifact),
         )
         .route("/intake/batches", post(create_batch))
+        .route("/smartclass/auth", get(get_smartclass_auth))
+        .route("/smartclass/captcha", get(get_smartclass_captcha))
+        .route("/smartclass/login", post(login_smartclass))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -58,6 +62,48 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/health", get(health))
         .nest("/api/v1", protected_routes)
         .with_state(state)
+}
+
+/// 返回 N1 当前 SmartClass Session 是否存在、是否仍可用。
+///
+/// 该接口与 captcha/login 一样位于现有 Bearer + Cloudflare Access 保护之后，浏览器端不接触
+/// Cookie 本体；只得到“已登录 / 需要重新登录”的状态。
+async fn get_smartclass_auth(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+    let manager = state.smartclass_session.as_ref().ok_or_else(|| {
+        AppError::BadRequest(
+            "当前 CLASSFLOW_SMARTCLASS_TRANSPORT 不是 direct_http，无法使用会话管理 API"
+                .to_string(),
+        )
+    })?;
+    Ok(Json(manager.auth_status().await))
+}
+
+/// 获取一次图形验证码；验证码图片直接以内联 data URL 返回，不把验证码落盘。
+async fn get_smartclass_captcha(State(state): State<AppState>) -> AppResult<impl IntoResponse> {
+    let manager = state.smartclass_session.as_ref().ok_or_else(|| {
+        AppError::BadRequest(
+            "当前 CLASSFLOW_SMARTCLASS_TRANSPORT 不是 direct_http，无法使用会话管理 API"
+                .to_string(),
+        )
+    })?;
+    Ok(Json(manager.fetch_captcha().await?))
+}
+
+/// 人工重新登录入口。
+///
+/// 用户名、密码和验证码仅存在于本次请求内存；Session Manager 会按网页同款 AES 参数提交，
+/// 最终只把 Cookie jar 持久化到 N1 的 0600 状态文件。
+async fn login_smartclass(
+    State(state): State<AppState>,
+    Json(request): Json<SmartClassLoginRequest>,
+) -> AppResult<impl IntoResponse> {
+    let manager = state.smartclass_session.as_ref().ok_or_else(|| {
+        AppError::BadRequest(
+            "当前 CLASSFLOW_SMARTCLASS_TRANSPORT 不是 direct_http，无法使用会话管理 API"
+                .to_string(),
+        )
+    })?;
+    Ok(Json(manager.login(request).await?))
 }
 
 async fn health() -> impl IntoResponse {

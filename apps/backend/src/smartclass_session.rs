@@ -28,11 +28,8 @@ use std::{
 };
 
 use aes::Aes256;
+use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use cbc::{Decryptor, Encryptor};
-use cbc::cipher::{
-    BlockDecryptMut, BlockEncryptMut, KeyIvInit,
-    block_padding::Pkcs7,
-};
 use reqwest::{
     Client, StatusCode, Url,
     cookie::{CookieStore, Jar},
@@ -197,7 +194,9 @@ impl SmartClassSessionManager {
         }
         let course_list_url = base_url
             .join("UserSpace/CourseList.aspx")
-            .map_err(|error| AppError::Config(format!("构造 SmartClass CourseList URL 失败: {error}")))?;
+            .map_err(|error| {
+                AppError::Config(format!("构造 SmartClass CourseList URL 失败: {error}"))
+            })?;
 
         let jar = Arc::new(Jar::default());
         load_cookie_file(&config.smartclass_session_file, &jar, &base_url).await?;
@@ -209,7 +208,9 @@ impl SmartClassSessionManager {
             ))
             .user_agent("ClassFlow-SmartClass/1.0")
             .build()
-            .map_err(|error| AppError::Config(format!("创建 SmartClass HTTP client 失败: {error}")))?;
+            .map_err(|error| {
+                AppError::Config(format!("创建 SmartClass HTTP client 失败: {error}"))
+            })?;
 
         Ok(Self {
             config,
@@ -262,7 +263,7 @@ impl SmartClassSessionManager {
             .append_pair("r", &format!("{}", now_unix_ms()))
             .append_pair("csrkToken", &token);
         let value = self
-            .send_api(self.base_request(self.client.get(url)), None)
+            .send_api(self.base_request(self.client.get(url)), None, true)
             .await?;
         let captcha: VerifyImageValue = serde_json::from_value(value).map_err(|error| {
             AppError::External(format!("解析 SmartClass 验证码响应失败: {error}"))
@@ -368,6 +369,7 @@ impl SmartClassSessionManager {
                 self.base_request(self.client.get(url))
                     .header(PLATFORM_TOKEN_HEADER.clone(), platform_token),
                 Some("GetMyVideoList"),
+                false,
             )
             .await?;
         let page: VideoListValue = serde_json::from_value(value).map_err(|error| {
@@ -415,7 +417,7 @@ impl SmartClassSessionManager {
         let mut url = self.url("Home/GetInteractiveAuth")?;
         url.query_pairs_mut().append_pair("csrkToken", &csrf);
         let value = self
-            .send_api(self.base_request(self.client.get(url)), None)
+            .send_api(self.base_request(self.client.get(url)), None, true)
             .await?;
         let token = value
             .as_str()
@@ -451,7 +453,7 @@ impl SmartClassSessionManager {
         url.query_pairs_mut().append_pair("csrkToken", &token);
         let request_started = now_unix_ms();
         let value = self
-            .send_api(self.base_request(self.client.get(url)), None)
+            .send_api(self.base_request(self.client.get(url)), None, true)
             .await?;
         let request_finished = now_unix_ms();
         let server_ms = parse_i64_value(&value).ok_or_else(|| {
@@ -528,9 +530,17 @@ impl SmartClassSessionManager {
         &self,
         request: reqwest::RequestBuilder,
         operation: Option<&str>,
+        allow_skip_token_verify: bool,
     ) -> AppResult<Value> {
-        // 没有 platform token 的 bootstrap 请求与网页 ajaxSetup 行为保持一致。
-        let request = request.header(SKIP_TOKEN_VERIFY_HEADER.clone(), "skip_token_verify");
+        // 网页 ajaxSetup 的真实语义是二选一：
+        // - 已有 platform_token -> 只发 platform_token；
+        // - bootstrap 阶段没有 platform_token -> 发 skip_token_verify。
+        // GetMyVideoList 已显式带 platform_token，因此绝不能再叠加 skip 头。
+        let request = if allow_skip_token_verify {
+            request.header(SKIP_TOKEN_VERIFY_HEADER.clone(), "skip_token_verify")
+        } else {
+            request
+        };
         let response = request.send().await?;
         self.persist_cookies().await?;
         if response.status().is_redirection() {
@@ -555,9 +565,8 @@ impl SmartClassSessionManager {
     }
 
     fn decrypt_client_value(&self, cipher_hex: &str) -> AppResult<String> {
-        let mut bytes = hex::decode(cipher_hex.trim()).map_err(|error| {
-            AppError::External(format!("SmartClass AES hex 解码失败: {error}"))
-        })?;
+        let mut bytes = hex::decode(cipher_hex.trim())
+            .map_err(|error| AppError::External(format!("SmartClass AES hex 解码失败: {error}")))?;
         let decryptor = Decryptor::<Aes256>::new_from_slices(
             self.config.smartclass_csrf_aes_key.as_bytes(),
             self.config.smartclass_csrf_aes_iv.as_bytes(),
@@ -613,12 +622,10 @@ impl SmartClassSessionManager {
 }
 
 fn parse_api_value(body: &str, map_auth_redirect: bool) -> AppResult<Value> {
-    let json: Value = serde_json::from_str(body).map_err(|error| {
-        AppError::External(format!("解析 SmartClass JSON 响应失败: {error}"))
-    })?;
-    let envelope: SmartClassApiEnvelope = serde_json::from_value(json.clone()).map_err(|error| {
-        AppError::External(format!("解析 SmartClass envelope 失败: {error}"))
-    })?;
+    let json: Value = serde_json::from_str(body)
+        .map_err(|error| AppError::External(format!("解析 SmartClass JSON 响应失败: {error}")))?;
+    let envelope: SmartClassApiEnvelope = serde_json::from_value(json.clone())
+        .map_err(|error| AppError::External(format!("解析 SmartClass envelope 失败: {error}")))?;
     if envelope.status == Some(302)
         || envelope
             .location
@@ -633,7 +640,8 @@ fn parse_api_value(body: &str, map_auth_redirect: bool) -> AppResult<Value> {
             let message = envelope
                 .message
                 .unwrap_or_else(|| "SmartClass 返回 Success=false".to_string());
-            if map_auth_redirect && (message.contains("登录") || message.contains("验证不通过")) {
+            if map_auth_redirect && (message.contains("登录") || message.contains("验证不通过"))
+            {
                 Err(AppError::Unauthorized)
             } else {
                 Err(AppError::BadRequest(format!("SmartClass: {message}")))
@@ -767,7 +775,11 @@ mod tests {
         let expected = timestamp
             .to_string()
             .chars()
-            .map(|digit| key.chars().nth(digit.to_digit(10).unwrap() as usize).unwrap())
+            .map(|digit| {
+                key.chars()
+                    .nth(digit.to_digit(10).unwrap() as usize)
+                    .unwrap()
+            })
             .collect::<String>();
         assert_eq!(build_csrf_token(key, timestamp).unwrap(), expected);
     }
