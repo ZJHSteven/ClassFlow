@@ -125,6 +125,13 @@ pub struct AppConfig {
     pub task_event_retention_days: u64,
     pub task_event_retention_rows_per_task: u64,
     pub smartclass_collector_enabled: bool,
+    /// SmartClass 数据源模式：`direct_http` 为 N1 纯 HTTP Session Manager；
+    /// `browser_bridge` 仅保留旧 Windows/CDP 救援路径。
+    pub smartclass_transport: String,
+    pub smartclass_base_url: String,
+    pub smartclass_session_file: PathBuf,
+    pub smartclass_csrf_aes_key: String,
+    pub smartclass_csrf_aes_iv: String,
     pub smartclass_bridge_base_url: String,
     pub smartclass_poll_interval_secs: u64,
     pub smartclass_initial_backfill_days: i64,
@@ -373,6 +380,23 @@ impl AppConfig {
                 "CLASSFLOW_SMARTCLASS_COLLECTOR_ENABLED",
                 false,
             )?,
+            smartclass_transport: env_or("CLASSFLOW_SMARTCLASS_TRANSPORT", "direct_http"),
+            smartclass_base_url: env_or(
+                "CLASSFLOW_SMARTCLASS_BASE_URL",
+                "https://tmu.smartclass.cn",
+            ),
+            smartclass_session_file: PathBuf::from(env_or(
+                "CLASSFLOW_SMARTCLASS_SESSION_FILE",
+                "/home/zjhsteven/.local/state/classflow/smartclass-session.json",
+            )),
+            smartclass_csrf_aes_key: env_or(
+                "CLASSFLOW_SMARTCLASS_CSRF_AES_KEY",
+                "80bdbdbaf7494add99198960d715d41b",
+            ),
+            smartclass_csrf_aes_iv: env_or(
+                "CLASSFLOW_SMARTCLASS_CSRF_AES_IV",
+                "bdbaf7494add9919",
+            ),
             smartclass_bridge_base_url: env_or(
                 "CLASSFLOW_SMARTCLASS_BRIDGE_BASE_URL",
                 "http://127.0.0.1:8790",
