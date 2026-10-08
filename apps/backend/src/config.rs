@@ -393,10 +393,7 @@ impl AppConfig {
                 "CLASSFLOW_SMARTCLASS_CSRF_AES_KEY",
                 "80bdbdbaf7494add99198960d715d41b",
             ),
-            smartclass_csrf_aes_iv: env_or(
-                "CLASSFLOW_SMARTCLASS_CSRF_AES_IV",
-                "bdbaf7494add9919",
-            ),
+            smartclass_csrf_aes_iv: env_or("CLASSFLOW_SMARTCLASS_CSRF_AES_IV", "bdbaf7494add9919"),
             smartclass_bridge_base_url: env_or(
                 "CLASSFLOW_SMARTCLASS_BRIDGE_BASE_URL",
                 "http://127.0.0.1:8790",
