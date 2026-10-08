@@ -63,6 +63,107 @@
   font-size: 0.84rem;
 }
 
+.smartClassSession {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 13px 14px;
+  border: 1px solid rgba(17, 48, 56, 0.12);
+  border-radius: 20px;
+  background: rgba(255, 252, 245, 0.9);
+  box-shadow: 0 12px 36px rgba(41, 66, 69, 0.07);
+  backdrop-filter: blur(14px);
+}
+
+.smartClassSession__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.smartClassSession__summary strong {
+  display: block;
+  margin-top: 2px;
+  color: #17343b;
+  font-size: 1rem;
+}
+
+.smartClassSession__summary p {
+  margin: 4px 0 0;
+  color: #667b79;
+  font-size: 0.86rem;
+}
+
+.smartClassSession__eyebrow {
+  color: #68807e;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.smartClassSession__actions,
+.smartClassSession__captchaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.smartClassSession__login {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(17, 48, 56, 0.08);
+}
+
+.smartClassSession__fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.smartClassSession__captcha {
+  display: grid;
+  place-items: center;
+  min-width: 132px;
+  min-height: 48px;
+  padding: 4px 10px;
+  border: 1px dashed rgba(17, 48, 56, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #71817f;
+  font-size: 0.78rem;
+}
+
+.smartClassSession__captcha img {
+  display: block;
+  max-width: 150px;
+  max-height: 56px;
+}
+
+.smartClassSession__submit {
+  cursor: pointer;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #143238, #1f5658);
+  color: #f7f5eb;
+  font-weight: 800;
+  box-shadow: 0 10px 22px rgba(15, 49, 52, 0.18);
+}
+
+.smartClassSession__submit:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.smartClassSession__privacy {
+  color: #71817f;
+  font-size: 0.78rem;
+}
+
 .tabBar {
   display: flex;
   gap: 10px;

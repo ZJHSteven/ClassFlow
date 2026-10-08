@@ -14,6 +14,7 @@
 import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { CoursePanel } from './components/CoursePanel'
+import { SmartClassSessionCard } from './components/SmartClassSessionCard'
 import { TaskPanel } from './components/TaskPanel'
 import './App.css'
 
@@ -50,6 +51,8 @@ function App() {
           </div>
         </div>
       </motion.header>
+
+      <SmartClassSessionCard />
 
       <nav className="tabBar" aria-label="主视图切换">
         <motion.button

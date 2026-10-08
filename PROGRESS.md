@@ -377,6 +377,8 @@
 - 2026-10-08 首次真实“无 Session -> 获取验证码”冒烟发现 `/Home/GettimeDif` 在线上直接返回裸 JSON 整数，而不是统一 envelope；已修正 `parse_api_value()` 允许 JSON 标量直通，并增加整数 / 字符串标量回归，避免验证码与 platform token bootstrap 被误判为 502。
 - 2026-10-08 新增 AES/CBC 与 reqwest Cookie Jar 后已让 Cargo 完整解析并更新根 `Cargo.lock`；同时收录 `cargo fmt` 对 SmartClass 配置默认值的纯格式化结果，确保依赖锁与源码提交一致、后续 ARM64 构建可复现。
 - 2026-10-08 修复 Collector 登录恢复窗口：首次 21 天 backfill 现在只有在扫描成功后才转入 2 天增量；启动时无 Session、运行中 Session 过期都会保留/恢复“欠一次完整 backfill”状态。这样重新登录后不会因为此前失败的首次轮询而漏掉较早课程；普通网络错误则保持原来的 backfill 状态。
+- 2026-10-08 前端新增轻量 SmartClass 会话卡：正常时只显示 N1 自动采集健康状态；Session 缺失/过期时才展开用户名、密码、验证码和登录入口。密码/验证码仅存在 React 内存与单次 HTTPS 请求，不写 Web Storage；登录成功立即清空敏感字段。Worker `/api/*` 已是通用透传，无需为新接口增加专门代理规则。
+- 2026-10-08 新增前端恢复流程测试，覆盖 `auth_required -> 获取验证码 -> 输入凭据 -> POST login -> auth 恢复`，并断言登录 payload 使用当前验证码 id、恢复后密码输入框消失。
 - 2026-10-08 Phase 2 重新逆向完成关键突破：从当前线上 `CourseList.aspx` 直接读取 `getcsrf.toString()`、`services.CreateGetMyVideosRequest()` 并通过 CDP Network 抓真实请求。确认长期 Browser Bridge 并非必要，最终架构改为 N1 纯 HTTP Session Manager。
 - 当前 `getcsrf()` 已完整还原：`/config.json` 的 `domainConfig` 为 AES-256-CBC/PKCS#7 hex 密文；运行时 key=`80bdbdbaf7494add99198960d715d41b`、IV=`bdbaf7494add9919`。网页解密得到当前 `csrkKey=s0k6e5a1t3i46kglaz9`；使用 Node 原生 `crypto.createDecipheriv('aes-256-cbc', ...)` 完全独立解密得到同一值，证明不需要 DOM/Chromium。
 - `csrkToken` 算法也已完整确认：取 `Date.now()+TimeDif` 的 13 位时间戳，每位数字 `d` 取 `csrkKey[d]` 拼接；`TimeDif` 由 `/Home/GettimeDif` 校准。线上 bundle 明确显示 `platform_token` 通过 `/Home/GetInteractiveAuth` 获取，并以 5 分钟 `key-expire` 刷新；无 token 时 ajax 全局头使用 `skip_token_verify` 完成 bootstrap。

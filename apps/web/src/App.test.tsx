@@ -155,6 +155,17 @@ function countTaskListRequests() {
 function buildMockResponse(input: RequestInfo | URL): Response {
   const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
 
+  if (requestUrl === '/api/v1/smartclass/auth') {
+    return new Response(
+      JSON.stringify({
+        authenticated: true,
+        session_present: true,
+        transport: 'direct_http',
+      }),
+      { status: 200 },
+    )
+  }
+
   if (requestUrl.includes('/api/v1/tasks/') && !requestUrl.endsWith('/retry')) {
     return new Response(JSON.stringify(taskDetailPayload), { status: 200 })
   }
@@ -224,6 +235,71 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByText('课程总稿与交付物')).toBeInTheDocument()
     })
+  })
+
+  it('SmartClass Session 失效后应该能获取验证码并重新登录', async () => {
+    let loggedIn = false
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (requestUrl === '/api/v1/smartclass/auth') {
+        return new Response(
+          JSON.stringify({
+            authenticated: loggedIn,
+            session_present: loggedIn,
+            transport: 'direct_http',
+            reason: loggedIn ? undefined : 'SmartClass Session 已过期，需要重新登录',
+          }),
+          { status: 200 },
+        )
+      }
+      if (requestUrl === '/api/v1/smartclass/captcha') {
+        return new Response(
+          JSON.stringify({
+            verify_code_id: 'captcha-id-1',
+            image_data_url: 'data:image/png;base64,ZmFrZQ==',
+          }),
+          { status: 200 },
+        )
+      }
+      if (requestUrl === '/api/v1/smartclass/login' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as Record<string, string>
+        expect(body).toMatchObject({
+          username: 'student-1',
+          password: 'secret-in-memory',
+          verify_code: 'ABCD',
+          verify_code_id: 'captcha-id-1',
+        })
+        loggedIn = true
+        return new Response(JSON.stringify({ authenticated: true }), { status: 200 })
+      }
+      return buildMockResponse(input)
+    })
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('SmartClass 需要登录')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: '获取验证码' }))
+    await waitFor(() => {
+      expect(screen.getByAltText('SmartClass 图形验证码')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByLabelText('SmartClass 用户名'), {
+      target: { value: 'student-1' },
+    })
+    fireEvent.change(screen.getByLabelText('密码'), {
+      target: { value: 'secret-in-memory' },
+    })
+    fireEvent.change(screen.getByLabelText('验证码'), {
+      target: { value: 'ABCD' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '登录并恢复自动采集' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('SmartClass 已登录')).toBeInTheDocument()
+    })
+    expect(screen.queryByLabelText('密码')).not.toBeInTheDocument()
   })
 
   it('不应该使用定时轮询，而应该提供手动刷新入口', async () => {

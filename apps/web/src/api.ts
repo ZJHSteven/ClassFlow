@@ -65,6 +65,30 @@ export interface CourseFilters {
   course_name?: string
 }
 
+export interface SmartClassAuthStatus {
+  authenticated: boolean
+  session_present: boolean
+  transport: 'direct_http' | string
+  reason?: string
+}
+
+export interface SmartClassCaptcha {
+  verify_code_id: string
+  image_data_url: string
+}
+
+export interface SmartClassLoginRequest {
+  username: string
+  password: string
+  verify_code: string
+  verify_code_id: string
+}
+
+export interface SmartClassLoginResult {
+  authenticated: boolean
+  redirect?: string
+}
+
 function buildQuery(entries: Array<[string, string | undefined]>): string {
   const params = new URLSearchParams()
   for (const [key, value] of entries) {
@@ -197,4 +221,33 @@ export function getCourseArtifactUrl(courseKey: string, artifactName: CourseArti
 
 export function getTaskArtifactUrl(taskId: string, artifactName: TaskArtifactName): string {
   return `/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${artifactName}`
+}
+
+/**
+ * 查询 N1 保存的 SmartClass Session 是否仍然有效。
+ *
+ * 这里只返回状态，不会把 Cookie / platform_token 之类的会话材料送到浏览器。
+ */
+export function getSmartClassAuthStatus(): Promise<SmartClassAuthStatus> {
+  return readJson<SmartClassAuthStatus>('/api/v1/smartclass/auth')
+}
+
+/** 获取一次图形验证码。验证码图片以内联 data URL 返回，不会写入浏览器存储。 */
+export function getSmartClassCaptcha(): Promise<SmartClassCaptcha> {
+  return readJson<SmartClassCaptcha>('/api/v1/smartclass/captcha')
+}
+
+/**
+ * 完成人工重新登录。
+ *
+ * 密码只存在于当前组件状态与本次 HTTPS 请求中；前端不把它写入 localStorage/sessionStorage。
+ */
+export function loginSmartClass(request: SmartClassLoginRequest): Promise<SmartClassLoginResult> {
+  return readJson<SmartClassLoginResult>('/api/v1/smartclass/login', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  })
 }
