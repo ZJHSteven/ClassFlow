@@ -623,6 +623,15 @@ impl SmartClassSessionManager {
 fn parse_api_value(body: &str, map_auth_redirect: bool) -> AppResult<Value> {
     let json: Value = serde_json::from_str(body)
         .map_err(|error| AppError::External(format!("解析 SmartClass JSON 响应失败: {error}")))?;
+
+    // SmartClass 并不是所有接口都包在 `{Success, Message, Value}` 中。
+    // 2026-10-08 线上实测 `/Home/GettimeDif` 直接返回裸 JSON 整数；
+    // `/Home/GetInteractiveAuth` 在不同站点版本也可能直接返回字符串。
+    // JSON 标量不可能携带 `status=302/localtion` 这类业务跳转字段，因此直接返回即可。
+    if !json.is_object() {
+        return Ok(json);
+    }
+
     let envelope: SmartClassApiEnvelope = serde_json::from_value(json.clone())
         .map_err(|error| AppError::External(format!("解析 SmartClass envelope 失败: {error}")))?;
     if envelope.status == Some(302)
@@ -993,6 +1002,18 @@ mod tests {
         let body = r#"{"Success":true,"Message":"","Value":{"TotalCount":3,"Data":[]}}"#;
         let value = parse_api_value(body, true).unwrap();
         assert_eq!(value["TotalCount"], 3);
+    }
+
+    #[test]
+    fn accepts_scalar_api_values() {
+        assert_eq!(
+            parse_api_value("1791436523845", true).unwrap(),
+            json!(1_791_436_523_845_i64)
+        );
+        assert_eq!(
+            parse_api_value(r#""platform-token-test""#, true).unwrap(),
+            json!("platform-token-test")
+        );
     }
 
     #[test]
