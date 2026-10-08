@@ -87,8 +87,9 @@ CapsWriter Server :6016
 4. 已完成：Windows Rust `CapsWriterGateway` 已收口为通用 sync + async Transcription API；幂等键、job 资源、兼容 `/result`、能力查询与真实 6016 冒烟均已完成。
 5. 已完成：`asr.zjhstudio.com`、Cloudflare Tunnel、Access application 已配置；N1 真实 103176-byte M4A 已完成 N1 -> Cloudflare -> 6017 -> 6016 -> N1 的 queued -> completed 跨公网闭环。
 6. 已完成：ClassFlow 现已具备 M4A + remote job id + transcript 三层 checkpoint；远端临时离线进入 `pending/retry_waiting` 指数退避，前端显示等待/上传/已提交/转写/重试状态，且引用感知清理不会误删失败任务 M4A。
-7. 正在做：最新 ARM64 构建、N1 staging、生产 SQLite/backend.env 迁移与切流；切流前继续保持 N100 active、N1 Collector=false，先用测试端口验收。
-8. Phase 1 稳定后再启用 N1 SmartClass Collector；Phase 3 最后实施，避免同时引入三个新故障域。
+7. 已完成：最新 ARM64 backend 已部署到 N1；生产 SQLite/backend.env 已迁移；隔离 staging 真正完成 M4A -> 远端 ASR -> transcript -> cleanup；随后 N100 backend 通过 SudoLease 正规 `stop/disable`，最终 SQLite 一致性快照迁入 N1，N1 systemd `enable --now` 成功。
+8. 已完成：`classflow-backend.zjhstudio.com` 已从 CampusBox Tunnel 切换到 N1-Campus Tunnel，DNS CNAME 指向 N1 Tunnel；Access、前端 Worker 回源、N1 8787 health 均完成公网验证。N100 原 Tunnel ingress 暂保留为 DNS 回滚目标，但旧 backend 已 inactive+disabled，不会双活。
+9. 正在做 Phase 2：把 SmartClass Collector 的登录态/浏览器会话桥完全落到 N1，并启用每 10 分钟自动发现新录播；Phase 3 最后实施，避免同时引入三个新故障域。
 
 ## 2026-09-22 SmartClass 时间格式去重修复 ExecPlan
 
