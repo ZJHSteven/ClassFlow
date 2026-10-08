@@ -66,6 +66,7 @@ CapsWriter Server :6016
   - Session 失效时 API 会 HTTP 200 但业务 body 为 `{status:302, localtion:"/login.aspx?..."}`，Rust 必须把它识别为 `auth_required`，而不是普通解析失败。
   - 登录页账号登录 POST `/Home/Login`；图形验证码 GET `/home/VerifyImage2` 返回 id + base64 PNG；用户名/密码使用同一 AES-256-CBC key/IV 加密为 hex 后提交。
 - 目标：N1 维护 0600 持久 session/cookie jar、10 分钟 heartbeat、动态 csrk/platform token、纯 HTTP `GetMyVideoList`；Collector 直接调用 Session Manager，不再依赖 Windows reverse SSH / `browser_bridge.ps1`。
+- 2026-10-09 已将 Phase 2 新版 ARM64 backend 正式部署到 N1，并将前端 Worker 发布到版本 `767dd0ec-1ef6-459e-b0a6-e3f303392a17`。当前生产明确使用 `CLASSFLOW_SMARTCLASS_TRANSPORT=direct_http`，Session 文件路径为 `/home/zjhsteven/.local/state/classflow/smartclass-session.json`，Collector 仍保持关闭；下一步由用户完成一次人工验证码/登录，确认 Session 持久化与真实课程列表后再启用 10 分钟自动采集。
 - 登录失效时进入明确 `auth_required` 状态，并提供受现有 ClassFlow/Cloudflare Access 保护的轻量验证码 + 登录入口；登录成功后 session 自动持久化并恢复 Collector。Chrome/CDP 只保留调试/协议验证用途。
 - userscript/SmartClass Downloader 保留为调试与救援入口，不再是日常必经步骤。
 
