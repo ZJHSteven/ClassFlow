@@ -61,11 +61,17 @@ pub fn spawn_smartclass_collector(state: AppState) {
 
 impl SmartClassCollector {
     async fn run_forever(self) {
-        let mut first_scan = true;
+        // 这个状态不是“程序是不是第一次进入 loop”，而是“是否还欠一次完整 backfill”。
+        //
+        // 两者的区别很重要：如果服务启动时 SmartClass Session 已过期，第一次 21 天扫描会
+        // 返回 Unauthorized。旧实现仍把 `first_scan=false`，导致用户稍后重新登录后只回看
+        // 2 天，从而可能永久漏掉登录中断期间更早的录播。现在只有完整扫描成功后才清掉
+        // backfill 债务；任何鉴权失效都会重新置为 true。
+        let mut needs_initial_backfill = true;
         let interval_secs = self.state.config.smartclass_poll_interval_secs.max(60);
 
         loop {
-            let lookback_days = if first_scan {
+            let lookback_days = if needs_initial_backfill {
                 self.state.config.smartclass_initial_backfill_days.max(1)
             } else {
                 self.state
@@ -74,10 +80,12 @@ impl SmartClassCollector {
                     .max(1)
             };
 
-            if let Err(error) = self.scan_recent_days(lookback_days).await {
+            let scan_result = self.scan_recent_days(lookback_days).await;
+            needs_initial_backfill =
+                next_backfill_requirement(needs_initial_backfill, &scan_result);
+            if let Err(error) = scan_result {
                 warn!("SmartClass Collector 本轮失败: {error}");
             }
-            first_scan = false;
             tokio::time::sleep(StdDuration::from_secs(interval_secs)).await;
         }
     }
@@ -267,6 +275,19 @@ impl SmartClassCollector {
     }
 }
 
+/// 根据本轮扫描结果决定下一轮是否必须做完整历史回扫。
+///
+/// - 成功：历史窗口已经补齐，后续回到增量扫描。
+/// - Unauthorized：登录态中断时间不可知，恢复后必须重新做完整 backfill。
+/// - 其他临时错误：保持之前状态；尤其首次扫描遇到网络抖动时不能把 backfill 债务清掉。
+fn next_backfill_requirement(current: bool, result: &AppResult<()>) -> bool {
+    match result {
+        Ok(()) => false,
+        Err(AppError::Unauthorized) => true,
+        Err(_) => current,
+    }
+}
+
 fn video_to_intake_item(video: SmartClassVideo) -> AppResult<Option<IntakeItem>> {
     if video.cloud_vod {
         return Ok(None);
@@ -335,6 +356,23 @@ fn cover_to_vga_url(cover: &str) -> AppResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auth_failure_should_keep_or_restore_initial_backfill() {
+        assert!(next_backfill_requirement(
+            false,
+            &Err(AppError::Unauthorized)
+        ));
+        assert!(next_backfill_requirement(
+            true,
+            &Err(AppError::RetryableExternal("network".to_string()))
+        ));
+        assert!(!next_backfill_requirement(false, &Ok(())));
+        assert!(!next_backfill_requirement(
+            false,
+            &Err(AppError::RetryableExternal("network".to_string()))
+        ));
+    }
 
     fn demo_video() -> SmartClassVideo {
         SmartClassVideo {
