@@ -37,9 +37,8 @@ use reqwest::{
     redirect::Policy,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::{fs, io::AsyncWriteExt, sync::Mutex};
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
@@ -766,7 +765,203 @@ fn summarize_json(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use axum::{
+        Json, Router,
+        extract::{Query, State},
+        http::HeaderMap,
+        response::Html,
+        routing::get,
+    };
+    use serde_json::json;
+    use tempfile::tempdir;
+
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct MockProtocolState {
+        cookie_seen: Arc<AtomicBool>,
+        timediff_saw_skip: Arc<AtomicBool>,
+        platform_saw_skip: Arc<AtomicBool>,
+        video_saw_platform: Arc<AtomicBool>,
+        video_saw_skip: Arc<AtomicBool>,
+        encrypted_domain_config: Arc<String>,
+    }
+
+    fn header_is(headers: &HeaderMap, name: &str, expected: &str) -> bool {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value == expected)
+    }
+
+    async fn mock_course_list(
+        State(state): State<MockProtocolState>,
+        headers: HeaderMap,
+    ) -> Html<&'static str> {
+        let has_cookie = headers
+            .get(reqwest::header::COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("PowerCreatorCMSAuthenticationID=test-session"));
+        state.cookie_seen.store(has_cookie, Ordering::SeqCst);
+        Html("<html><body>CourseList</body></html>")
+    }
+
+    async fn mock_config(State(state): State<MockProtocolState>) -> Json<Value> {
+        Json(json!({"domainConfig": state.encrypted_domain_config.as_str()}))
+    }
+
+    async fn mock_time_diff(
+        State(state): State<MockProtocolState>,
+        headers: HeaderMap,
+        Query(query): Query<std::collections::HashMap<String, String>>,
+    ) -> Json<Value> {
+        state.timediff_saw_skip.store(
+            header_is(&headers, "skip_token_verify", "skip_token_verify")
+                && query
+                    .get("csrkToken")
+                    .is_some_and(|value| value.len() == 13),
+            Ordering::SeqCst,
+        );
+        Json(json!({
+            "Success": true,
+            "Message": "",
+            "Value": now_unix_ms()
+        }))
+    }
+
+    async fn mock_platform_token(
+        State(state): State<MockProtocolState>,
+        headers: HeaderMap,
+        Query(query): Query<std::collections::HashMap<String, String>>,
+    ) -> Json<Value> {
+        state.platform_saw_skip.store(
+            header_is(&headers, "skip_token_verify", "skip_token_verify")
+                && query
+                    .get("csrkToken")
+                    .is_some_and(|value| value.len() == 13),
+            Ordering::SeqCst,
+        );
+        Json(json!({
+            "Success": true,
+            "Message": "",
+            "Value": "platform-token-test"
+        }))
+    }
+
+    async fn mock_video_list(
+        State(state): State<MockProtocolState>,
+        headers: HeaderMap,
+        Query(query): Query<std::collections::HashMap<String, String>>,
+    ) -> Json<Value> {
+        state.video_saw_platform.store(
+            header_is(&headers, "platform_token", "platform-token-test")
+                && query
+                    .get("csrkToken")
+                    .is_some_and(|value| value.len() == 13),
+            Ordering::SeqCst,
+        );
+        state
+            .video_saw_skip
+            .store(headers.get("skip_token_verify").is_some(), Ordering::SeqCst);
+        Json(json!({
+            "Success": true,
+            "Message": "",
+            "Value": {
+                "TotalCount": 1,
+                "Data": [{
+                    "Title": "协议测试",
+                    "NewID": "mock-new-id",
+                    "StartTime": "2026-10-08 08:00:00",
+                    "StopTime": "2026-10-08 08:45:00",
+                    "Cover": "https://example.test/1/000.jpg",
+                    "CourseName": "协议测试",
+                    "Teachers": "测试老师",
+                    "CloudVod": false
+                }]
+            }
+        }))
+    }
+
+    fn encrypt_domain_config_for_test(clear: &str) -> String {
+        let key = b"80bdbdbaf7494add99198960d715d41b";
+        let iv = b"bdbaf7494add9919";
+        let plaintext = clear.as_bytes();
+        let mut buffer = vec![0_u8; (plaintext.len() / 16 + 1) * 16];
+        buffer[..plaintext.len()].copy_from_slice(plaintext);
+        let encrypted = Encryptor::<Aes256>::new_from_slices(key, iv)
+            .unwrap()
+            .encrypt_padded_mut::<Pkcs7>(&mut buffer, plaintext.len())
+            .unwrap();
+        hex::encode(encrypted)
+    }
+
+    #[tokio::test]
+    async fn direct_http_should_follow_current_web_protocol_headers() {
+        let mock_state = MockProtocolState {
+            encrypted_domain_config: Arc::new(encrypt_domain_config_for_test(
+                r#"{"csrkKey":"s0k6e5a1t3i46kglaz9"}"#,
+            )),
+            ..Default::default()
+        };
+        let app = Router::new()
+            .route("/UserSpace/CourseList.aspx", get(mock_course_list))
+            .route("/config.json", get(mock_config))
+            .route("/Home/GettimeDif", get(mock_time_diff))
+            .route("/Home/GetInteractiveAuth", get(mock_platform_token))
+            .route("/Webapi/V1/Video/GetMyVideoList", get(mock_video_list))
+            .with_state(mock_state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mock SmartClass 应绑定成功");
+        let addr = listener.local_addr().expect("mock SmartClass 应有地址");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("mock SmartClass 应正常服务");
+        });
+
+        let temp = tempdir().expect("应创建临时目录");
+        let session_path = temp.path().join("smartclass-session.json");
+        let persisted = PersistedSession {
+            version: 1,
+            cookie_header: "PowerCreatorCMSAuthenticationID=test-session".to_string(),
+            updated_at_unix_ms: now_unix_ms(),
+        };
+        fs::write(
+            &session_path,
+            serde_json::to_vec(&persisted).expect("session 应可序列化"),
+        )
+        .await
+        .expect("测试 session 应写入");
+
+        let mut config = AppConfig::from_env().expect("默认配置应可解析");
+        config.smartclass_base_url = format!("http://{addr}");
+        config.smartclass_session_file = session_path;
+        config.smartclass_request_timeout_secs = 5.0;
+        let manager = SmartClassSessionManager::new(Arc::new(config))
+            .await
+            .expect("Session Manager 应初始化");
+
+        let page = manager
+            .fetch_video_page("2026-10-08", "2026-10-08", 1, 12)
+            .await
+            .expect("纯 HTTP 获取课程应成功");
+        assert_eq!(page.total_count, 1);
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(page.data[0].new_id, "mock-new-id");
+        assert!(mock_state.cookie_seen.load(Ordering::SeqCst));
+        assert!(mock_state.timediff_saw_skip.load(Ordering::SeqCst));
+        assert!(mock_state.platform_saw_skip.load(Ordering::SeqCst));
+        assert!(mock_state.video_saw_platform.load(Ordering::SeqCst));
+        assert!(!mock_state.video_saw_skip.load(Ordering::SeqCst));
+
+        server.abort();
+    }
 
     #[test]
     fn csrf_token_matches_current_web_algorithm() {

@@ -1,9 +1,9 @@
 /*!
 SmartClass 自动录播采集器。
 
-浏览器桥持有用户本人正常登录得到的 SmartClass 会话，并让网页自己的 JavaScript 发起官方请求；
-Rust 后端只读取课程列表快照，负责分页、历史回扫、VOD URL 正规化、SQLite overlap 检查和任务入队。
-这样 SmartClass 将来即使修改页面请求校验方式，ClassFlow 也不需要自己逆向认证算法。
+生产默认由 N1 的纯 HTTP Session Manager 持有用户本人正常登录得到的 SmartClass 会话；
+旧 Browser Bridge 只保留为协议变化时的救援 transport。Collector 自身只负责分页、历史回扫、
+VOD URL 正规化、SQLite overlap 检查和任务入队，不关心 Cookie/csrk/platform token 的细节。
 */
 
 use std::time::Duration as StdDuration;
