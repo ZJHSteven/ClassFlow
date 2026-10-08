@@ -125,7 +125,7 @@ CF_ACCESS_CLIENT_SECRET=replace-with-access-client-secret
 - `asr.zjhstudio.com` 由独立 Cloudflare Access application 保护；没有 Service Token 的公网请求会在边缘返回 403。
 - Windows Gateway 只监听 `127.0.0.1:6017`，公网只能通过 `win-laptop` Cloudflare Tunnel 到达。
 - Gateway 自己仍支持可选 Bearer Token，但当前生产不要求 N1 再维护第二份静态 secret；`CLASSFLOW_REMOTE_CAPSWRITER_TOKEN` 保持空即可。
-- 如果设置了 `CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_ID/SECRET`，它们优先于通用 `CF_ACCESS_CLIENT_ID/SECRET`；否则后端自动复用通用变量。
+- 如果设置了 `CLASSFLOW_REMOTE_CAPSWRITER_ACCESS_CLIENT_ID/SECRET`，它们优先；否则后端先复用通用 `CF_ACCESS_CLIENT_ID/SECRET`，再回退到既有 `CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_ID/SECRET`。因此 N1 复用同一枚 Service Token 时不需要在 env 中复制第二份 secret。
 
 异步协议的 canonical 形状是：`POST /v1/transcriptions` 创建 job，然后轮询
 `GET /v1/transcriptions/{id}`。当状态为 `completed` 时，同一个 job 资源直接带 `result`；
