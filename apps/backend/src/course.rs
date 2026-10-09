@@ -96,6 +96,11 @@ pub fn summarize_lecture(lecture: &LectureGroup) -> LectureSummaryResponse {
             .filter(|task| task.status == TaskStatus::Succeeded)
             .count(),
         transcript_ready: lecture.transcript_ready(),
+        notes_status: "not_started".to_string(),
+        notes_title: None,
+        notes_ready: false,
+        notes_last_error: None,
+        notes_github_path: None,
         task_ids: lecture.tasks.iter().map(|task| task.id.clone()).collect(),
     }
 }

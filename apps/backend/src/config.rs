@@ -138,6 +138,17 @@ pub struct AppConfig {
     pub smartclass_incremental_lookback_days: i64,
     pub smartclass_page_size: usize,
     pub smartclass_request_timeout_secs: f64,
+    pub notes_enabled: bool,
+    pub notes_auto_since_date: String,
+    pub notes_poll_interval_secs: f64,
+    pub notes_project_name: String,
+    pub archive_bridge_base_url: String,
+    pub archive_bridge_token: String,
+    pub archive_bridge_access_client_id: String,
+    pub archive_bridge_access_client_secret: String,
+    pub archive_bridge_request_timeout_secs: f64,
+    pub notes_github_repo: String,
+    pub notes_github_token: String,
 }
 
 impl AppConfig {
@@ -415,6 +426,39 @@ impl AppConfig {
                 "CLASSFLOW_SMARTCLASS_REQUEST_TIMEOUT_SECS",
                 30.0,
             )?,
+            notes_enabled: env_or_parse("CLASSFLOW_NOTES_ENABLED", false)?,
+            notes_auto_since_date: env_or("CLASSFLOW_NOTES_AUTO_SINCE_DATE", "9999-12-31"),
+            notes_poll_interval_secs: env_or_parse("CLASSFLOW_NOTES_POLL_INTERVAL_SECS", 15.0)?,
+            notes_project_name: env_or("CLASSFLOW_NOTES_PROJECT_NAME", "课堂录音→笔记"),
+            archive_bridge_base_url: env_or(
+                "CLASSFLOW_ARCHIVE_BRIDGE_BASE_URL",
+                "http://127.0.0.1:47832",
+            ),
+            archive_bridge_token: env::var("CLASSFLOW_ARCHIVE_BRIDGE_TOKEN")
+                .unwrap_or_default(),
+            archive_bridge_access_client_id: env_or_any(
+                &[
+                    "CLASSFLOW_ARCHIVE_BRIDGE_ACCESS_CLIENT_ID",
+                    "CF_ACCESS_CLIENT_ID",
+                ],
+                "",
+            ),
+            archive_bridge_access_client_secret: env_or_any(
+                &[
+                    "CLASSFLOW_ARCHIVE_BRIDGE_ACCESS_CLIENT_SECRET",
+                    "CF_ACCESS_CLIENT_SECRET",
+                ],
+                "",
+            ),
+            archive_bridge_request_timeout_secs: env_or_parse(
+                "CLASSFLOW_ARCHIVE_BRIDGE_REQUEST_TIMEOUT_SECS",
+                30.0,
+            )?,
+            notes_github_repo: env_or(
+                "CLASSFLOW_NOTES_GITHUB_REPO",
+                "ZJHSteven/med-notes-2026-fall-y3",
+            ),
+            notes_github_token: env::var("CLASSFLOW_NOTES_GITHUB_TOKEN").unwrap_or_default(),
         })
     }
 }

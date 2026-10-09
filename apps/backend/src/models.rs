@@ -269,7 +269,77 @@ pub struct LectureSummaryResponse {
     pub segment_count: usize,
     pub successful_segment_count: usize,
     pub transcript_ready: bool,
+    pub notes_status: String,
+    pub notes_title: Option<String>,
+    pub notes_ready: bool,
+    pub notes_last_error: Option<String>,
+    pub notes_github_path: Option<String>,
     pub task_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LectureNotesStatus {
+    Pending,
+    Generating,
+    Publishing,
+    Succeeded,
+    Failed,
+}
+
+impl LectureNotesStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Generating => "generating",
+            Self::Publishing => "publishing",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl std::str::FromStr for LectureNotesStatus {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "pending" => Ok(Self::Pending),
+            "generating" => Ok(Self::Generating),
+            "publishing" => Ok(Self::Publishing),
+            "succeeded" => Ok(Self::Succeeded),
+            "failed" => Ok(Self::Failed),
+            other => Err(format!("未知 Notes 状态: {other}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LectureNotesRecord {
+    pub lecture_key: String,
+    pub course_key: String,
+    pub semester: String,
+    pub course_name: String,
+    pub teacher_name: String,
+    pub date: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub sequence_no: i64,
+    pub status: LectureNotesStatus,
+    pub transcript_sha256: String,
+    pub conversation_id: Option<String>,
+    pub notes_title: Option<String>,
+    pub notes_markdown: Option<String>,
+    pub notes_sha256: Option<String>,
+    pub github_audio_path: Option<String>,
+    pub github_notes_path: Option<String>,
+    pub github_commit_sha: Option<String>,
+    pub last_error: Option<String>,
+    pub submit_attempt_count: i64,
+    pub submitted_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
