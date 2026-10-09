@@ -365,7 +365,7 @@ export function CoursePanel() {
   }
 
   const buildLectureAsrFilename = (lecture: NonNullable<CourseDetail['lectures']>[number]) => {
-    const compactTime = (value: string) => value.replaceAll(':', '')
+    const compactTime = (value: string) => value.replace(/:/g, '')
     return `${selectedCourseDetail?.date ?? 'lecture'}-${selectedCourseDetail?.course_name ?? '课程'}-${compactTime(lecture.start_time)}-${compactTime(lecture.end_time)}-ASR.md`
   }
 
