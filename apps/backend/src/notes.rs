@@ -346,11 +346,16 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     let Some(final_message) = final_message else {
         return Ok(());
     };
-    let markdown = final_message
+    let raw_markdown = final_message
         .get("text")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
+    if raw_markdown.is_empty() {
+        return Ok(());
+    }
+    let normalized = normalize_notes_markdown(raw_markdown);
+    let markdown = normalized.markdown.trim();
     if markdown.is_empty() {
         return Ok(());
     }
@@ -358,12 +363,83 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
         .pointer("/conversation/title")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let title = derive_notes_title(markdown, conversation_title, &job.course_name, &job.date);
+    let title_hint = normalized
+        .writing_title
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(conversation_title);
+    let title = derive_notes_title(markdown, title_hint, &job.course_name, &job.date);
     state
         .repo
         .mark_lecture_notes_publishing(&job.lecture_key, &title, markdown, &sha256_text(markdown))
         .await?;
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedNotes {
+    markdown: String,
+    writing_title: Option<String>,
+}
+
+/// 把 ChatGPT 聊天展示层的 writing block 还原成仓库需要的纯 Markdown。
+///
+/// ChatGPT 2026 Web 会把“可直接复制/编辑的完整文档”包装为：
+///
+/// `:::writing{variant="document" ... title="..."}`
+/// `...真正 Markdown...`
+/// `:::`
+///
+/// 这个 wrapper 属于聊天 UI 协议，不是课堂笔记正文。Project 还可能在 block 前后附一句说明，
+/// 因而这里一旦识别到完整 writing block，就只保留 block 内正文，并把 metadata 中的 title
+/// 作为标题兜底；如果没有 writing block，则保持原始 Markdown 不变。
+fn normalize_notes_markdown(raw: &str) -> NormalizedNotes {
+    let lines = raw.lines().collect::<Vec<_>>();
+    let Some((start, opening)) = lines
+        .iter()
+        .enumerate()
+        .find(|(_, line)| line.trim_start().starts_with(":::writing{"))
+    else {
+        return NormalizedNotes {
+            markdown: raw.trim().to_string(),
+            writing_title: None,
+        };
+    };
+
+    let Some(relative_end) = lines[start + 1..]
+        .iter()
+        .position(|line| line.trim() == ":::")
+    else {
+        // 不完整 wrapper 不应被擅自裁剪；保留完整 final，方便后续人工诊断。
+        return NormalizedNotes {
+            markdown: raw.trim().to_string(),
+            writing_title: None,
+        };
+    };
+    let end = start + 1 + relative_end;
+    let body = lines[start + 1..end].join("\n").trim().to_string();
+    if body.is_empty() {
+        return NormalizedNotes {
+            markdown: raw.trim().to_string(),
+            writing_title: None,
+        };
+    }
+
+    NormalizedNotes {
+        markdown: body,
+        writing_title: writing_block_title(opening),
+    }
+}
+
+/// writing metadata 目前是单行属性列表；标题只作为兜底提示，不参与协议控制，因此用保守的
+/// `title="..."` 提取即可。若将来 title 出现复杂转义，提取失败只会退回 conversation title。
+fn writing_block_title(opening: &str) -> Option<String> {
+    let marker = "title=\"";
+    let start = opening.find(marker)? + marker.len();
+    let rest = &opening[start..];
+    let end = rest.find('"')?;
+    let title = rest[..end].trim();
+    (!title.is_empty()).then(|| title.to_string())
 }
 
 async fn process_publishing(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
@@ -662,6 +738,34 @@ mod tests {
             ),
             "肾小球疾病与肾病综合征"
         );
+    }
+
+    #[test]
+    fn writing_block_should_be_unwrapped_before_publishing() {
+        let raw = r#"这是给你的课堂笔记：
+
+:::writing{variant="document" id="48317" title="泌尿生殖系统疾病"}
+# 泌尿生殖系统疾病
+
+## 第一部分
+
+正文内容。
+:::
+
+如果需要，我还可以再压缩。"#;
+        let normalized = normalize_notes_markdown(raw);
+        assert_eq!(normalized.writing_title.as_deref(), Some("泌尿生殖系统疾病"));
+        assert_eq!(
+            normalized.markdown,
+            "# 泌尿生殖系统疾病\n\n## 第一部分\n\n正文内容。"
+        );
+    }
+
+    #[test]
+    fn plain_markdown_should_remain_unchanged() {
+        let normalized = normalize_notes_markdown("\n# 标题\n\n正文\n");
+        assert_eq!(normalized.writing_title, None);
+        assert_eq!(normalized.markdown, "# 标题\n\n正文");
     }
 
     #[test]
