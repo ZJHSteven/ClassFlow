@@ -29,6 +29,7 @@ use crate::{
     course::build_lecture_asr_markdown,
     error::{AppError, AppResult},
     models::{CourseListQuery, IntakeBatchRequest, TaskListQuery, TaskStatus},
+    notes::enqueue_lecture_notes,
     smartclass_session::SmartClassLoginRequest,
     worker::sync_course_artifacts,
 };
@@ -53,6 +54,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/courses/{course_key}/lectures/{lecture_key}/artifacts/{artifact_name}",
             get(get_lecture_artifact),
+        )
+        .route(
+            "/courses/{course_key}/lectures/{lecture_key}/notes/retry",
+            post(retry_lecture_notes),
         )
         .route("/intake/batches", post(create_batch))
         .route("/smartclass/auth", get(get_smartclass_auth))
@@ -398,10 +403,43 @@ async fn get_lecture_artifact(
                 markdown.into_bytes(),
             ))
         }
+        "notes.md" => {
+            let notes = state
+                .repo
+                .get_lecture_notes(&lecture_key)
+                .await?
+                .ok_or_else(|| AppError::NotFound("该课堂还没有 Notes 任务".to_string()))?;
+            let markdown = notes
+                .notes_markdown
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| AppError::NotFound("Notes 尚未生成完成".to_string()))?;
+            Ok((
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/markdown; charset=utf-8",
+                )],
+                markdown.into_bytes(),
+            ))
+        }
         _ => Err(AppError::BadRequest(
-            "lecture artifact_name 目前仅支持 asr.md".to_string(),
+            "lecture artifact_name 目前仅支持 asr.md / notes.md".to_string(),
         )),
     }
+}
+
+async fn retry_lecture_notes(
+    State(state): State<AppState>,
+    Path((course_key, lecture_key)): Path<(String, String)>,
+) -> AppResult<impl IntoResponse> {
+    let job = enqueue_lecture_notes(&state, &course_key, &lecture_key).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "lecture_key": job.lecture_key,
+            "status": job.status.as_str(),
+            "conversation_id": job.conversation_id,
+        })),
+    ))
 }
 
 async fn auth_middleware(
