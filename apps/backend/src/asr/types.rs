@@ -60,10 +60,19 @@ pub enum AsrProgressEvent {
         rate_bytes_per_sec: u64,
         eta_seconds: Option<u64>,
     },
-    Submitted { job_id: String },
-    Queued { job_id: String },
-    Running { job_id: String },
-    JobInvalidated { job_id: String, reason: String },
+    Submitted {
+        job_id: String,
+    },
+    Queued {
+        job_id: String,
+    },
+    Running {
+        job_id: String,
+    },
+    JobInvalidated {
+        job_id: String,
+        reason: String,
+    },
 }
 
 impl AsrInput {
