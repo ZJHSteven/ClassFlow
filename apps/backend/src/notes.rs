@@ -69,7 +69,10 @@ pub async fn enqueue_lecture_notes(
     course_key: &str,
     lecture_key: &str,
 ) -> AppResult<LectureNotesRecord> {
-    let lecture = state.repo.get_lecture_group(course_key, lecture_key).await?;
+    let lecture = state
+        .repo
+        .get_lecture_group(course_key, lecture_key)
+        .await?;
     let transcript = lecture
         .combined_transcript()
         .ok_or_else(|| AppError::BadRequest("完整课堂 ASR 尚未齐备，不能生成 Notes".to_string()))?;
@@ -77,9 +80,11 @@ pub async fn enqueue_lecture_notes(
     match state.repo.get_lecture_notes(lecture_key).await? {
         Some(existing) if existing.status == LectureNotesStatus::Failed => {
             state.repo.retry_lecture_notes(lecture_key).await?;
-            state.repo.get_lecture_notes(lecture_key).await?.ok_or_else(|| {
-                AppError::Internal("重试 Notes 后无法读回任务".to_string())
-            })
+            state
+                .repo
+                .get_lecture_notes(lecture_key)
+                .await?
+                .ok_or_else(|| AppError::Internal("重试 Notes 后无法读回任务".to_string()))
         }
         Some(existing) => Ok(existing),
         None => {
@@ -231,7 +236,9 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
         .pointer("/result/conversationId")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| AppError::Internal("Archive 已接受提交但没有返回 conversationId".to_string()))?;
+        .ok_or_else(|| {
+            AppError::Internal("Archive 已接受提交但没有返回 conversationId".to_string())
+        })?;
     state
         .repo
         .mark_lecture_notes_generating(&job.lecture_key, conversation_id)
@@ -254,7 +261,10 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     let client = bridge_client(state)?;
     let base = state.config.archive_bridge_base_url.trim_end_matches('/');
     let detail_url = format!("{base}/v1/conversations/{conversation_id}");
-    let response = match apply_bridge_auth(client.get(detail_url), state).send().await {
+    let response = match apply_bridge_auth(client.get(detail_url), state)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             state
@@ -300,7 +310,10 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     }
 
     let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
-    let messages_response = match apply_bridge_auth(client.get(messages_url), state).send().await {
+    let messages_response = match apply_bridge_auth(client.get(messages_url), state)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(_) => return Ok(()),
     };
@@ -348,12 +361,7 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     let title = derive_notes_title(markdown, conversation_title, &job.course_name, &job.date);
     state
         .repo
-        .mark_lecture_notes_publishing(
-            &job.lecture_key,
-            &title,
-            markdown,
-            &sha256_text(markdown),
-        )
+        .mark_lecture_notes_publishing(&job.lecture_key, &title, markdown, &sha256_text(markdown))
         .await?;
     Ok(())
 }
@@ -399,10 +407,7 @@ async fn process_publishing(state: &AppState, job: &LectureNotesRecord) -> AppRe
     {
         state
             .repo
-            .update_lecture_notes_error(
-                &job.lecture_key,
-                &format!("GitHub 发布 ASR 失败: {error}"),
-            )
+            .update_lecture_notes_error(&job.lecture_key, &format!("GitHub 发布 ASR 失败: {error}"))
             .await?;
         return Ok(());
     }
@@ -435,7 +440,10 @@ async fn process_publishing(state: &AppState, job: &LectureNotesRecord) -> AppRe
             notes_commit.as_deref(),
         )
         .await?;
-    info!("Phase 3 Notes 已发布: {} -> {}", job.lecture_key, notes_path);
+    info!(
+        "Phase 3 Notes 已发布: {} -> {}",
+        job.lecture_key, notes_path
+    );
     Ok(())
 }
 
@@ -449,7 +457,10 @@ fn bridge_client(state: &AppState) -> AppResult<Client> {
         .map_err(AppError::from)
 }
 
-fn apply_bridge_auth(builder: reqwest::RequestBuilder, state: &AppState) -> reqwest::RequestBuilder {
+fn apply_bridge_auth(
+    builder: reqwest::RequestBuilder,
+    state: &AppState,
+) -> reqwest::RequestBuilder {
     let mut builder = builder.bearer_auth(&state.config.archive_bridge_token);
     if !state.config.archive_bridge_access_client_id.is_empty() {
         builder = builder.header(

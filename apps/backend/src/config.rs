@@ -434,8 +434,7 @@ impl AppConfig {
                 "CLASSFLOW_ARCHIVE_BRIDGE_BASE_URL",
                 "http://127.0.0.1:47832",
             ),
-            archive_bridge_token: env::var("CLASSFLOW_ARCHIVE_BRIDGE_TOKEN")
-                .unwrap_or_default(),
+            archive_bridge_token: env::var("CLASSFLOW_ARCHIVE_BRIDGE_TOKEN").unwrap_or_default(),
             archive_bridge_access_client_id: env_or_any(
                 &[
                     "CLASSFLOW_ARCHIVE_BRIDGE_ACCESS_CLIENT_ID",

@@ -24,8 +24,8 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         CourseDetailResponse, CourseListQuery, CourseSummaryResponse, IntakeBatchRequest,
-        IntakeBatchResponse, IntakeItem, TaskDetailResponse, TaskDetailTaskResponse,
-        LectureNotesRecord, LectureNotesStatus, TaskEventRecord, TaskListQuery, TaskRecord,
+        IntakeBatchResponse, IntakeItem, LectureNotesRecord, LectureNotesStatus,
+        TaskDetailResponse, TaskDetailTaskResponse, TaskEventRecord, TaskListQuery, TaskRecord,
         TaskStage, TaskStatus,
     },
 };
@@ -1030,7 +1030,10 @@ impl Repository {
         .await?)
     }
 
-    pub async fn get_lecture_notes(&self, lecture_key: &str) -> AppResult<Option<LectureNotesRecord>> {
+    pub async fn get_lecture_notes(
+        &self,
+        lecture_key: &str,
+    ) -> AppResult<Option<LectureNotesRecord>> {
         let row = sqlx::query("SELECT * FROM lecture_notes WHERE lecture_key = ? LIMIT 1")
             .bind(lecture_key)
             .fetch_optional(&self.pool)
@@ -1088,7 +1091,10 @@ impl Repository {
             .ok_or_else(|| AppError::Internal("创建 lecture Notes 任务后无法读回".to_string()))
     }
 
-    pub async fn list_active_lecture_notes(&self, limit: i64) -> AppResult<Vec<LectureNotesRecord>> {
+    pub async fn list_active_lecture_notes(
+        &self,
+        limit: i64,
+    ) -> AppResult<Vec<LectureNotesRecord>> {
         let rows = sqlx::query(
             r#"
             SELECT * FROM lecture_notes
@@ -1147,7 +1153,11 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn update_lecture_notes_error(&self, lecture_key: &str, error: &str) -> AppResult<()> {
+    pub async fn update_lecture_notes_error(
+        &self,
+        lecture_key: &str,
+        error: &str,
+    ) -> AppResult<()> {
         sqlx::query("UPDATE lecture_notes SET last_error=?, updated_at=? WHERE lecture_key=?")
             .bind(error)
             .bind(Utc::now().to_rfc3339())
@@ -1201,7 +1211,9 @@ impl Repository {
             .await?
             .ok_or_else(|| AppError::NotFound("Notes 任务不存在".to_string()))?;
         if existing.status != LectureNotesStatus::Failed {
-            return Err(AppError::BadRequest("只有失败的 Notes 任务才能重试".to_string()));
+            return Err(AppError::BadRequest(
+                "只有失败的 Notes 任务才能重试".to_string(),
+            ));
         }
         sqlx::query(
             "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
