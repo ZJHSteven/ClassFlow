@@ -541,9 +541,24 @@ mod tests {
     #[test]
     fn should_group_three_adjacent_smartclass_segments_into_one_lecture() {
         let tasks = vec![
-            demo_task("15:30", "16:15", TaskStatus::Succeeded, Some("第三节完整内容")),
-            demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("第一节完整内容")),
-            demo_task("14:25", "15:10", TaskStatus::Succeeded, Some("第二节完整内容")),
+            demo_task(
+                "15:30",
+                "16:15",
+                TaskStatus::Succeeded,
+                Some("第三节完整内容"),
+            ),
+            demo_task(
+                "13:30",
+                "14:15",
+                TaskStatus::Succeeded,
+                Some("第一节完整内容"),
+            ),
+            demo_task(
+                "14:25",
+                "15:10",
+                TaskStatus::Succeeded,
+                Some("第二节完整内容"),
+            ),
         ];
 
         let lectures = group_tasks_into_lectures(&tasks);
@@ -553,10 +568,18 @@ mod tests {
         assert_eq!(lectures[0].end_time, "16:15");
         assert!(lectures[0].transcript_ready());
 
-        let combined = lectures[0].combined_transcript().expect("三节都已完成，应可合并");
-        let first = combined.find("【第1节 13:30-14:15】").expect("应保留第一节边界");
-        let second = combined.find("【第2节 14:25-15:10】").expect("应保留第二节边界");
-        let third = combined.find("【第3节 15:30-16:15】").expect("应保留第三节边界");
+        let combined = lectures[0]
+            .combined_transcript()
+            .expect("三节都已完成，应可合并");
+        let first = combined
+            .find("【第1节 13:30-14:15】")
+            .expect("应保留第一节边界");
+        let second = combined
+            .find("【第2节 14:25-15:10】")
+            .expect("应保留第二节边界");
+        let third = combined
+            .find("【第3节 15:30-16:15】")
+            .expect("应保留第三节边界");
         assert!(first < second && second < third);
         assert!(combined.contains("第一节完整内容"));
         assert!(combined.contains("第二节完整内容"));
@@ -636,7 +659,9 @@ mod tests {
         ));
 
         let key_before = group_tasks_into_lectures(&first_two)[0].lecture_key.clone();
-        let key_after = group_tasks_into_lectures(&first_three)[0].lecture_key.clone();
+        let key_after = group_tasks_into_lectures(&first_three)[0]
+            .lecture_key
+            .clone();
         assert_eq!(key_before, key_after);
     }
 }
