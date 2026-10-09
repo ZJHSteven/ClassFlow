@@ -165,6 +165,8 @@ impl Repository {
                 notes_title TEXT,
                 notes_markdown TEXT,
                 notes_sha256 TEXT,
+                notes_final_ordinal INTEGER,
+                title_requested_at TEXT,
                 github_audio_path TEXT,
                 github_notes_path TEXT,
                 github_commit_sha TEXT,
@@ -205,6 +207,10 @@ impl Repository {
             .await?;
         self.ensure_optional_task_column("remote_capswriter_job_id_saved_at", "TEXT")
             .await?;
+        self.ensure_optional_lecture_notes_column("notes_final_ordinal", "INTEGER")
+            .await?;
+        self.ensure_optional_lecture_notes_column("title_requested_at", "TEXT")
+            .await?;
 
         Ok(())
     }
@@ -226,6 +232,29 @@ impl Repository {
 
         sqlx::query(&format!(
             "ALTER TABLE tasks ADD COLUMN {column_name} {column_definition}"
+        ))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn ensure_optional_lecture_notes_column(
+        &self,
+        column_name: &str,
+        column_definition: &str,
+    ) -> AppResult<()> {
+        let rows = sqlx::query("PRAGMA table_info(lecture_notes)")
+            .fetch_all(&self.pool)
+            .await?;
+        let exists = rows
+            .iter()
+            .any(|row| row.get::<String, _>("name") == column_name);
+        if exists {
+            return Ok(());
+        }
+
+        sqlx::query(&format!(
+            "ALTER TABLE lecture_notes ADD COLUMN {column_name} {column_definition}"
         ))
         .execute(&self.pool)
         .await?;
@@ -1167,17 +1196,41 @@ impl Repository {
         Ok(())
     }
 
+    pub async fn mark_lecture_notes_notes_ready(
+        &self,
+        lecture_key: &str,
+        markdown: &str,
+        notes_sha256: &str,
+        final_ordinal: i64,
+    ) -> AppResult<()> {
+        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=NULL, notes_markdown=?, notes_sha256=?, notes_final_ordinal=?, title_requested_at=NULL, last_error=NULL, updated_at=? WHERE lecture_key=?")
+            .bind(markdown)
+            .bind(notes_sha256)
+            .bind(final_ordinal)
+            .bind(Utc::now().to_rfc3339())
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_lecture_notes_title_requested(&self, lecture_key: &str) -> AppResult<()> {
+        sqlx::query("UPDATE lecture_notes SET title_requested_at=?, last_error=NULL, updated_at=? WHERE lecture_key=?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(Utc::now().to_rfc3339())
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn mark_lecture_notes_publishing(
         &self,
         lecture_key: &str,
         title: &str,
-        markdown: &str,
-        notes_sha256: &str,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='publishing', notes_title=?, notes_markdown=?, notes_sha256=?, last_error=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='publishing', notes_title=?, last_error=NULL, updated_at=? WHERE lecture_key=?")
             .bind(title)
-            .bind(markdown)
-            .bind(notes_sha256)
             .bind(Utc::now().to_rfc3339())
             .bind(lecture_key)
             .execute(&self.pool)
@@ -1216,7 +1269,13 @@ impl Repository {
             ));
         }
         sqlx::query(
-            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
+            if existing.notes_markdown.as_deref().is_some_and(|value| !value.trim().is_empty())
+                && existing.conversation_id.as_deref().is_some_and(|value| !value.trim().is_empty())
+            {
+                "UPDATE lecture_notes SET status='generating', notes_title=NULL, title_requested_at=NULL, last_error=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+            } else {
+                "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+            },
         )
         .bind(Utc::now().to_rfc3339())
         .bind(lecture_key)
@@ -1398,6 +1457,8 @@ fn map_lecture_notes_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<LectureNote
         notes_title: row.get("notes_title"),
         notes_markdown: row.get("notes_markdown"),
         notes_sha256: row.get("notes_sha256"),
+        notes_final_ordinal: row.try_get("notes_final_ordinal").ok(),
+        title_requested_at: row.try_get("title_requested_at").ok(),
         github_audio_path: row.get("github_audio_path"),
         github_notes_path: row.get("github_notes_path"),
         github_commit_sha: row.get("github_commit_sha"),

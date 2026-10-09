@@ -10,7 +10,9 @@
 6. **GitHub 发布**：N1 直接调用 GitHub API 写入 `ZJHSteven/med-notes-2026-fall-y3`，不在 N1 维护 git working tree。每堂 lecture 至少发布 `课程/Audio/<日期-时间>-ASR.md` 与 `课程/Notes/<序号>-<标题>.md`。Windows 桌面 `大三上笔记` 只作为普通 clone，用户手动 `git pull` 即可。
 7. **前端**：课程库每堂 lecture 显示 Notes 状态（等待提交/生成中/完成/失败），支持 Markdown 直接查看 ASR/Notes，同时保留下载按钮和失败后的手动 retry。
 8. **未来分享站**：直接以 GitHub 仓库或 ClassFlow API 为只读数据源渲染 Markdown，供朋友浏览实时更新的 ASR 与 Notes；不让分享站拥有 Archive/ChatGPT 控制权限。
-9. **聊天展示层剥离**：Archive final 若包含 ChatGPT `:::writing{...}` document block，ClassFlow 发布前只取 block 内 Markdown，并丢弃 block 前后的聊天说明；writing metadata 的 `title` 仅作为标题兜底。GitHub 中永远保存可直接渲染的纯 Markdown，不保存 ChatGPT UI wrapper。
+9. **聊天展示层剥离**：Archive final 若包含 ChatGPT `:::writing{...}` document block，ClassFlow 发布前只取 block 内 Markdown，并丢弃 block 前后的聊天说明。GitHub 中永远保存可直接渲染的纯 Markdown，不保存 ChatGPT UI wrapper。
+10. **严格复用“大二下”文件命名**：Audio 固定为 `月.日-课程-老师.md`；Notes 固定为课程目录内 `N-主题.md`。Notes 主题不得直接复用课程名、ChatGPT conversation title 或“理论课第三部分”等元信息。
+11. **标题独立二阶段**：Notes final 先落 checkpoint；随后通过 Archive Bridge 在同一 Project conversation 上 `mode=continue` 追加一个 title-only turn，只返回 12~32 字的具体主题。记录 `notes_final_ordinal` 与 `title_requested_at`，确保标题阶段断线/重启不会重新生成整堂 Notes；标题失败时人工 retry 只重试标题阶段。
 
 # 2026-10-09 Phase 3 MVP 收敛：优先复用云端“课堂录音→笔记”Project
 

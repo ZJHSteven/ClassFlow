@@ -331,6 +331,8 @@ pub struct LectureNotesRecord {
     pub notes_title: Option<String>,
     pub notes_markdown: Option<String>,
     pub notes_sha256: Option<String>,
+    pub notes_final_ordinal: Option<i64>,
+    pub title_requested_at: Option<String>,
     pub github_audio_path: Option<String>,
     pub github_notes_path: Option<String>,
     pub github_commit_sha: Option<String>,

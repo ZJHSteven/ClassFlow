@@ -27,6 +27,7 @@ use crate::{
 };
 
 const SHANGHAI_OFFSET_SECS: i32 = 8 * 3600;
+const TITLE_PROMPT: &str = "请只为你刚刚生成的整堂课堂笔记起一个简洁、具体、可区分的中文主题名。要求：1）概括整堂课最核心的知识主题；2）不要包含课程名、日期、老师姓名、‘课堂笔记’、‘理论课’、‘第几部分’等元信息；3）尽量控制在 12～32 个汉字，必要时可用顿号、‘与’连接多个并列主题；4）只输出标题本身，不要加序号、引号、解释、Markdown 标记或句号。";
 
 pub fn spawn_notes_worker(state: AppState) {
     if !state.config.notes_enabled {
@@ -260,6 +261,10 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     };
     let client = bridge_client(state)?;
     let base = state.config.archive_bridge_base_url.trim_end_matches('/');
+    if job.notes_markdown.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+        return process_title_stage(state, job, conversation_id, &client, base).await;
+    }
+
     let detail_url = format!("{base}/v1/conversations/{conversation_id}");
     let response = match apply_bridge_auth(client.get(detail_url), state)
         .send()
@@ -359,19 +364,164 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     if markdown.is_empty() {
         return Ok(());
     }
-    let conversation_title = detail
-        .pointer("/conversation/title")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let title_hint = normalized
-        .writing_title
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(conversation_title);
-    let title = derive_notes_title(markdown, title_hint, &job.course_name, &job.date);
+    let final_ordinal = final_message
+        .get("ordinal")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| AppError::Internal("Archive final 缺少 ordinal，无法安全进入标题阶段".to_string()))?;
     state
         .repo
-        .mark_lecture_notes_publishing(&job.lecture_key, &title, markdown, &sha256_text(markdown))
+        .mark_lecture_notes_notes_ready(
+            &job.lecture_key,
+            markdown,
+            &sha256_text(markdown),
+            final_ordinal,
+        )
+        .await?;
+    Ok(())
+}
+
+async fn process_title_stage(
+    state: &AppState,
+    job: &LectureNotesRecord,
+    conversation_id: &str,
+    client: &Client,
+    base: &str,
+) -> AppResult<()> {
+    let notes_final_ordinal = job.notes_final_ordinal.ok_or_else(|| {
+        AppError::Internal("标题阶段缺少 notes_final_ordinal".to_string())
+    })?;
+
+    if job.title_requested_at.is_none() {
+        let request = apply_bridge_auth(
+            client.post(format!("{base}/v1/turns")).json(&json!({
+                "mode": "continue",
+                "conversationId": conversation_id,
+                "text": TITLE_PROMPT,
+            })),
+            state,
+        );
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) if error.is_connect() => {
+                state
+                    .repo
+                    .update_lecture_notes_error(
+                        &job.lecture_key,
+                        &format!("标题请求等待 Archive 恢复: {error}"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+            Err(error) => {
+                state
+                    .repo
+                    .mark_lecture_notes_failed(
+                        &job.lecture_key,
+                        &format!("标题请求提交结果不确定，等待人工重试: {error}"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            state
+                .repo
+                .mark_lecture_notes_failed(
+                    &job.lecture_key,
+                    &format!("标题请求提交失败: HTTP {status} {}", truncate(&body, 200)),
+                )
+                .await?;
+            return Ok(());
+        }
+        let payload: Value = serde_json::from_str(&body)
+            .map_err(|error| AppError::Internal(format!("解析标题 submit 响应失败: {error}")))?;
+        let returned_cid = payload
+            .pointer("/result/conversationId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if returned_cid != conversation_id {
+            state
+                .repo
+                .mark_lecture_notes_failed(
+                    &job.lecture_key,
+                    "标题请求没有继续原 conversation，已停止自动处理",
+                )
+                .await?;
+            return Ok(());
+        }
+        state
+            .repo
+            .mark_lecture_notes_title_requested(&job.lecture_key)
+            .await?;
+        info!(
+            "Phase 3 Notes 标题请求已提交: lecture_key={}, conversation_id={}",
+            job.lecture_key, conversation_id
+        );
+        return Ok(());
+    }
+
+    let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
+    let response = match apply_bridge_auth(client.get(messages_url), state).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!("等待标题 final 时 Archive 暂不可达: {error}"),
+                )
+                .await?;
+            return Ok(());
+        }
+    };
+    if !response.status().is_success() {
+        return Ok(());
+    }
+    let payload: Value = response.json().await?;
+    let messages = payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let title_message = messages.iter().rev().find(|message| {
+        message.get("ordinal").and_then(Value::as_i64).unwrap_or_default() > notes_final_ordinal
+            && message.get("role").and_then(Value::as_str) == Some("assistant")
+            && message
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty())
+            && !message
+                .get("reasoningRedacted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && (message
+                .get("endTurn")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || message.get("finishType").and_then(Value::as_str).is_some()
+                || message.get("channel").and_then(Value::as_str) == Some("final"))
+    });
+    let Some(title_message) = title_message else {
+        return Ok(());
+    };
+    let title = normalize_title_response(
+        title_message
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    if title.is_empty() {
+        state
+            .repo
+            .mark_lecture_notes_failed(&job.lecture_key, "标题模型返回空标题")
+            .await?;
+        return Ok(());
+    }
+    state
+        .repo
+        .mark_lecture_notes_publishing(&job.lecture_key, &title)
         .await?;
     Ok(())
 }
@@ -460,12 +610,8 @@ async fn process_publishing(state: &AppState, job: &LectureNotesRecord) -> AppRe
     let asr = build_lecture_asr_markdown(&lecture)
         .ok_or_else(|| AppError::Internal("发布 Notes 时完整课堂 ASR 不可用".to_string()))?;
     let course_dir = sanitize_path_component(&job.course_name, "课程");
-    let time_part = format!(
-        "{}-{}",
-        job.start_time.replace(':', ""),
-        job.end_time.replace(':', "")
-    );
-    let audio_path = format!("{course_dir}/Audio/{}-{time_part}-ASR.md", job.date);
+    let audio_filename = build_legacy_audio_filename(&job.date, &job.course_name, &job.teacher_name);
+    let audio_path = format!("{course_dir}/Audio/{audio_filename}");
     let notes_path = format!(
         "{course_dir}/Notes/{}-{}.md",
         job.sequence_no,
@@ -507,6 +653,28 @@ async fn process_publishing(state: &AppState, job: &LectureNotesRecord) -> AppRe
             return Ok(());
         }
     };
+    for old_path in [job.github_audio_path.as_deref(), job.github_notes_path.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|old_path| *old_path != audio_path && *old_path != notes_path)
+    {
+        if let Err(error) = publisher
+            .delete_if_exists(
+                old_path,
+                &format!("notes: remove obsolete path for {}", job.lecture_key),
+            )
+            .await
+        {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!("GitHub 清理旧路径失败: {error}"),
+                )
+                .await?;
+            return Ok(());
+        }
+    }
     state
         .repo
         .mark_lecture_notes_succeeded(
@@ -639,6 +807,92 @@ impl GithubPublisher {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned))
     }
+
+    async fn delete_if_exists(&self, path: &str, message: &str) -> AppResult<()> {
+        let url = github_contents_url(&self.repo, path)?;
+        let get = self
+            .client
+            .get(url.clone())
+            .header(header::USER_AGENT, "ClassFlow/1.0")
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .bearer_auth(&self.token)
+            .send()
+            .await?;
+        if get.status() == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        if !get.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "GitHub 读取旧路径 {} 失败: HTTP {}",
+                path,
+                get.status()
+            )));
+        }
+        let sha = get
+            .json::<Value>()
+            .await?
+            .get("sha")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| AppError::Internal(format!("GitHub 旧路径 {} 缺少 sha", path)))?;
+        let response = self
+            .client
+            .delete(url)
+            .header(header::USER_AGENT, "ClassFlow/1.0")
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .bearer_auth(&self.token)
+            .json(&json!({
+                "message": message,
+                "sha": sha,
+                "branch": "main",
+            }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "GitHub 删除旧路径 {} 失败: HTTP {}",
+                path,
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn build_legacy_audio_filename(date: &str, course_name: &str, teacher_name: &str) -> String {
+    let month_day = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|date| format!("{}.{}", date.month(), date.day()))
+        .unwrap_or_else(|_| sanitize_path_component(date, "未知日期"));
+    format!(
+        "{}-{}-{}.md",
+        month_day,
+        sanitize_path_component(course_name, "未命名课程"),
+        sanitize_path_component(teacher_name, "未知老师")
+    )
+}
+
+fn normalize_title_response(raw: &str) -> String {
+    let first = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let mut title = first
+        .trim_start_matches('#')
+        .trim()
+        .trim_matches(|ch| matches!(ch, '“' | '”' | '‘' | '’' | '"' | '\'' | '`'))
+        .trim()
+        .trim_start_matches("标题：")
+        .trim_start_matches("标题:")
+        .trim()
+        .trim_end_matches(['。', '！', '!', '；', ';'])
+        .trim()
+        .to_string();
+    if title.to_ascii_lowercase().ends_with(".md") {
+        title.truncate(title.len().saturating_sub(3));
+        title = title.trim().to_string();
+    }
+    truncate(&title, 40)
 }
 
 fn github_contents_url(repo: &str, path: &str) -> AppResult<Url> {
@@ -769,6 +1023,22 @@ mod tests {
         let normalized = normalize_notes_markdown("\n# 标题\n\n正文\n");
         assert_eq!(normalized.writing_title, None);
         assert_eq!(normalized.markdown, "# 标题\n\n正文");
+    }
+
+    #[test]
+    fn audio_filename_should_follow_second_year_spring_convention() {
+        assert_eq!(
+            build_legacy_audio_filename("2026-10-08", "泌尿生殖系统", "王栋"),
+            "10.8-泌尿生殖系统-王栋.md"
+        );
+    }
+
+    #[test]
+    fn title_response_should_strip_chatty_wrappers() {
+        assert_eq!(
+            normalize_title_response("# “宫颈癌、子宫内膜异位症与子宫体肿瘤”。\n解释不应进入文件名"),
+            "宫颈癌、子宫内膜异位症与子宫体肿瘤"
+        );
     }
 
     #[test]
