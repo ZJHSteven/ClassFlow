@@ -126,6 +126,17 @@ const courseDetailPayload = {
   has_failed_segment: false,
   merged_markdown_path: 'course.md',
   manifest_path: 'manifest.json',
+  lectures: [
+    {
+      lecture_key: 'lecture-1',
+      start_time: '08:00',
+      end_time: '08:45',
+      segment_count: 1,
+      successful_segment_count: 1,
+      transcript_ready: true,
+      task_ids: ['task-1'],
+    },
+  ],
   segments: [],
   updated_at: '2026-03-22T00:00:00Z',
 }
@@ -176,6 +187,13 @@ function buildMockResponse(input: RequestInfo | URL): Response {
 
   if (requestUrl.includes('/api/v1/courses/') && requestUrl.includes('/artifacts/course.md')) {
     return new Response('# 课程总稿\n\n测试内容', { status: 200 })
+  }
+
+  if (requestUrl.includes('/api/v1/courses/') && requestUrl.includes('/lectures/') && requestUrl.endsWith('/artifacts/asr.md')) {
+    return new Response('# 完整课堂 ASR\n\n这是测试转写', {
+      status: 200,
+      headers: { 'Content-Length': '40' },
+    })
   }
 
   if (requestUrl.includes('/api/v1/courses/')) {

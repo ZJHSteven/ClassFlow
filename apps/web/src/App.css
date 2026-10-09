@@ -672,6 +672,59 @@
   color: #8f1626;
 }
 
+.artifactPill--pending {
+  cursor: default;
+  opacity: 0.62;
+  box-shadow: none;
+}
+
+.artifactPill--pending:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.lectureList {
+  display: grid;
+  gap: 8px;
+  max-height: 210px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.lectureList__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #26484d;
+  font-size: 0.9rem;
+}
+
+.lectureList__header span {
+  color: #718481;
+  font-size: 0.82rem;
+}
+
+.lectureCard {
+  display: grid;
+  gap: 8px;
+  padding: 10px 11px;
+  border-radius: 14px;
+  border: 1px solid rgba(17, 48, 56, 0.08);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.lectureCard__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.86rem;
+}
+
+.lectureCard__meta span {
+  color: #6e8280;
+}
+
 .transferCard {
   display: grid;
   gap: 8px;

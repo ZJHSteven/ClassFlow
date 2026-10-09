@@ -16,7 +16,7 @@
 
 import { AnimatePresence, motion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
-import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, listCourses } from '../api'
+import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, getLectureArtifactUrl, listCourses } from '../api'
 import { buildCourseMarkdownDownloadFilename } from '../courseDownloadFilename'
 import { downloadBlob, downloadWithProgress } from '../downloads'
 import { formatBytes, formatPercent, formatSpeed, normalizePercent } from '../progress'
@@ -364,6 +364,11 @@ export function CoursePanel() {
     }
   }
 
+  const buildLectureAsrFilename = (lecture: NonNullable<CourseDetail['lectures']>[number]) => {
+    const compactTime = (value: string) => value.replaceAll(':', '')
+    return `${selectedCourseDetail?.date ?? 'lecture'}-${selectedCourseDetail?.course_name ?? '课程'}-${compactTime(lecture.start_time)}-${compactTime(lecture.end_time)}-ASR.md`
+  }
+
   return (
     <section className="panel">
       <div className="panel__grid">
@@ -530,6 +535,60 @@ export function CoursePanel() {
                     ) : null}
                   </div>
                 ))}
+              </div>
+
+              <div className="lectureList">
+                <div className="lectureList__header">
+                  <strong>完整课堂</strong>
+                  <span>{selectedCourseDetail.lectures.length} 堂</span>
+                </div>
+                {selectedCourseDetail.lectures.length > 0 ? (
+                  selectedCourseDetail.lectures.map((lecture, index) => {
+                    const downloadKey = `lecture:${lecture.lecture_key}:asr.md`
+                    const action = {
+                      key: downloadKey,
+                      href: getLectureArtifactUrl(selectedCourseDetail.course_key, lecture.lecture_key, 'asr.md'),
+                      filename: buildLectureAsrFilename(lecture),
+                    }
+                    return (
+                      <div key={lecture.lecture_key} className="lectureCard">
+                        <div className="lectureCard__meta">
+                          <strong>第 {index + 1} 堂 · {lecture.start_time} - {lecture.end_time}</strong>
+                          <span>
+                            ASR 片段：{lecture.successful_segment_count} / {lecture.segment_count}
+                          </span>
+                        </div>
+                        <div className="detailActionGrid">
+                          <div className="downloadAction">
+                            <motion.button
+                              type="button"
+                              className={
+                                downloadStates[downloadKey]?.status === 'failed'
+                                  ? 'artifactPill artifactPill--error'
+                                  : 'artifactPill artifactPill--primary'
+                              }
+                              onClick={() => void handleCourseDownload(action)}
+                              disabled={!lecture.transcript_ready || downloadStates[downloadKey]?.status === 'downloading'}
+                              {...pressableProps}
+                            >
+                              {!lecture.transcript_ready
+                                ? 'ASR 尚未齐备'
+                                : downloadStates[downloadKey]?.status === 'downloading'
+                                  ? `下载 ASR · ${formatPercent(downloadStates[downloadKey]?.progressPercent)}`
+                                  : '下载 ASR'}
+                            </motion.button>
+                            {downloadStates[downloadKey]?.status === 'failed' ? (
+                              <div className="downloadAction__error">{downloadStates[downloadKey]?.errorMessage}</div>
+                            ) : null}
+                          </div>
+                          <span className="artifactPill artifactPill--pending">Notes 尚未生成</span>
+                        </div>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="detailNotice detailNotice--info">当前还没有可识别的完整课堂。</div>
+                )}
               </div>
 
               {previewMessage ? <div className="detailNotice detailNotice--warning detailNotice--scrollable">{previewMessage}</div> : null}

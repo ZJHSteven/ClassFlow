@@ -98,6 +98,17 @@ export interface CourseSummary {
   updated_at: string
 }
 
+export interface LectureSummary {
+  lecture_key: string
+  start_time: string
+  end_time: string
+  segment_count: number
+  successful_segment_count: number
+  transcript_ready: boolean
+  task_ids: string[]
+}
+
 export interface CourseDetail extends CourseSummary {
+  lectures: LectureSummary[]
   segments: TaskSummary[]
 }
