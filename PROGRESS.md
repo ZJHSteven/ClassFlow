@@ -5,6 +5,7 @@
 - 正式方案改为“正文与标题分两阶段”：Archive Notes final 清洗后先 checkpoint `notes_markdown / notes_sha256 / notes_final_ordinal`，再在原 Project conversation 上 `continue` 一次 title-only prompt，等待 ordinal 更大的第二个 assistant final 后才进入 publishing。数据库新增 `notes_final_ordinal / title_requested_at` 两个可迁移列；标题失败的人工 retry 若已有 Notes + CID，只回到标题阶段，不重发完整课堂。
 - GitHub 发布路径同步改为历史口径，并增加旧路径清理：新 Audio=`<课程>/Audio/月.日-课程-老师.md`，新 Notes=`<课程>/Notes/N-主题.md`；若 job 中已有旧错误路径，先写新文件，再通过 Contents API 删除旧路径，避免仓库留下双份。
 - 标题清洗单测额外覆盖了 `“主题”。` 这类常见模型输出；引号与句末标点现在作为同一组边界字符一次剥离，避免文件名残留尾部中文引号。
+- 生产重处理时发现 Notes worker 在 `notes_final_ordinal=29` 后迟迟没有提交 title-only turn；Archive 无 lease/live/actor-submit，说明请求压根未发。定位到新增 nullable checkpoint 映射使用了 `try_get(...).ok()`，可能把 SQL NULL 以非 Optional 类型解码后产生错误语义。现已统一改为 SQLx 原生 `row.get::<Option<T>>()`，确保 `title_requested_at=NULL` 必然映射为 `None`，从而正确进入标题提交分支。
 - 已确认当前课程库 web 仅实现 `LectureArtifactName='asr.md'`，`Notes 尚未生成` 只是静态占位；Notes API/status/Markdown 预览/下载/手动 retry 仍需本轮接入。
 - 2026-10-09 14:xx Phase 3 产品边界再次收敛：Notes 生成单位不是 SmartClass 单个 45min segment，而是同日/同课程/同老师、课间不超过 30min 的连续 segment 簇；最多 4 段，实时场景在最后一段结束 +30min 后关闭。整簇 ASR 一次性发送到既有 ChatGPT Project `课堂录音→笔记`，一簇一个全新 conversation，不做发送前摘要或逐块笔记化。
 - Phase 3 MVP 决定优先机械复刻历史云端工作流，而非等待本地 prompt benchmark：Windows Notes Worker 将使用 `chatgpt-archive actor send --mode new --project "课堂录音→笔记" --wait-final`，manifest 持久化 lecture_key / task+hash / CID / final message+hash / title / Notes artifact，保证异常恢复不重复发课。课程库后续按 lecture 提供 `下载 ASR` + `下载 Notes` 双入口；Notes 命名为课程内 `N-具体主题.md`，优先复用 ChatGPT conversation title，过泛时再由便宜 title-only model 生成文件名。
