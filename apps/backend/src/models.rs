@@ -254,7 +254,22 @@ pub struct CourseDetailResponse {
     pub has_failed_segment: bool,
     pub merged_markdown_path: Option<String>,
     pub manifest_path: Option<String>,
+    pub lectures: Vec<LectureSummaryResponse>,
     pub segments: Vec<TaskSummaryResponse>,
+}
+
+/// 一堂完整课堂在课程库中的稳定摘要。
+///
+/// Phase 3 Notes 以 lecture 为单位，而不是以 SmartClass 单个 45 分钟 segment 为单位。
+#[derive(Debug, Clone, Serialize)]
+pub struct LectureSummaryResponse {
+    pub lecture_key: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub segment_count: usize,
+    pub successful_segment_count: usize,
+    pub transcript_ready: bool,
+    pub task_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

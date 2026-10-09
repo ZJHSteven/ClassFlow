@@ -26,6 +26,7 @@ use std::{convert::Infallible, time::Duration};
 
 use crate::{
     app::AppState,
+    course::build_lecture_asr_markdown,
     error::{AppError, AppResult},
     models::{CourseListQuery, IntakeBatchRequest, TaskListQuery, TaskStatus},
     smartclass_session::SmartClassLoginRequest,
@@ -48,6 +49,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/courses/{course_key}/artifacts/{artifact_name}",
             get(get_course_artifact),
+        )
+        .route(
+            "/courses/{course_key}/lectures/{lecture_key}/artifacts/{artifact_name}",
+            get(get_lecture_artifact),
         )
         .route("/intake/batches", post(create_batch))
         .route("/smartclass/auth", get(get_smartclass_auth))
@@ -370,6 +375,31 @@ async fn get_course_artifact(
         [(axum::http::header::CONTENT_TYPE, stored.content_type)],
         stored.bytes,
     ))
+}
+
+async fn get_lecture_artifact(
+    State(state): State<AppState>,
+    Path((course_key, lecture_key, artifact_name)): Path<(String, String, String)>,
+) -> AppResult<impl IntoResponse> {
+    let lecture = state
+        .repo
+        .get_lecture_group(&course_key, &lecture_key)
+        .await?;
+
+    match artifact_name.as_str() {
+        "asr.md" => {
+            let markdown = build_lecture_asr_markdown(&lecture).ok_or_else(|| {
+                AppError::NotFound("完整课堂 ASR 尚未齐备，不能导出".to_string())
+            })?;
+            Ok((
+                [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+                markdown.into_bytes(),
+            ))
+        }
+        _ => Err(AppError::BadRequest(
+            "lecture artifact_name 目前仅支持 asr.md".to_string(),
+        )),
+    }
 }
 
 async fn auth_middleware(

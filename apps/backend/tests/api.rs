@@ -504,6 +504,60 @@ async fn intake_should_create_task_and_artifacts() {
     })
     .await;
 
+    let course_detail_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/courses/{course_key}"))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("课程详情请求应成功");
+    assert_eq!(course_detail_response.status(), StatusCode::OK);
+    let course_detail: Value = serde_json::from_slice(
+        &course_detail_response
+            .into_body()
+            .collect()
+            .await
+            .expect("课程详情响应体应可读取")
+            .to_bytes(),
+    )
+    .expect("课程详情应是合法 JSON");
+    assert_eq!(course_detail["lectures"].as_array().map(Vec::len), Some(1));
+    assert_eq!(course_detail["lectures"][0]["segment_count"], 1);
+    assert_eq!(course_detail["lectures"][0]["transcript_ready"], true);
+    let lecture_key = course_detail["lectures"][0]["lecture_key"]
+        .as_str()
+        .expect("课程详情应返回 lecture_key")
+        .to_string();
+
+    let lecture_asr_response = build_app(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/courses/{course_key}/lectures/{lecture_key}/artifacts/asr.md"
+                ))
+                .header("Authorization", "Bearer test-token")
+                .body(Body::empty())
+                .expect("请求应构造成功"),
+        )
+        .await
+        .expect("完整课堂 ASR 请求应成功");
+    assert_eq!(lecture_asr_response.status(), StatusCode::OK);
+    let lecture_asr = String::from_utf8(
+        lecture_asr_response
+            .into_body()
+            .collect()
+            .await
+            .expect("完整课堂 ASR 响应体应可读取")
+            .to_bytes()
+            .to_vec(),
+    )
+    .expect("完整课堂 ASR 应是 UTF-8");
+    assert!(lecture_asr.contains("# 完整课堂 ASR"));
+    assert!(lecture_asr.contains("这是测试转写"));
+
     let artifact_response = build_app(state)
         .oneshot(
             Request::builder()

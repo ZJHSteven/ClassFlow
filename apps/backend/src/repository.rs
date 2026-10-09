@@ -17,7 +17,10 @@ use sqlx::{
 use uuid::Uuid;
 
 use crate::{
-    course::{build_course_key, build_segment_key, sort_tasks_for_course},
+    course::{
+        LectureGroup, build_course_key, build_segment_key, group_tasks_into_lectures,
+        sort_tasks_for_course, summarize_lecture,
+    },
     error::{AppError, AppResult},
     models::{
         CourseDetailResponse, CourseListQuery, CourseSummaryResponse, IntakeBatchRequest,
@@ -942,6 +945,7 @@ impl Repository {
         }
 
         let summary = summarize_course(&tasks)?;
+        let lectures = group_tasks_into_lectures(&tasks);
         Ok(CourseDetailResponse {
             course_key: summary.course_key,
             semester: summary.semester,
@@ -953,8 +957,24 @@ impl Repository {
             has_failed_segment: summary.has_failed_segment,
             merged_markdown_path: summary.merged_markdown_path,
             manifest_path: summary.manifest_path,
+            lectures: lectures.iter().map(summarize_lecture).collect(),
             segments: tasks.iter().map(Into::into).collect(),
         })
+    }
+
+    pub async fn get_lecture_group(
+        &self,
+        course_key: &str,
+        lecture_key: &str,
+    ) -> AppResult<LectureGroup> {
+        let tasks = self.list_tasks_by_course_key(course_key).await?;
+        if tasks.is_empty() {
+            return Err(AppError::NotFound(format!("课程不存在: {course_key}")));
+        }
+        group_tasks_into_lectures(&tasks)
+            .into_iter()
+            .find(|lecture| lecture.lecture_key == lecture_key)
+            .ok_or_else(|| AppError::NotFound(format!("完整课堂不存在: {lecture_key}")))
     }
 }
 

@@ -11,7 +11,9 @@
 use chrono::{NaiveTime, Timelike, Utc};
 use serde_json::json;
 
-use crate::models::{CourseSummaryResponse, NormalizedTranscript, TaskRecord, TaskStatus};
+use crate::models::{
+    CourseSummaryResponse, LectureSummaryResponse, NormalizedTranscript, TaskRecord, TaskStatus,
+};
 
 /// 两个 SmartClass 录像片段之间允许被视为同一堂完整课的最大课间。
 ///
@@ -80,6 +82,50 @@ impl LectureGroup {
                 .join("\n\n"),
         )
     }
+}
+
+pub fn summarize_lecture(lecture: &LectureGroup) -> LectureSummaryResponse {
+    LectureSummaryResponse {
+        lecture_key: lecture.lecture_key.clone(),
+        start_time: lecture.start_time.clone(),
+        end_time: lecture.end_time.clone(),
+        segment_count: lecture.segment_count(),
+        successful_segment_count: lecture
+            .tasks
+            .iter()
+            .filter(|task| task.status == TaskStatus::Succeeded)
+            .count(),
+        transcript_ready: lecture.transcript_ready(),
+        task_ids: lecture.tasks.iter().map(|task| task.id.clone()).collect(),
+    }
+}
+
+/// 用户下载/人工检查用的完整 lecture ASR。
+///
+/// Notes route 使用 `combined_transcript()` 的轻量正文；课程库下载则额外保留元数据，方便离线
+/// 文件脱离 ClassFlow 后仍知道它来自哪堂课和哪些录像片段。
+pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
+    let combined = lecture.combined_transcript()?;
+    Some(format!(
+        "# 完整课堂 ASR\n\n\
+        - 学期：{}\n\
+        - 课程：{}\n\
+        - 老师：{}\n\
+        - 日期：{}\n\
+        - 时间：{} - {}\n\
+        - 录像片段数：{}\n\
+        - Lecture Key：{}\n\n\
+        ## 转写正文\n\n{}\n",
+        lecture.semester,
+        lecture.course_name,
+        lecture.teacher_name,
+        lecture.date,
+        lecture.start_time,
+        lecture.end_time,
+        lecture.segment_count(),
+        lecture.lecture_key,
+        combined,
+    ))
 }
 
 pub fn build_course_key(
@@ -663,5 +709,20 @@ mod tests {
             .lecture_key
             .clone();
         assert_eq!(key_before, key_after);
+    }
+
+    #[test]
+    fn should_render_human_downloadable_lecture_asr_markdown() {
+        let tasks = vec![
+            demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("第一节正文")),
+            demo_task("14:25", "15:10", TaskStatus::Succeeded, Some("第二节正文")),
+        ];
+        let lecture = &group_tasks_into_lectures(&tasks)[0];
+        let markdown = build_lecture_asr_markdown(lecture).expect("完整 lecture 应可导出 ASR");
+        assert!(markdown.contains("# 完整课堂 ASR"));
+        assert!(markdown.contains("时间：13:30 - 15:10"));
+        assert!(markdown.contains("录像片段数：2"));
+        assert!(markdown.contains("【第1节 13:30-14:15】"));
+        assert!(markdown.contains("第二节正文"));
     }
 }
