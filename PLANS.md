@@ -1,3 +1,99 @@
+# 2026-10-09 Phase 3 MVP 收敛：优先复用云端“课堂录音→笔记”Project
+
+本阶段不再等待 LectureNoteBench 的本地 prompt 优化收敛。历史云端 ChatGPT Project `课堂录音→笔记` 已经长期产出过用户满意的 Notes，因此 Phase 3 MVP 先把**旧的人工工作流机械自动化**：完整 lecture ASR -> Project 新 conversation -> canonical final -> Notes artifact。LectureNoteBench 保持独立，用于以后替换/精简 prompt，而不是阻塞生产。
+
+## 1. Lecture 边界：多个 45min SmartClass segment 先聚成“一节完整课”
+
+SmartClass 一条录像仍是约 45 分钟 segment；Notes 的生成单元不能等同于 segment。确定性聚类规则：
+
+1. 必须同一天、同一 `course_name`、同一 `teacher_name`；
+2. 按 `start_time` 排序；相邻 segment 的 `next.start - previous.end <= 30min` 时归入同一 lecture；
+3. 课程名/老师变化，或间隔 >30min，立即关闭上一 lecture；
+4. 一簇最多 4 个 segment，异常数据不得无限合并；
+5. 实时新课只有在 `now >= last.end + 30min` 后才进入 `ready_for_notes`，避免课间时提前把前两节发出去；历史/backfill 数据可直接按完整时间轴聚类；
+6. 一个 lecture 的源身份由 `semester + date + course + teacher + first_start + last_end + ordered task ids` 计算稳定 `lecture_key`，manifest 记录全部源 task/hash。
+
+例如 2026-10-08 泌尿生殖系统 13:30/14:25/15:30 三个 45min segment 应合成**一个 lecture**，只创建一个 ChatGPT conversation。
+
+## 2. 发给 Project 的输入：完整 lecture，一次性发送
+
+按 segment 时间顺序连接完整 `transcript_text`，只加非常轻的机器边界标记：
+
+```text
+【第1节 13:30-14:15】
+<完整 ASR>
+
+【第2节 14:25-15:10】
+<完整 ASR>
+```
+
+这些边界只帮助模型理解课间/录像切分，不要求逐块输出。**禁止在发送前摘要、切块总结或重排。** Project 自己既有的项目提示词继续负责把整堂课变成正常人类笔记。
+
+## 3. Windows Notes Worker / Actor adapter
+
+首个 route 固定为本机 `chatgpt-archive`：
+
+```text
+chatgpt-archive actor send \
+  --mode new \
+  --project "课堂录音→笔记" \
+  --prompt-file <lecture-transcript> \
+  --wait-final
+```
+
+一节 lecture = 一个全新 Project conversation。Archive Phase 4 主链负责正式 POST/CID/LiveTurn/WSS/body sync；`--wait-final` 只等待本地 SQLite canonical final，不增加 ChatGPT HTTP polling。
+
+Notes Worker 必须持久化 checkpoint，至少包括：
+
+- `lecture_key`
+- ordered task IDs + transcript content hashes
+- `route = chatgpt_project`
+- `project = 课堂录音→笔记`
+- actor conversation ID
+- actor final message ID / final hash
+- submit/completed timestamps
+- note title / artifact path
+- status + last_error
+
+只要已有 canonical final，就绝不能重新发同一 lecture；网络/Archive 重启后从 CID/final checkpoint 恢复。
+
+## 4. Notes 标题和文件名
+
+课程目录最终保持两类主要文本：
+
+```text
+<课程>/
+  Audio/
+    <既有日期/课次命名>.md
+  Notes/
+    1-<本节主题>.md
+    2-<本节主题>.md
+    ...
+```
+
+Audio/ASR 现有命名不因 Phase 3 改动。Notes 使用课程内稳定序号 + **具体但不过长**的 lecture topic，例如 `1-肾小球疾病与肾功能损伤.md`，不能连续多节都只叫“病理”。
+
+标题来源优先级：
+
+1. Project conversation 自动生成 title 若已经足够具体，可直接复用；
+2. 若 title 过于泛化（如“课堂笔记整理”“泌尿生殖系统”），再调用一个便宜 title-only route（未来可用 DSV4 等）读取最终 Notes，输出短标题；
+3. title 生成只影响文件名/检索，不得改写 Notes 正文。
+
+## 5. ClassFlow 课程库 UI / artifact API
+
+课程库详情从“日课程总稿”进一步展示 `lectures[]`。每个完整 lecture 至少显示：时间范围、包含 segment 数、Notes 状态、标题，并提供：
+
+- `下载 ASR`：完整 lecture 合并转写；
+- `下载 Notes`：Project final 生成的 Markdown；
+- Notes 尚未完成时显示 `等待生成 / 生成中 / 重试等待 / 失败`，不能返回假 404；
+- manifest 仍可作为诊断下载，但不和用户主要按钮混在一起。
+
+这样课程库就是 Phase 3 的事实源：同一个 lecture 同时拥有 source ASR 与 human-readable Notes，后续 Stage 2+ 再从 Notes 做大纲权重、知识树、Anki 等处理。
+
+## 6. 当前唯一外部阻塞
+
+Archive 代码层已新增 `--project` 与 `--wait-final` 并通过 targeted tests/typecheck；但 2026-10-09 14:08 真机 smoke 被 Windows 当前 `chatgpt.com` 网络路径阻断：Chrome 新导航 `net::ERR_CONNECTION_CLOSED`，Guardian 为 `chrome-error://chromewebdata/`，因此尚未产生一条 Project test conversation。ClassFlow 可先完成 lecture grouping / manifest / artifact/UI 骨架；Actor 真机恢复后再打开实际 Notes worker 自动消费。
+
 # 2026-10-09 Phase 2.5 / Phase 3 交接计划
 
 ## Phase 2.5：把 SmartClass“保活”与“查课”彻底拆开
