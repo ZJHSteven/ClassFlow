@@ -19,7 +19,7 @@ use http_body_util::StreamBody;
 use reqwest::{Body, Client, RequestBuilder, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::{fs, time::sleep};
+use tokio::{fs, sync::Semaphore, time::sleep};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -65,6 +65,13 @@ struct CapsWriterResult {
 pub struct RemoteCapsWriterAsrProvider {
     config: Arc<AppConfig>,
     client: Client,
+    /// 只限制“把 M4A 推到 Windows Gateway”这一小段，不限制后续 job 轮询。
+    ///
+    /// Gateway 本身只有一个 ASR worker，但可以同时保存多个 queued job；因此最合理的
+    /// 并发边界是：上传按 `upload_concurrency` 控制（生产为 1），上传拿到 job id 后立即
+    /// 释放 permit，第二个任务可以继续上传并排到 Gateway 队列里，而不必等第一个 45 分钟
+    /// 课程整段转写结束。
+    upload_semaphore: Arc<Semaphore>,
 }
 
 impl RemoteCapsWriterAsrProvider {
@@ -73,7 +80,11 @@ impl RemoteCapsWriterAsrProvider {
             .connect_timeout(Duration::from_secs(15))
             .build()
             .unwrap_or_else(|_| Client::new());
-        Self { config, client }
+        Self {
+            upload_semaphore: Arc::new(Semaphore::new(config.upload_concurrency.max(1))),
+            config,
+            client,
+        }
     }
 
     fn base_url(&self) -> &str {
@@ -112,6 +123,9 @@ impl RemoteCapsWriterAsrProvider {
     }
 
     async fn submit_audio(&self, input: &AsrInput, idempotency_key: &str) -> AppResult<String> {
+        let _upload_permit = self.upload_semaphore.acquire().await.map_err(|error| {
+            AppError::Internal(format!("远端 CapsWriter 上传并发锁已关闭: {error}"))
+        })?;
         let metadata = fs::metadata(&input.audio_path).await.map_err(|error| {
             AppError::Io(format!(
                 "读取远端 CapsWriter 输入文件元数据失败: path={}, error={error}",
@@ -144,7 +158,43 @@ impl RemoteCapsWriterAsrProvider {
                     input.audio_path.display()
                 ))
             })?;
-            let stream = ReaderStream::new(file).map_ok(Frame::data);
+            // reqwest 会边读 ReaderStream 边发送请求体。这里在“文件被 HTTP client 消费”时
+            // 统计进度，并每 ~250ms 向 worker 报一次快照。它反映的是 N1 发出请求体的进度，
+            // 不是 Cloudflare/Gateway 已经返回 202 的进度；因此到 100% 后仍可能短暂停留在
+            // `uploading_audio`，这正好能让前端看出“文件已发完，正在等远端确认”。
+            let total_bytes = metadata.len();
+            let progress_input = input.clone();
+            let started_at = Instant::now();
+            let mut transferred_bytes = 0_u64;
+            let mut last_report_at = Instant::now();
+            let stream = ReaderStream::new(file).map_ok(move |chunk| {
+                transferred_bytes = transferred_bytes.saturating_add(chunk.len() as u64);
+                let now = Instant::now();
+                if transferred_bytes >= total_bytes
+                    || now.duration_since(last_report_at) >= Duration::from_millis(250)
+                {
+                    let elapsed_secs = started_at.elapsed().as_secs_f64().max(0.001);
+                    let rate_bytes_per_sec =
+                        (transferred_bytes as f64 / elapsed_secs).round() as u64;
+                    let eta_seconds = if rate_bytes_per_sec > 0 && transferred_bytes < total_bytes {
+                        Some(
+                            total_bytes
+                                .saturating_sub(transferred_bytes)
+                                .div_ceil(rate_bytes_per_sec),
+                        )
+                    } else {
+                        Some(0)
+                    };
+                    progress_input.report(AsrProgressEvent::UploadProgress {
+                        transferred_bytes,
+                        total_bytes,
+                        rate_bytes_per_sec,
+                        eta_seconds,
+                    });
+                    last_report_at = now;
+                }
+                Frame::data(chunk)
+            });
             let body = Body::wrap(StreamBody::new(stream));
             let request = self
                 .client

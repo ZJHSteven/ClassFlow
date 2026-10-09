@@ -495,6 +495,32 @@ async fn handle_remote_asr_progress(
                 )
                 .await?;
         }
+        AsrProgressEvent::UploadProgress {
+            transferred_bytes,
+            total_bytes,
+            rate_bytes_per_sec,
+            eta_seconds,
+        } => {
+            let progress_percent = if total_bytes > 0 {
+                Some((transferred_bytes as f64 / total_bytes as f64 * 100.0).min(100.0))
+            } else {
+                None
+            };
+            state
+                .repo
+                .update_task_transfer_progress(
+                    task_id,
+                    TaskStage::UploadingAudio,
+                    TaskTransferUpdate {
+                        progress_percent,
+                        transferred_bytes: Some(transferred_bytes),
+                        total_bytes: Some(total_bytes),
+                        rate_bytes_per_sec: Some(rate_bytes_per_sec),
+                        eta_seconds,
+                    },
+                )
+                .await?;
+        }
         AsrProgressEvent::Submitted { job_id } => {
             state
                 .repo

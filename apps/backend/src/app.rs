@@ -96,6 +96,13 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
         info!("启动时已清理过期临时目录数量: {}", removed);
     }
 
+    // 上一次进程被停止时，SQLite 里可能仍有 status=running 和最后一帧下载速度。
+    // 先把这些“瞬时运行态”归一化成 queued，再统一重新入队，避免 UI 显示僵尸速度。
+    let normalized_running = state.repo.normalize_interrupted_running_tasks().await?;
+    if normalized_running > 0 {
+        info!("启动恢复时已归一化中断任务数量: {}", normalized_running);
+    }
+
     let recoverable_task_ids = state.repo.list_recoverable_task_ids().await?;
     for task_id in recoverable_task_ids {
         if let Err(error) = state.queue.enqueue(task_id.clone()) {

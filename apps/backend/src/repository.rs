@@ -348,6 +348,27 @@ impl Repository {
             .collect())
     }
 
+    /// 后端启动前把“上一次进程突然停止时残留的 running”归一化为 queued。
+    ///
+    /// systemd stop、主机重启或进程崩溃都不会有机会把数据库里的 running 清掉；如果直接
+    /// 重新入队，前端会在 worker 真正拿到任务前一直显示昨晚最后一次下载速度，甚至出现
+    /// “4 个 running、实际只有 2 个 worker”的假象。恢复前统一清掉瞬时传输指标即可；
+    /// M4A / source.mp4 / remote job id 等真正 durable checkpoint 完全不动，worker 仍会按
+    /// 文件与 checkpoint 自动跳过已经完成的昂贵阶段。
+    pub async fn normalize_interrupted_running_tasks(&self) -> AppResult<u64> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "UPDATE tasks SET status = ?, stage = ?, updated_at = ?, progress_percent = NULL, transferred_bytes = NULL, total_bytes = NULL, rate_bytes_per_sec = NULL, eta_seconds = NULL WHERE status = ?",
+        )
+        .bind(TaskStatus::Pending.as_str())
+        .bind(TaskStage::Queued.as_str())
+        .bind(&now)
+        .bind(TaskStatus::Running.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn get_task(&self, task_id: &str) -> AppResult<TaskRecord> {
         let row = sqlx::query(&format!(
             "SELECT {TASK_SELECT_COLUMNS} FROM tasks WHERE id = ?"

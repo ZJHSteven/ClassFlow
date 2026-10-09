@@ -49,6 +49,17 @@ pub struct AsrInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AsrProgressEvent {
     Uploading,
+    /// 远端文件上传的实时进度。
+    ///
+    /// 这里故意复用和下载阶段相同的四个指标，worker 可以直接写入 tasks 现有的
+    /// `transferred_bytes / total_bytes / rate_bytes_per_sec / eta_seconds` 字段，
+    /// 不需要为了“上传进度条”再扩一套数据库 schema。
+    UploadProgress {
+        transferred_bytes: u64,
+        total_bytes: u64,
+        rate_bytes_per_sec: u64,
+        eta_seconds: Option<u64>,
+    },
     Submitted { job_id: String },
     Queued { job_id: String },
     Running { job_id: String },

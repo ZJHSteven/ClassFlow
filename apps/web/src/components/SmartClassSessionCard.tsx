@@ -29,8 +29,10 @@ export function SmartClassSessionCard() {
   const [isLoadingCaptcha, setIsLoadingCaptcha] = useState(false)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
 
-  const refreshStatus = useCallback(async () => {
-    setIsRefreshing(true)
+  const refreshStatus = useCallback(async (showSpinner = true) => {
+    if (showSpinner) {
+      setIsRefreshing(true)
+    }
     try {
       const nextStatus = await getSmartClassAuthStatus()
       setStatus(nextStatus)
@@ -43,12 +45,33 @@ export function SmartClassSessionCard() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'SmartClass 会话状态读取失败')
     } finally {
-      setIsRefreshing(false)
+      if (showSpinner) {
+        setIsRefreshing(false)
+      }
     }
   }, [])
 
   useEffect(() => {
     void refreshStatus()
+    // Session 可以在页面保持打开期间过期。此前这里只在 mount 时检查一次，因此 backend
+    // Collector 已经报“未授权”后，页面仍可能长时间显示“自动采集可用”。30 秒轻量轮询
+    // 再配合窗口重新聚焦时刷新，可以及时把真实状态反馈给用户；这不是刷新课程列表，
+    // 只调用一次 heartbeat/auth 状态接口。
+    const intervalId = window.setInterval(() => {
+      void refreshStatus(false)
+    }, 30_000)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshStatus(false)
+      }
+    }
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.clearInterval(intervalId)
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
   }, [refreshStatus])
 
   const refreshCaptcha = async () => {
