@@ -53,25 +53,13 @@ export function SmartClassSessionCard() {
 
   useEffect(() => {
     void refreshStatus()
-    // Session 可以在页面保持打开期间过期。此前这里只在 mount 时检查一次，因此 backend
-    // Collector 已经报“未授权”后，页面仍可能长时间显示“自动采集可用”。30 秒轻量轮询
-    // 再配合窗口重新聚焦时刷新，可以及时把真实状态反馈给用户；这不是刷新课程列表，
-    // 只调用一次 heartbeat/auth 状态接口。
-    const intervalId = window.setInterval(() => {
-      void refreshStatus(false)
-    }, 30_000)
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void refreshStatus(false)
-      }
-    }
-    window.addEventListener('focus', refreshWhenVisible)
-    document.addEventListener('visibilitychange', refreshWhenVisible)
-    return () => {
-      window.clearInterval(intervalId)
-      window.removeEventListener('focus', refreshWhenVisible)
-      document.removeEventListener('visibilitychange', refreshWhenVisible)
-    }
+    // 这里刻意不做任何 interval / focus 自动刷新。
+    //
+    // ClassFlow 前端本身部署在 Worker 后面，如果页面常驻时每 30 秒主动 GET 一次
+    // `/smartclass/auth`，会无意义增加 Worker 请求数，也会把“状态同步”重新退化成轮询。
+    // 当前只在页面首次加载时检查一次；之后由用户显式点击“刷新状态”或登录完成后检查。
+    // 后续如果要做到状态实时推送，应复用现有任务 SSE 连接携带 SmartClass 状态事件，
+    // 而不是再新增 HTTP polling 或第二条定时请求链。
   }, [refreshStatus])
 
   const refreshCaptcha = async () => {

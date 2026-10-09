@@ -232,8 +232,19 @@ impl SmartClassSessionManager {
             };
         }
 
-        match self.heartbeat().await {
-            Ok(()) => SmartClassAuthStatus {
+        // 不能只用 CourseList.aspx 当登录探针。
+        //
+        // 线上已经确认：某些失效 Session 访问 CourseList 仍会返回 HTTP 200 的页面壳，
+        // 但真正的 GetMyVideoList API 会返回业务 `{status:302, localtion:'/login.aspx?...'}`。
+        // Collector 正是因为调用真实 API 才能正确识别“未授权”，而旧 auth_status 仅看
+        // heartbeat，导致前端一直显示“自动采集可用”。
+        //
+        // 因此 auth_status 现在直接做一个最小真实 API 探针：当天、第一页、page_size=1。
+        // 这和 Collector 使用完全相同的鉴权路径，却只返回极小响应；前端也只会在首次加载
+        // 或用户手动刷新时调用，不会形成 HTTP 轮询。
+        let today = chrono::Local::now().date_naive().to_string();
+        match self.fetch_video_page(&today, &today, 1, 1).await {
+            Ok(_) => SmartClassAuthStatus {
                 authenticated: true,
                 session_present: true,
                 transport: "direct_http",
