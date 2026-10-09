@@ -1,3 +1,56 @@
+# 2026-10-09 Phase 2.5 / Phase 3 交接计划
+
+## Phase 2.5：把 SmartClass“保活”与“查课”彻底拆开
+
+当前 600 秒 Collector 是第一版保守实现：每轮 `GetMyVideoList` 既查课，也顺便触碰 Session。生产实测已经拿到更明确的协议事实：访问 `CourseList.aspx` 时，SmartClass 会重新下发 `OnlineUser`，其 `expires` 为“当前时间 + 10 分钟”，说明至少这一层是 10 分钟滑动 Cookie。现有 `platform_token` 5 分钟 TTL、`csrkKey` 30 分钟 TTL 都只是客户端/接口 token 生命周期，不能等同于登录 Session 的绝对寿命。
+
+下一版目标：
+
+1. **独立 heartbeat**：不再靠 `GetMyVideoList` 保活；使用轻量 `CourseList.aspx` heartbeat，在滑动 Cookie 到期前留安全余量（目标 7~8 分钟，而不是正好 600 秒踩边界）。
+2. **课表驱动发现**：`GetMyVideoList` 按当天课表的下课时刻触发；没有课程的日期可以 0 次查列表。
+3. **延迟容忍**：下课后若录播尚未生成，按少量离散重试窗口再次查询，而不是全天固定轮询。
+4. **恢复兜底**：backend 启动、人工重新登录、Unauthorized 恢复后仍做一次完整 backfill；这条可靠性债务机制保留。
+5. **绝对 TTL 观测**：当前只能确认 `OnlineUser` 的 10 分钟滑动窗口，`PowerCreatorCMSAuthenticationID` / 服务端是否另有绝对 Session TTL 尚未知；通过长期 heartbeat 运行记录实际最长连续登录时间，不先拍脑袋假定“无限保活”。
+
+本项不阻塞 Phase 3；当前 600 秒 Collector 已能稳定工作，先作为生产兜底，后续再收敛为事件驱动调度。
+
+## Phase 3：ASR Transcript -> 高保真课堂 Notes
+
+Phase 3 不重新从零设计提示词，直接复用既有 `D:\Workspace\LectureNoteBench-pilot` 实验成果，并把“实验验证”和“生产管道”分层推进。
+
+### 已有实验基线
+
+- 历史 ChatGPT Project“录音转课堂笔记”工作流定义了 Stage 1 的真实需求：不是摘要，而是**按老师授课顺序做纠错、去口水、结构化，同时保留教学逻辑、举例、考试提醒和异常信息**。
+- 旧 P0 长 prompt 是历史参考，不再默认视为最优方案。
+- P1~P4 证明仅靠自然语言强调“严格保序”仍会被模型教材化重组。
+- P4-A2 把 transcript 机械切成 `[S001]...` 顺序锚点；输出正文引用来源锚点且只能单调向前，再由程序自动验证并去锚点。
+- 当前血液课 development case 上，A2 去锚点成品与 P0 做 Sol medium A/B 交换位置盲评，两次均选择 A2（confidence 0.94 / 0.91）；自动锚点校验通过。
+- 该结果仍只是单 case / 单 route / 单 judge family，不能直接宣布 A2 为最终生产 prompt。
+
+### Phase 3A：先搭生产管道骨架，不锁定生成模型
+
+1. 增量读取 ClassFlow `succeeded/done` transcript/artifact。
+2. 以稳定课程/日期/课次命名写入目标课程仓库的 `Audio/`，保留原始 Stage 0 transcript。
+3. 建立 manifest，记录 ClassFlow task/artifact ID、内容 hash、目标路径、Notes 生成版本，实现完全幂等；重复运行不得重复发模型或覆盖已确认结果。
+4. Notes 生成器抽象为 route adapter；ChatGPT Web/Project（可通过 `chatgpt-archive actor` 自动化）、Codex/Pi/DSH/Raw API 都只是 route，不把某一条网页路径写死到文件同步层。
+5. Notes 成功且校验通过后写 `Notes/`，再做 Git add/commit；push 独立配置，失败不得影响本地 artifact/manifest 状态。
+
+### Phase 3B：完成 LectureNoteBench Pilot 2 作为生产 gate
+
+在三类不同课堂形态上只跑 P0 vs A2，避免继续围着血液课过拟合：
+
+1. 叙事/历史型课堂；
+2. 行政说明 + 正课混合型课堂；
+3. 高专业术语 / 中英混杂医学课堂。
+
+每个 A2 输出必须先通过锚点单调性/越界校验，再做 source-grounded 盲评。只有 A2 在跨课堂形态上多数优于或至少不劣于 P0，才把它固化为 ClassFlow Stage 1 默认生成规范。
+
+### Phase 3C：正式 Stage 1 pipeline
+
+`ClassFlow transcript -> anchor_transcript -> LLM route -> validate_anchored_note -> strip anchors -> Notes -> manifest -> Git`
+
+Stage 1 只负责“可追溯的课堂语义重建”；教学大纲权重、知识树、Anki、题目生成等继续属于后续 Stage 2+，不得提前混入 Notes 生成。
+
 # ExecPlan
 
 ## 2026-10-07 N1 正式迁移 + Windows 远端 ASR + 自动笔记三阶段总计划
