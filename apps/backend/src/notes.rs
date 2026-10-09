@@ -754,7 +754,10 @@ mod tests {
 
 如果需要，我还可以再压缩。"#;
         let normalized = normalize_notes_markdown(raw);
-        assert_eq!(normalized.writing_title.as_deref(), Some("泌尿生殖系统疾病"));
+        assert_eq!(
+            normalized.writing_title.as_deref(),
+            Some("泌尿生殖系统疾病")
+        );
         assert_eq!(
             normalized.markdown,
             "# 泌尿生殖系统疾病\n\n## 第一部分\n\n正文内容。"
