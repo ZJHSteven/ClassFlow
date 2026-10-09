@@ -12,9 +12,7 @@ use std::{str::FromStr, time::Duration};
 use chrono::{DateTime, Utc};
 use sqlx::{
     Column, Row, SqlitePool,
-    sqlite::{
-        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-    },
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 use uuid::Uuid;
 
