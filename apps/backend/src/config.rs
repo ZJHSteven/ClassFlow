@@ -439,6 +439,7 @@ impl AppConfig {
                 &[
                     "CLASSFLOW_ARCHIVE_BRIDGE_ACCESS_CLIENT_ID",
                     "CF_ACCESS_CLIENT_ID",
+                    "CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_ID",
                 ],
                 "",
             ),
@@ -446,6 +447,7 @@ impl AppConfig {
                 &[
                     "CLASSFLOW_ARCHIVE_BRIDGE_ACCESS_CLIENT_SECRET",
                     "CF_ACCESS_CLIENT_SECRET",
+                    "CLASSFLOW_ARTIFACT_PROXY_ACCESS_CLIENT_SECRET",
                 ],
                 "",
             ),
