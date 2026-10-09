@@ -1,3 +1,5 @@
+- 2026-10-09 13:33 SmartClass 人工重新登录后生产 `/api/v1/smartclass/auth` 已恢复 `authenticated=true`，Collector 随即成功完成一次 21 天扫描：`total_count=28`，28 条标准录播全部已存在，无新增、无重复。进一步协议观测显示，访问 `CourseList.aspx` 会重新下发 `OnlineUser` Cookie，`expires` 精确为请求时间约 +10 分钟，证明至少该 Cookie 采用 10 分钟滑动过期；现有 600 秒 Collector 恰好踩在边界，不应作为长期“保活+查课”耦合方案。已在 `PLANS.md` 规划 Phase 2.5：用 7~8 分钟轻量 heartbeat 独立保活，`GetMyVideoList` 改为按课表/下课事件触发，启动/重新登录/Unauthorized 后保留 backfill 兜底；服务端绝对 Session TTL 继续长期观测。
+- 2026-10-09 已通过 `chatgpt-archive` 找回旧《设计科学实验》《课堂笔记测试规划》《恢复实验进展》会话，并确认 `D:\Workspace\LectureNoteBench-pilot` 当前分支 `pilot/codex-v1`、工作树 clean。旧实验已做到 P4-A2 顺序锚点：血液课 case 中 28 处来源引用从 S001 单调推进到 S012，自动校验通过；去锚点成品 vs 历史 P0 经 Sol medium A/B 交换位置盲评两次均稳定胜出（confidence 0.94 / 0.91）。当前实验计划已切到 Pilot 2 跨课堂形态泛化，因此 ClassFlow Phase 3 将复用该成果：一边先搭 transcript/Audio/manifest/Git 幂等骨架，一边完成叙事型、行政+正课混合型、高术语中英混杂医学型三类 P0 vs A2 gate；通过后再固化 `anchor_transcript -> LLM -> validate -> strip anchors -> Notes` 为正式 Stage 1。
 # 项目状态快照
 
 ## 当前结论（必须最新）
