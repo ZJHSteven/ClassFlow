@@ -11,7 +11,7 @@
 import type { CourseDetail, CourseSummary, TaskDetail, TaskSummary } from './types'
 
 export type CourseArtifactName = 'course.md' | 'manifest.json'
-export type LectureArtifactName = 'asr.md'
+export type LectureArtifactName = 'asr.md' | 'notes.md'
 export type TaskArtifactName = 'segment.md' | 'segment.json' | 'events.json' | 'task.json'
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -226,6 +226,21 @@ export function getLectureArtifactUrl(
   artifactName: LectureArtifactName,
 ): string {
   return `/api/v1/courses/${encodeURIComponent(courseKey)}/lectures/${encodeURIComponent(lectureKey)}/artifacts/${artifactName}`
+}
+
+export function getLectureMarkdown(
+  courseKey: string,
+  lectureKey: string,
+  artifactName: LectureArtifactName,
+): Promise<string> {
+  return readText(getLectureArtifactUrl(courseKey, lectureKey, artifactName))
+}
+
+export async function retryLectureNotes(courseKey: string, lectureKey: string): Promise<void> {
+  await readJson(
+    `/api/v1/courses/${encodeURIComponent(courseKey)}/lectures/${encodeURIComponent(lectureKey)}/notes/retry`,
+    { method: 'POST' },
+  )
 }
 
 export function getTaskArtifactUrl(taskId: string, artifactName: TaskArtifactName): string {

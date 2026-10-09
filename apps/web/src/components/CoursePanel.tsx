@@ -16,7 +16,15 @@
 
 import { AnimatePresence, motion } from 'motion/react'
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
-import { getCourseArtifactUrl, getCourseDetail, getCourseMarkdown, getLectureArtifactUrl, listCourses } from '../api'
+import {
+  getCourseArtifactUrl,
+  getCourseDetail,
+  getCourseMarkdown,
+  getLectureArtifactUrl,
+  getLectureMarkdown,
+  listCourses,
+  retryLectureNotes,
+} from '../api'
 import { buildCourseMarkdownDownloadFilename } from '../courseDownloadFilename'
 import { downloadBlob, downloadWithProgress } from '../downloads'
 import { formatBytes, formatPercent, formatSpeed, normalizePercent } from '../progress'
@@ -54,6 +62,7 @@ export function CoursePanel() {
   const [selectedCourseKey, setSelectedCourseKey] = useState<string>('')
   const [selectedCourseDetail, setSelectedCourseDetail] = useState<CourseDetail | null>(null)
   const [markdownPreview, setMarkdownPreview] = useState<string>('')
+  const [previewTitle, setPreviewTitle] = useState<string>('课程总稿预览')
   const [previewMessage, setPreviewMessage] = useState<string>('')
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false)
   const [semesterFilter, setSemesterFilter] = useState<string>('')
@@ -132,6 +141,7 @@ export function CoursePanel() {
       startTransition(() => {
         setSelectedCourseDetail(detail)
         setMarkdownPreview(nextMarkdownPreview)
+        setPreviewTitle('课程总稿预览')
         setPreviewMessage(nextPreviewMessage)
         setIsPreviewLoading(false)
       })
@@ -140,6 +150,7 @@ export function CoursePanel() {
         startTransition(() => {
           setSelectedCourseDetail(null)
           setMarkdownPreview('')
+          setPreviewTitle('课程总稿预览')
           setPreviewMessage(error instanceof Error ? error.message : '课程详情加载失败')
           setIsPreviewLoading(false)
         })
@@ -192,6 +203,7 @@ export function CoursePanel() {
           startTransition(() => {
             setSelectedCourseDetail(null)
             setMarkdownPreview('')
+            setPreviewTitle('课程总稿预览')
             setPreviewMessage('')
             setIsPreviewLoading(false)
           })
@@ -241,6 +253,7 @@ export function CoursePanel() {
     if (!selectedCourseKey) {
       setSelectedCourseDetail(null)
       setMarkdownPreview('')
+      setPreviewTitle('课程总稿预览')
       setPreviewMessage('')
       setIsPreviewLoading(false)
       return
@@ -367,6 +380,48 @@ export function CoursePanel() {
   const buildLectureAsrFilename = (lecture: NonNullable<CourseDetail['lectures']>[number]) => {
     const compactTime = (value: string) => value.replace(/:/g, '')
     return `${selectedCourseDetail?.date ?? 'lecture'}-${selectedCourseDetail?.course_name ?? '课程'}-${compactTime(lecture.start_time)}-${compactTime(lecture.end_time)}-ASR.md`
+  }
+
+  const buildLectureNotesFilename = (lecture: NonNullable<CourseDetail['lectures']>[number], index: number) => {
+    const title = lecture.notes_title || `${selectedCourseDetail?.course_name ?? '课程'}-课堂笔记`
+    return `${index + 1}-${title}.md`
+  }
+
+  const previewLectureArtifact = async (
+    lecture: NonNullable<CourseDetail['lectures']>[number],
+    artifactName: 'asr.md' | 'notes.md',
+    index: number,
+  ) => {
+    if (!selectedCourseDetail) return
+    setIsPreviewLoading(true)
+    setPreviewMessage('')
+    try {
+      const markdown = await getLectureMarkdown(
+        selectedCourseDetail.course_key,
+        lecture.lecture_key,
+        artifactName,
+      )
+      setMarkdownPreview(markdown)
+      setPreviewTitle(
+        artifactName === 'asr.md'
+          ? `第 ${index + 1} 堂 · 完整 ASR`
+          : `第 ${index + 1} 堂 · ${lecture.notes_title || '课堂 Notes'}`,
+      )
+    } catch (error) {
+      setPreviewMessage(error instanceof Error ? error.message : '课堂 Markdown 加载失败')
+    } finally {
+      setIsPreviewLoading(false)
+    }
+  }
+
+  const handleNotesRetry = async (lecture: NonNullable<CourseDetail['lectures']>[number]) => {
+    if (!selectedCourseDetail) return
+    try {
+      await retryLectureNotes(selectedCourseDetail.course_key, lecture.lecture_key)
+      await loadCourseDetail(selectedCourseDetail.course_key)
+    } catch (error) {
+      setPreviewMessage(error instanceof Error ? error.message : 'Notes 任务提交失败')
+    }
   }
 
   return (
@@ -545,6 +600,7 @@ export function CoursePanel() {
                 {selectedCourseDetail.lectures.length > 0 ? (
                   selectedCourseDetail.lectures.map((lecture, index) => {
                     const downloadKey = `lecture:${lecture.lecture_key}:asr.md`
+                    const notesDownloadKey = `lecture:${lecture.lecture_key}:notes.md`
                     const action = {
                       key: downloadKey,
                       href: getLectureArtifactUrl(selectedCourseDetail.course_key, lecture.lecture_key, 'asr.md'),
@@ -581,8 +637,75 @@ export function CoursePanel() {
                               <div className="downloadAction__error">{downloadStates[downloadKey]?.errorMessage}</div>
                             ) : null}
                           </div>
-                          <span className="artifactPill artifactPill--pending">Notes 尚未生成</span>
+                          <motion.button
+                            type="button"
+                            className="artifactPill"
+                            disabled={!lecture.transcript_ready}
+                            onClick={() => void previewLectureArtifact(lecture, 'asr.md', index)}
+                            {...pressableProps}
+                          >
+                            查看 ASR
+                          </motion.button>
+                          {lecture.notes_ready ? (
+                            <>
+                              <motion.button
+                                type="button"
+                                className="artifactPill artifactPill--primary"
+                                onClick={() => void previewLectureArtifact(lecture, 'notes.md', index)}
+                                {...pressableProps}
+                              >
+                                查看 Notes
+                              </motion.button>
+                              <motion.button
+                                type="button"
+                                className="artifactPill"
+                                onClick={() => void handleCourseDownload({
+                                  key: notesDownloadKey,
+                                  href: getLectureArtifactUrl(selectedCourseDetail.course_key, lecture.lecture_key, 'notes.md'),
+                                  filename: buildLectureNotesFilename(lecture, index),
+                                })}
+                                disabled={downloadStates[notesDownloadKey]?.status === 'downloading'}
+                                {...pressableProps}
+                              >
+                                {downloadStates[notesDownloadKey]?.status === 'downloading'
+                                  ? `下载 Notes · ${formatPercent(downloadStates[notesDownloadKey]?.progressPercent)}`
+                                  : '下载 Notes'}
+                              </motion.button>
+                            </>
+                          ) : lecture.notes_status === 'failed' ? (
+                            <motion.button
+                              type="button"
+                              className="artifactPill artifactPill--error"
+                              onClick={() => void handleNotesRetry(lecture)}
+                              {...pressableProps}
+                            >
+                              重试 Notes
+                            </motion.button>
+                          ) : lecture.notes_status === 'not_started' ? (
+                            <motion.button
+                              type="button"
+                              className="artifactPill artifactPill--pending"
+                              disabled={!lecture.transcript_ready}
+                              onClick={() => void handleNotesRetry(lecture)}
+                              {...pressableProps}
+                            >
+                              {lecture.transcript_ready ? '生成 Notes' : '等待 ASR'}
+                            </motion.button>
+                          ) : (
+                            <span className="artifactPill artifactPill--pending">
+                              {lecture.notes_status === 'pending'
+                                ? 'Notes 等待提交'
+                                : lecture.notes_status === 'generating'
+                                  ? 'Notes 生成中'
+                                  : lecture.notes_status === 'publishing'
+                                    ? 'Notes 同步 GitHub'
+                                    : 'Notes 处理中'}
+                            </span>
+                          )}
                         </div>
+                        {lecture.notes_last_error ? (
+                          <div className="downloadAction__error">{lecture.notes_last_error}</div>
+                        ) : null}
                       </div>
                     )
                   })
@@ -595,7 +718,7 @@ export function CoursePanel() {
 
               <div className="previewShell">
                 <div className="previewShell__header">
-                  <strong>课程总稿预览</strong>
+                  <strong>{previewTitle}</strong>
                   <span>{isPreviewLoading ? '正在读取...' : markdownPreview ? '已加载' : '暂无总稿'}</span>
                 </div>
 
@@ -610,7 +733,7 @@ export function CoursePanel() {
                   >
                     {isPreviewLoading
                       ? '正在读取课程总稿...'
-                      : markdownPreview || '当前没有可预览的课程总稿。单节原始备份和事件日志请到任务台下载。'}
+                      : markdownPreview || '当前没有可预览的 Markdown。'}
                   </motion.pre>
                 </AnimatePresence>
               </div>

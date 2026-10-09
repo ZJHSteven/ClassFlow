@@ -105,6 +105,11 @@ export interface LectureSummary {
   segment_count: number
   successful_segment_count: number
   transcript_ready: boolean
+  notes_status: 'not_started' | 'pending' | 'generating' | 'publishing' | 'succeeded' | 'failed' | string
+  notes_title: string | null
+  notes_ready: boolean
+  notes_last_error: string | null
+  notes_github_path: string | null
   task_ids: string[]
 }
 
