@@ -11,6 +11,7 @@ aws-credential-types = "1.2.9"
 aws-sdk-s3 = "1.112.0"
 axum = { version = "0.8.6", features = ["macros"] }
 bytes = "1.10.1"
+base64 = "0.22.1"
 cbc = "0.1.2"
 chrono = { version = "0.4.42", features = ["serde"] }
 futures-util = "0.3.31"

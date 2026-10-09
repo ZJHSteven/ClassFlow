@@ -1147,6 +1147,16 @@ impl Repository {
         Ok(())
     }
 
+    pub async fn update_lecture_notes_error(&self, lecture_key: &str, error: &str) -> AppResult<()> {
+        sqlx::query("UPDATE lecture_notes SET last_error=?, updated_at=? WHERE lecture_key=?")
+            .bind(error)
+            .bind(Utc::now().to_rfc3339())
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn mark_lecture_notes_publishing(
         &self,
         lecture_key: &str,
