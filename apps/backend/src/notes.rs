@@ -261,7 +261,11 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     };
     let client = bridge_client(state)?;
     let base = state.config.archive_bridge_base_url.trim_end_matches('/');
-    if job.notes_markdown.as_deref().is_some_and(|value| !value.trim().is_empty()) {
+    if job
+        .notes_markdown
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
         return process_title_stage(state, job, conversation_id, &client, base).await;
     }
 
@@ -367,7 +371,9 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     let final_ordinal = final_message
         .get("ordinal")
         .and_then(Value::as_i64)
-        .ok_or_else(|| AppError::Internal("Archive final 缺少 ordinal，无法安全进入标题阶段".to_string()))?;
+        .ok_or_else(|| {
+            AppError::Internal("Archive final 缺少 ordinal，无法安全进入标题阶段".to_string())
+        })?;
     state
         .repo
         .mark_lecture_notes_notes_ready(
@@ -387,9 +393,9 @@ async fn process_title_stage(
     client: &Client,
     base: &str,
 ) -> AppResult<()> {
-    let notes_final_ordinal = job.notes_final_ordinal.ok_or_else(|| {
-        AppError::Internal("标题阶段缺少 notes_final_ordinal".to_string())
-    })?;
+    let notes_final_ordinal = job
+        .notes_final_ordinal
+        .ok_or_else(|| AppError::Internal("标题阶段缺少 notes_final_ordinal".to_string()))?;
 
     if job.title_requested_at.is_none() {
         let request = apply_bridge_auth(
@@ -463,7 +469,10 @@ async fn process_title_stage(
     }
 
     let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
-    let response = match apply_bridge_auth(client.get(messages_url), state).send().await {
+    let response = match apply_bridge_auth(client.get(messages_url), state)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             state
@@ -486,7 +495,11 @@ async fn process_title_stage(
         .cloned()
         .unwrap_or_default();
     let title_message = messages.iter().rev().find(|message| {
-        message.get("ordinal").and_then(Value::as_i64).unwrap_or_default() > notes_final_ordinal
+        message
+            .get("ordinal")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            > notes_final_ordinal
             && message.get("role").and_then(Value::as_str) == Some("assistant")
             && message
                 .get("text")
@@ -610,7 +623,8 @@ async fn process_publishing(state: &AppState, job: &LectureNotesRecord) -> AppRe
     let asr = build_lecture_asr_markdown(&lecture)
         .ok_or_else(|| AppError::Internal("发布 Notes 时完整课堂 ASR 不可用".to_string()))?;
     let course_dir = sanitize_path_component(&job.course_name, "课程");
-    let audio_filename = build_legacy_audio_filename(&job.date, &job.course_name, &job.teacher_name);
+    let audio_filename =
+        build_legacy_audio_filename(&job.date, &job.course_name, &job.teacher_name);
     let audio_path = format!("{course_dir}/Audio/{audio_filename}");
     let notes_path = format!(
         "{course_dir}/Notes/{}-{}.md",
@@ -653,10 +667,13 @@ async fn process_publishing(state: &AppState, job: &LectureNotesRecord) -> AppRe
             return Ok(());
         }
     };
-    for old_path in [job.github_audio_path.as_deref(), job.github_notes_path.as_deref()]
-        .into_iter()
-        .flatten()
-        .filter(|old_path| *old_path != audio_path && *old_path != notes_path)
+    for old_path in [
+        job.github_audio_path.as_deref(),
+        job.github_notes_path.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|old_path| *old_path != audio_path && *old_path != notes_path)
     {
         if let Err(error) = publisher
             .delete_if_exists(
@@ -1036,7 +1053,9 @@ mod tests {
     #[test]
     fn title_response_should_strip_chatty_wrappers() {
         assert_eq!(
-            normalize_title_response("# “宫颈癌、子宫内膜异位症与子宫体肿瘤”。\n解释不应进入文件名"),
+            normalize_title_response(
+                "# “宫颈癌、子宫内膜异位症与子宫体肿瘤”。\n解释不应进入文件名"
+            ),
             "宫颈癌、子宫内膜异位症与子宫体肿瘤"
         );
     }
