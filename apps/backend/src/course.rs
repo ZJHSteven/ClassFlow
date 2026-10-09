@@ -13,6 +13,75 @@ use serde_json::json;
 
 use crate::models::{CourseSummaryResponse, NormalizedTranscript, TaskRecord, TaskStatus};
 
+/// 两个 SmartClass 录像片段之间允许被视为同一堂完整课的最大课间。
+///
+/// 天津医科大学当前常见节次间隔是 10~20 分钟；30 分钟留出足够余量，又不会把下午
+/// 同一门课的另一场独立教学误并进来。
+pub const LECTURE_MAX_GAP_MINUTES: i64 = 30;
+
+/// 一堂完整课最多允许合并的 45 分钟录像数。
+///
+/// 这是异常数据保护，不是正常排课假设。用户当前实际课程通常 2~3 节，极端不超过 4 节。
+pub const LECTURE_MAX_SEGMENTS: usize = 4;
+
+/// Phase 3 的最小生成单元：一堂“完整 lecture”，而不是单个 45 分钟录像。
+#[derive(Debug, Clone)]
+pub struct LectureGroup {
+    pub lecture_key: String,
+    pub semester: String,
+    pub course_key: String,
+    pub course_name: String,
+    pub teacher_name: String,
+    pub date: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub tasks: Vec<TaskRecord>,
+}
+
+impl LectureGroup {
+    pub fn segment_count(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// 只有所有源片段都成功且拥有非空 ASR 时，才允许送进 Notes route。
+    pub fn transcript_ready(&self) -> bool {
+        !self.tasks.is_empty()
+            && self.tasks.iter().all(|task| {
+                task.status == TaskStatus::Succeeded
+                    && task
+                        .transcript_text
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty())
+            })
+    }
+
+    /// 生成发送给 ChatGPT Project 的**完整课堂转写**。
+    ///
+    /// 边界只表达录像/课间切分，绝不在这里做摘要、逐块笔记化或知识重排。
+    pub fn combined_transcript(&self) -> Option<String> {
+        if !self.transcript_ready() {
+            return None;
+        }
+
+        Some(
+            self.tasks
+                .iter()
+                .enumerate()
+                .map(|(index, task)| {
+                    format!(
+                        "【第{}节 {}-{}】\n{}",
+                        index + 1,
+                        task.start_time,
+                        task.end_time,
+                        task.transcript_text.as_deref().unwrap_or_default().trim()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        )
+    }
+}
+
 pub fn build_course_key(
     semester: &str,
     date: &str,
@@ -76,6 +145,107 @@ pub fn build_segment_key(
     hasher.update(b"::");
     hasher.update(mp4_url.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn parse_segment_time(value: &str) -> Option<NaiveTime> {
+    let normalized = normalize_segment_time(value);
+    for pattern in ["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"] {
+        if let Ok(time) = NaiveTime::parse_from_str(&normalized, pattern) {
+            return Some(time);
+        }
+    }
+    None
+}
+
+fn same_lecture_identity(left: &TaskRecord, right: &TaskRecord) -> bool {
+    left.course_key == right.course_key
+        && left.semester == right.semester
+        && left.date == right.date
+        && left.course_name == right.course_name
+        && left.teacher_name == right.teacher_name
+}
+
+fn can_append_to_lecture(current: &[TaskRecord], next: &TaskRecord) -> bool {
+    let Some(previous) = current.last() else {
+        return true;
+    };
+    if current.len() >= LECTURE_MAX_SEGMENTS || !same_lecture_identity(previous, next) {
+        return false;
+    }
+
+    let (Some(previous_end), Some(next_start)) = (
+        parse_segment_time(&previous.end_time),
+        parse_segment_time(&next.start_time),
+    ) else {
+        // 无法解释的旧时间数据必须保守拆开，不能为了“多合并”而把两堂课混在一起。
+        return false;
+    };
+
+    let gap_minutes = next_start.signed_duration_since(previous_end).num_minutes();
+    // 录像时间有极小重叠时仍属于同一堂课；跨日课程不会进入同一 identity。
+    gap_minutes <= LECTURE_MAX_GAP_MINUTES
+}
+
+fn build_lecture_group(mut tasks: Vec<TaskRecord>) -> LectureGroup {
+    sort_tasks_for_course(&mut tasks);
+    let first = tasks.first().expect("lecture 至少需要一个片段");
+    let last = tasks.last().expect("lecture 至少需要一个片段");
+
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(first.course_key.as_bytes());
+    hasher.update(b"::lecture::");
+    // lecture 只在课间窗口关闭后才进入 Notes 队列，因此以后追加正常后续 segment 不应发生；
+    // 以第一片段身份作为稳定根，避免“后面多一节”导致已有 Notes key 整体改名。
+    hasher.update(first.segment_key.as_bytes());
+    hasher.update(b"::");
+    hasher.update(normalize_segment_time(&first.start_time).as_bytes());
+    let lecture_key = format!("{:x}", hasher.finalize());
+
+    LectureGroup {
+        lecture_key,
+        semester: first.semester.clone(),
+        course_key: first.course_key.clone(),
+        course_name: first.course_name.clone(),
+        teacher_name: first.teacher_name.clone(),
+        date: first.date.clone(),
+        start_time: first.start_time.clone(),
+        end_time: last.end_time.clone(),
+        tasks,
+    }
+}
+
+/// 把 SmartClass 的 45 分钟录像按真实“完整一节课”聚类。
+///
+/// 调用方可以直接给任意顺序、甚至混合课程的任务；函数会先按日期/课程/老师/开始时间排序，
+/// 再按 identity + 30 分钟课间 + 最多 4 段规则切分。这样 repository/API/Notes worker 以后都
+/// 复用同一个定义，避免各自发明一套“什么算一堂课”。
+pub fn group_tasks_into_lectures(tasks: &[TaskRecord]) -> Vec<LectureGroup> {
+    let mut ordered = tasks.to_vec();
+    ordered.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then_with(|| left.course_name.cmp(&right.course_name))
+            .then_with(|| left.teacher_name.cmp(&right.teacher_name))
+            .then_with(|| left.start_time.cmp(&right.start_time))
+            .then_with(|| left.new_id.cmp(&right.new_id))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut groups = Vec::new();
+    let mut current = Vec::new();
+
+    for task in ordered {
+        if !current.is_empty() && !can_append_to_lecture(&current, &task) {
+            groups.push(build_lecture_group(std::mem::take(&mut current)));
+        }
+        current.push(task);
+    }
+
+    if !current.is_empty() {
+        groups.push(build_lecture_group(current));
+    }
+    groups
 }
 
 pub fn sanitize_path_part(value: &str) -> String {
@@ -366,5 +536,107 @@ mod tests {
         assert!(markdown.contains("已收片段数：2"));
         assert!(markdown.contains("本稿由 2 个片段合并生成"));
         assert!(markdown.contains("## 08:00 - 08:45"));
+    }
+
+    #[test]
+    fn should_group_three_adjacent_smartclass_segments_into_one_lecture() {
+        let tasks = vec![
+            demo_task("15:30", "16:15", TaskStatus::Succeeded, Some("第三节完整内容")),
+            demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("第一节完整内容")),
+            demo_task("14:25", "15:10", TaskStatus::Succeeded, Some("第二节完整内容")),
+        ];
+
+        let lectures = group_tasks_into_lectures(&tasks);
+        assert_eq!(lectures.len(), 1);
+        assert_eq!(lectures[0].segment_count(), 3);
+        assert_eq!(lectures[0].start_time, "13:30");
+        assert_eq!(lectures[0].end_time, "16:15");
+        assert!(lectures[0].transcript_ready());
+
+        let combined = lectures[0].combined_transcript().expect("三节都已完成，应可合并");
+        let first = combined.find("【第1节 13:30-14:15】").expect("应保留第一节边界");
+        let second = combined.find("【第2节 14:25-15:10】").expect("应保留第二节边界");
+        let third = combined.find("【第3节 15:30-16:15】").expect("应保留第三节边界");
+        assert!(first < second && second < third);
+        assert!(combined.contains("第一节完整内容"));
+        assert!(combined.contains("第二节完整内容"));
+        assert!(combined.contains("第三节完整内容"));
+    }
+
+    #[test]
+    fn should_split_same_course_when_gap_exceeds_thirty_minutes() {
+        let tasks = vec![
+            demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("下午第一场")),
+            demo_task("17:00", "17:45", TaskStatus::Succeeded, Some("晚上另一场")),
+        ];
+
+        let lectures = group_tasks_into_lectures(&tasks);
+        assert_eq!(lectures.len(), 2);
+        assert_eq!(lectures[0].segment_count(), 1);
+        assert_eq!(lectures[1].segment_count(), 1);
+    }
+
+    #[test]
+    fn should_split_after_four_segments_even_when_schedule_is_contiguous() {
+        let tasks = vec![
+            demo_task("08:00", "08:45", TaskStatus::Succeeded, Some("1")),
+            demo_task("08:55", "09:40", TaskStatus::Succeeded, Some("2")),
+            demo_task("09:50", "10:35", TaskStatus::Succeeded, Some("3")),
+            demo_task("10:45", "11:30", TaskStatus::Succeeded, Some("4")),
+            demo_task("11:40", "12:25", TaskStatus::Succeeded, Some("5")),
+        ];
+
+        let lectures = group_tasks_into_lectures(&tasks);
+        assert_eq!(lectures.len(), 2);
+        assert_eq!(lectures[0].segment_count(), 4);
+        assert_eq!(lectures[1].segment_count(), 1);
+    }
+
+    #[test]
+    fn should_split_when_course_identity_changes() {
+        let first = demo_task("08:00", "08:45", TaskStatus::Succeeded, Some("病理"));
+        let mut second = demo_task("08:55", "09:40", TaskStatus::Succeeded, Some("统计"));
+        second.course_name = "医学统计学".into();
+        second.course_key = build_course_key(
+            &second.semester,
+            &second.date,
+            &second.course_name,
+            &second.teacher_name,
+        );
+
+        let lectures = group_tasks_into_lectures(&[first, second]);
+        assert_eq!(lectures.len(), 2);
+    }
+
+    #[test]
+    fn incomplete_segment_should_block_combined_transcript() {
+        let tasks = vec![
+            demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("已有 ASR")),
+            demo_task("14:25", "15:10", TaskStatus::Running, None),
+        ];
+
+        let lectures = group_tasks_into_lectures(&tasks);
+        assert_eq!(lectures.len(), 1);
+        assert!(!lectures[0].transcript_ready());
+        assert!(lectures[0].combined_transcript().is_none());
+    }
+
+    #[test]
+    fn lecture_key_should_stay_stable_when_later_segment_is_appended() {
+        let first_two = vec![
+            demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("1")),
+            demo_task("14:25", "15:10", TaskStatus::Succeeded, Some("2")),
+        ];
+        let mut first_three = first_two.clone();
+        first_three.push(demo_task(
+            "15:30",
+            "16:15",
+            TaskStatus::Succeeded,
+            Some("3"),
+        ));
+
+        let key_before = group_tasks_into_lectures(&first_two)[0].lecture_key.clone();
+        let key_after = group_tasks_into_lectures(&first_three)[0].lecture_key.clone();
+        assert_eq!(key_before, key_after);
     }
 }
