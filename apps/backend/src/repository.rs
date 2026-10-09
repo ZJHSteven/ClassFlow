@@ -7,8 +7,15 @@ SQLite 持久层。
 2. 测试里会频繁创建临时数据库，运行时 SQL 更灵活。
 */
 
+use std::{str::FromStr, time::Duration};
+
 use chrono::{DateTime, Utc};
-use sqlx::{Column, Row, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{
+    Column, Row, SqlitePool,
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+    },
+};
 use uuid::Uuid;
 
 use crate::{
@@ -57,9 +64,20 @@ remote_capswriter_job_id, remote_capswriter_job_id_saved_at
 
 impl Repository {
     pub async fn connect(db_url: &str) -> AppResult<Self> {
+        // ClassFlow 会同时有下载进度、ASR 进度、SSE/页面读取和 Collector 写入。
+        // SQLite 仍然非常适合这种单机任务队列，但默认 DELETE journal 下多个连接争写时，
+        // 很容易在两个 worker 同时结束下载/切阶段时把短暂锁竞争暴露为 SQLITE_BUSY。
+        //
+        // WAL 让读操作不再挡住 writer；NORMAL 是 WAL 下常用的性能/可靠性平衡；
+        // busy_timeout 则让“另一个 writer 只差几十毫秒就提交”的场景等待，而不是直接
+        // 杀掉当前任务。真正持续 15 秒以上的锁仍会报错，因此不会掩盖逻辑死锁。
+        let connect_options = SqliteConnectOptions::from_str(db_url)?
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(15));
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
-            .connect(db_url)
+            .connect_with(connect_options)
             .await?;
 
         let repo = Self { pool };
@@ -1300,6 +1318,16 @@ mod tests {
         assert!(task.total_bytes.is_none());
         assert!(task.rate_bytes_per_sec.is_none());
         assert!(task.eta_seconds.is_none());
+    }
+
+    #[tokio::test]
+    async fn sqlite_connections_should_wait_for_short_writer_contention() {
+        let repo = repo().await;
+        let busy_timeout_ms: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+            .fetch_one(repo.pool())
+            .await
+            .expect("应能读取 SQLite busy_timeout");
+        assert_eq!(busy_timeout_ms, 15_000);
     }
 
     #[tokio::test]
