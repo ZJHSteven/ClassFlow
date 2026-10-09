@@ -53,13 +53,23 @@ export function SmartClassSessionCard() {
 
   useEffect(() => {
     void refreshStatus()
-    // 这里刻意不做任何 interval / focus 自动刷新。
+    // 这里刻意不做任何 interval 轮询。
     //
     // ClassFlow 前端本身部署在 Worker 后面，如果页面常驻时每 30 秒主动 GET 一次
     // `/smartclass/auth`，会无意义增加 Worker 请求数，也会把“状态同步”重新退化成轮询。
-    // 当前只在页面首次加载时检查一次；之后由用户显式点击“刷新状态”或登录完成后检查。
-    // 后续如果要做到状态实时推送，应复用现有任务 SSE 连接携带 SmartClass 状态事件，
-    // 而不是再新增 HTTP polling 或第二条定时请求链。
+    // 但页面从后台切回前台 / 窗口重新获得焦点时做一次 GET 属于用户驱动的低频刷新，
+    // 这个行为本来就合理，也能让用户从 SmartClass 登录页切回来后立刻看到真实状态。
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshStatus(false)
+      }
+    }
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
   }, [refreshStatus])
 
   const refreshCaptcha = async () => {
