@@ -388,11 +388,13 @@ async fn get_lecture_artifact(
 
     match artifact_name.as_str() {
         "asr.md" => {
-            let markdown = build_lecture_asr_markdown(&lecture).ok_or_else(|| {
-                AppError::NotFound("完整课堂 ASR 尚未齐备，不能导出".to_string())
-            })?;
+            let markdown = build_lecture_asr_markdown(&lecture)
+                .ok_or_else(|| AppError::NotFound("完整课堂 ASR 尚未齐备，不能导出".to_string()))?;
             Ok((
-                [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    "text/markdown; charset=utf-8",
+                )],
                 markdown.into_bytes(),
             ))
         }
