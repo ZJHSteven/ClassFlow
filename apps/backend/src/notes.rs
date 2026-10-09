@@ -897,12 +897,15 @@ fn normalize_title_response(raw: &str) -> String {
     let mut title = first
         .trim_start_matches('#')
         .trim()
-        .trim_matches(|ch| matches!(ch, '“' | '”' | '‘' | '’' | '"' | '\'' | '`'))
-        .trim()
         .trim_start_matches("标题：")
         .trim_start_matches("标题:")
         .trim()
-        .trim_end_matches(['。', '！', '!', '；', ';'])
+        .trim_matches(|ch| {
+            matches!(
+                ch,
+                '“' | '”' | '‘' | '’' | '"' | '\'' | '`' | '。' | '！' | '!' | '；' | ';'
+            )
+        })
         .trim()
         .to_string();
     if title.to_ascii_lowercase().ends_with(".md") {
