@@ -685,6 +685,15 @@ mod tests {
         assert!(matches!(events.first(), Some(AsrProgressEvent::Uploading)));
         assert!(events.iter().any(|event| matches!(
             event,
+            AsrProgressEvent::UploadProgress {
+                transferred_bytes,
+                total_bytes,
+                ..
+            } if *transferred_bytes == b"fake-m4a-body".len() as u64
+                && *total_bytes == b"fake-m4a-body".len() as u64
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
             AsrProgressEvent::Submitted { job_id } if job_id == "job-1"
         )));
         assert!(events.iter().any(|event| matches!(

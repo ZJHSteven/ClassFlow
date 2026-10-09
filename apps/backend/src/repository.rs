@@ -1261,6 +1261,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_normalize_interrupted_running_task_before_startup_recovery() {
+        let repo = repo().await;
+        let response = repo
+            .create_batch_with_tasks(&demo_request(), "2025-2026-2")
+            .await
+            .expect("写入成功");
+        let task_id = &response.task_ids[0];
+
+        repo.mark_task_running(task_id, TaskStage::Downloading)
+            .await
+            .expect("应能模拟运行中的下载任务");
+        repo.update_task_transfer_progress(
+            task_id,
+            TaskStage::Downloading,
+            TaskTransferUpdate {
+                progress_percent: Some(42.0),
+                transferred_bytes: Some(42_000),
+                total_bytes: Some(100_000),
+                rate_bytes_per_sec: Some(256_000),
+                eta_seconds: Some(1),
+            },
+        )
+        .await
+        .expect("应能写入模拟下载进度");
+
+        let normalized = repo
+            .normalize_interrupted_running_tasks()
+            .await
+            .expect("启动恢复归一化应成功");
+        assert_eq!(normalized, 1);
+
+        let task = repo.get_task(task_id).await.expect("任务应存在");
+        assert_eq!(task.status, TaskStatus::Pending);
+        assert_eq!(task.stage, TaskStage::Queued);
+        assert!(task.progress_percent.is_none());
+        assert!(task.transferred_bytes.is_none());
+        assert!(task.total_bytes.is_none());
+        assert!(task.rate_bytes_per_sec.is_none());
+        assert!(task.eta_seconds.is_none());
+    }
+
+    #[tokio::test]
     async fn should_persist_remote_job_and_keep_retry_waiting_recoverable() {
         let repo = repo().await;
         let response = repo
