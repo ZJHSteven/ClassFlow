@@ -25,7 +25,8 @@ use crate::{
     models::{
         CourseDetailResponse, CourseListQuery, CourseSummaryResponse, IntakeBatchRequest,
         IntakeBatchResponse, IntakeItem, TaskDetailResponse, TaskDetailTaskResponse,
-        TaskEventRecord, TaskListQuery, TaskRecord, TaskStage, TaskStatus,
+        LectureNotesRecord, LectureNotesStatus, TaskEventRecord, TaskListQuery, TaskRecord,
+        TaskStage, TaskStatus,
     },
 };
 
@@ -147,6 +148,38 @@ impl Repository {
             );
 
             CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
+
+            CREATE TABLE IF NOT EXISTS lecture_notes (
+                lecture_key TEXT PRIMARY KEY,
+                course_key TEXT NOT NULL,
+                semester TEXT NOT NULL,
+                course_name TEXT NOT NULL,
+                teacher_name TEXT NOT NULL,
+                date TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                sequence_no INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                transcript_sha256 TEXT NOT NULL,
+                conversation_id TEXT,
+                notes_title TEXT,
+                notes_markdown TEXT,
+                notes_sha256 TEXT,
+                github_audio_path TEXT,
+                github_notes_path TEXT,
+                github_commit_sha TEXT,
+                last_error TEXT,
+                submit_attempt_count INTEGER NOT NULL DEFAULT 0,
+                submitted_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_lecture_notes_status
+                ON lecture_notes(status, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_lecture_notes_course
+                ON lecture_notes(semester, course_name, teacher_name, date, start_time);
             "#,
         )
         .execute(&self.pool)
@@ -946,6 +979,17 @@ impl Repository {
 
         let summary = summarize_course(&tasks)?;
         let lectures = group_tasks_into_lectures(&tasks);
+        let mut lecture_summaries = lectures.iter().map(summarize_lecture).collect::<Vec<_>>();
+        for summary in &mut lecture_summaries {
+            if let Some(notes) = self.get_lecture_notes(&summary.lecture_key).await? {
+                summary.notes_status = notes.status.as_str().to_string();
+                summary.notes_title = notes.notes_title.clone();
+                summary.notes_ready = notes.status == LectureNotesStatus::Succeeded;
+                summary.notes_last_error = notes.last_error.clone();
+                summary.notes_github_path = notes.github_notes_path.clone();
+            }
+        }
+
         Ok(CourseDetailResponse {
             course_key: summary.course_key,
             semester: summary.semester,
@@ -957,7 +1001,7 @@ impl Repository {
             has_failed_segment: summary.has_failed_segment,
             merged_markdown_path: summary.merged_markdown_path,
             manifest_path: summary.manifest_path,
-            lectures: lectures.iter().map(summarize_lecture).collect(),
+            lectures: lecture_summaries,
             segments: tasks.iter().map(Into::into).collect(),
         })
     }
@@ -975,6 +1019,188 @@ impl Repository {
             .into_iter()
             .find(|lecture| lecture.lecture_key == lecture_key)
             .ok_or_else(|| AppError::NotFound(format!("完整课堂不存在: {lecture_key}")))
+    }
+
+    pub async fn list_course_keys_since(&self, since_date: &str) -> AppResult<Vec<String>> {
+        Ok(sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT course_key FROM tasks WHERE date >= ? ORDER BY date ASC, start_time ASC",
+        )
+        .bind(since_date)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    pub async fn get_lecture_notes(&self, lecture_key: &str) -> AppResult<Option<LectureNotesRecord>> {
+        let row = sqlx::query("SELECT * FROM lecture_notes WHERE lecture_key = ? LIMIT 1")
+            .bind(lecture_key)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(map_lecture_notes_row).transpose()
+    }
+
+    pub async fn ensure_lecture_notes_job(
+        &self,
+        lecture: &LectureGroup,
+        transcript_sha256: &str,
+    ) -> AppResult<LectureNotesRecord> {
+        if let Some(existing) = self.get_lecture_notes(&lecture.lecture_key).await? {
+            return Ok(existing);
+        }
+
+        let next_sequence = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COALESCE(MAX(sequence_no), 0) + 1
+            FROM lecture_notes
+            WHERE semester = ? AND course_name = ? AND teacher_name = ?
+            "#,
+        )
+        .bind(&lecture.semester)
+        .bind(&lecture.course_name)
+        .bind(&lecture.teacher_name)
+        .fetch_one(&self.pool)
+        .await?;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO lecture_notes(
+                lecture_key, course_key, semester, course_name, teacher_name, date,
+                start_time, end_time, sequence_no, status, transcript_sha256,
+                created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+            "#,
+        )
+        .bind(&lecture.lecture_key)
+        .bind(&lecture.course_key)
+        .bind(&lecture.semester)
+        .bind(&lecture.course_name)
+        .bind(&lecture.teacher_name)
+        .bind(&lecture.date)
+        .bind(&lecture.start_time)
+        .bind(&lecture.end_time)
+        .bind(next_sequence)
+        .bind(transcript_sha256)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        self.get_lecture_notes(&lecture.lecture_key)
+            .await?
+            .ok_or_else(|| AppError::Internal("创建 lecture Notes 任务后无法读回".to_string()))
+    }
+
+    pub async fn list_active_lecture_notes(&self, limit: i64) -> AppResult<Vec<LectureNotesRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM lecture_notes
+            WHERE status IN ('pending', 'generating', 'publishing')
+            ORDER BY
+              CASE status WHEN 'generating' THEN 0 WHEN 'publishing' THEN 1 ELSE 2 END,
+              updated_at ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(map_lecture_notes_row).collect()
+    }
+
+    pub async fn mark_lecture_notes_pending_error(
+        &self,
+        lecture_key: &str,
+        error: &str,
+    ) -> AppResult<()> {
+        sqlx::query("UPDATE lecture_notes SET status='pending', last_error=?, updated_at=? WHERE lecture_key=?")
+            .bind(error)
+            .bind(Utc::now().to_rfc3339())
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_lecture_notes_generating(
+        &self,
+        lecture_key: &str,
+        conversation_id: &str,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE lecture_notes SET status='generating', conversation_id=?, submit_attempt_count=submit_attempt_count+1, submitted_at=COALESCE(submitted_at, ?), last_error=NULL, updated_at=? WHERE lecture_key=?",
+        )
+        .bind(conversation_id)
+        .bind(&now)
+        .bind(&now)
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_lecture_notes_failed(&self, lecture_key: &str, error: &str) -> AppResult<()> {
+        sqlx::query("UPDATE lecture_notes SET status='failed', last_error=?, updated_at=? WHERE lecture_key=?")
+            .bind(error)
+            .bind(Utc::now().to_rfc3339())
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_lecture_notes_publishing(
+        &self,
+        lecture_key: &str,
+        title: &str,
+        markdown: &str,
+        notes_sha256: &str,
+    ) -> AppResult<()> {
+        sqlx::query("UPDATE lecture_notes SET status='publishing', notes_title=?, notes_markdown=?, notes_sha256=?, last_error=NULL, updated_at=? WHERE lecture_key=?")
+            .bind(title)
+            .bind(markdown)
+            .bind(notes_sha256)
+            .bind(Utc::now().to_rfc3339())
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn mark_lecture_notes_succeeded(
+        &self,
+        lecture_key: &str,
+        github_audio_path: &str,
+        github_notes_path: &str,
+        github_commit_sha: Option<&str>,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE lecture_notes SET status='succeeded', github_audio_path=?, github_notes_path=?, github_commit_sha=?, last_error=NULL, completed_at=?, updated_at=? WHERE lecture_key=?")
+            .bind(github_audio_path)
+            .bind(github_notes_path)
+            .bind(github_commit_sha)
+            .bind(&now)
+            .bind(&now)
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn retry_lecture_notes(&self, lecture_key: &str) -> AppResult<()> {
+        let existing = self
+            .get_lecture_notes(lecture_key)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Notes 任务不存在".to_string()))?;
+        if existing.status != LectureNotesStatus::Failed {
+            return Err(AppError::BadRequest("只有失败的 Notes 任务才能重试".to_string()));
+        }
+        sqlx::query(
+            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 
@@ -1127,6 +1353,38 @@ fn map_task_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<TaskRecord> {
         completed_at: parse_optional_datetime(row.get("completed_at"))?,
         created_at: parse_datetime(row.get("created_at"))?,
         updated_at: parse_datetime(row.get("updated_at"))?,
+    })
+}
+
+fn map_lecture_notes_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<LectureNotesRecord> {
+    Ok(LectureNotesRecord {
+        lecture_key: row.get("lecture_key"),
+        course_key: row.get("course_key"),
+        semester: row.get("semester"),
+        course_name: row.get("course_name"),
+        teacher_name: row.get("teacher_name"),
+        date: row.get("date"),
+        start_time: row.get("start_time"),
+        end_time: row.get("end_time"),
+        sequence_no: row.get("sequence_no"),
+        status: row
+            .get::<String, _>("status")
+            .parse::<LectureNotesStatus>()
+            .map_err(AppError::Internal)?,
+        transcript_sha256: row.get("transcript_sha256"),
+        conversation_id: row.get("conversation_id"),
+        notes_title: row.get("notes_title"),
+        notes_markdown: row.get("notes_markdown"),
+        notes_sha256: row.get("notes_sha256"),
+        github_audio_path: row.get("github_audio_path"),
+        github_notes_path: row.get("github_notes_path"),
+        github_commit_sha: row.get("github_commit_sha"),
+        last_error: row.get("last_error"),
+        submit_attempt_count: row.get("submit_attempt_count"),
+        submitted_at: row.get("submitted_at"),
+        completed_at: row.get("completed_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
     })
 }
 
