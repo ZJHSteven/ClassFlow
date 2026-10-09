@@ -1,3 +1,16 @@
+# 2026-10-10 Phase 3 正式生产链：N1 -> Archive Bridge -> GitHub Notes
+
+本阶段不再在 Windows 本机维护课程笔记 working tree，也不让 Cloudflare Worker 轮询 Archive。N1 ClassFlow backend 作为唯一任务状态机，Archive Bridge 只是异步黑盒生成器，GitHub 是最终同步源。
+
+1. **输入单元**：继续使用现有 lecture 聚类（同日/同课程/同老师、课间 <=30min、最多 4 个 SmartClass segment），只有完整 lecture ASR 齐备后才能创建 Notes 子任务。
+2. **提交**：N1 调 Archive Bridge `POST /v1/turns`，固定 `mode=new / targetMode=guardian / projectName=课堂录音→笔记`，正文为完整 lecture transcript。Bridge 返回 canonical conversation ID 后立即 checkpoint 到 SQLite。
+3. **等待**：N1 之后只轮询自家 Archive Bridge 的 canonical 生命周期接口，不轮询 ChatGPT。Bridge/Windows 离线、连接失败等明确“未提交”错误保持 pending 并自动稍后再试；CID 已拿到后即使网络中断也绝不重发，只等待 body/final 恢复。
+4. **失败**：Archive incident / abnormal terminal / 明确业务错误标记 Notes failed，不自动创建新 conversation，前端提供手动 retry。对“请求是否已提交”无法判定的模糊网络错误同样 fail-safe 等人工处理，避免重复笔记。
+5. **成功**：读取最后一个 canonical assistant final 作为 `notes.md`；生成稳定课程内序号 + 具体主题文件名。标题第一版优先复用 ChatGPT conversation title；过泛时后续再加 title-only model，不阻塞 MVP。
+6. **GitHub 发布**：N1 直接调用 GitHub API 写入 `ZJHSteven/med-notes-2026-fall-y3`，不在 N1 维护 git working tree。每堂 lecture 至少发布 `课程/Audio/<日期-时间>-ASR.md` 与 `课程/Notes/<序号>-<标题>.md`。Windows 桌面 `大三上笔记` 只作为普通 clone，用户手动 `git pull` 即可。
+7. **前端**：课程库每堂 lecture 显示 Notes 状态（等待提交/生成中/完成/失败），支持 Markdown 直接查看 ASR/Notes，同时保留下载按钮和失败后的手动 retry。
+8. **未来分享站**：直接以 GitHub 仓库或 ClassFlow API 为只读数据源渲染 Markdown，供朋友浏览实时更新的 ASR 与 Notes；不让分享站拥有 Archive/ChatGPT 控制权限。
+
 # 2026-10-09 Phase 3 MVP 收敛：优先复用云端“课堂录音→笔记”Project
 
 本阶段不再等待 LectureNoteBench 的本地 prompt 优化收敛。历史云端 ChatGPT Project `课堂录音→笔记` 已经长期产出过用户满意的 Notes，因此 Phase 3 MVP 先把**旧的人工工作流机械自动化**：完整 lecture ASR -> Project 新 conversation -> canonical final -> Notes artifact。LectureNoteBench 保持独立，用于以后替换/精简 prompt，而不是阻塞生产。
