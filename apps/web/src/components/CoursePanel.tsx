@@ -23,8 +23,10 @@ import {
   getLectureArtifactUrl,
   getLectureMarkdown,
   listCourses,
+  recoverLectureNotes,
   retryLectureNotes,
 } from '../api'
+import type { LectureNotesRecoveryAction } from '../api'
 import { buildCourseMarkdownDownloadFilename } from '../courseDownloadFilename'
 import { downloadBlob, downloadWithProgress } from '../downloads'
 import { formatBytes, formatPercent, formatSpeed, normalizePercent } from '../progress'
@@ -45,6 +47,8 @@ interface CourseMarkdownCacheEntry {
   updatedAt: string
 }
 
+type PreviewMode = 'asr' | 'notes'
+
 /**
  * 把最近同步时间格式化成短时间。
  */
@@ -62,8 +66,10 @@ export function CoursePanel() {
   const [courses, setCourses] = useState<CourseSummary[]>([])
   const [selectedCourseKey, setSelectedCourseKey] = useState<string>('')
   const [selectedCourseDetail, setSelectedCourseDetail] = useState<CourseDetail | null>(null)
+  const [selectedLectureKey, setSelectedLectureKey] = useState<string>('')
+  const [previewMode, setPreviewMode] = useState<PreviewMode>('asr')
   const [markdownPreview, setMarkdownPreview] = useState<string>('')
-  const [previewTitle, setPreviewTitle] = useState<string>('课程总稿预览')
+  const [previewTitle, setPreviewTitle] = useState<string>('课程 ASR')
   const [previewMessage, setPreviewMessage] = useState<string>('')
   const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false)
   const [semesterFilter, setSemesterFilter] = useState<string>('')
@@ -77,6 +83,7 @@ export function CoursePanel() {
   const listRequestIdRef = useRef<number>(0)
   const detailRequestIdRef = useRef<number>(0)
   const selectedCourseKeyRef = useRef<string>('')
+  const selectedLectureKeyRef = useRef<string>('')
   const markdownCacheRef = useRef<Record<string, CourseMarkdownCacheEntry>>({})
   const pressableProps = {
     whileHover: { y: -2, scale: 1.01 },
@@ -88,6 +95,10 @@ export function CoursePanel() {
   useEffect(() => {
     selectedCourseKeyRef.current = selectedCourseKey
   }, [selectedCourseKey])
+
+  useEffect(() => {
+    selectedLectureKeyRef.current = selectedLectureKey
+  }, [selectedLectureKey])
 
   /**
    * 刷新单个课程详情与总稿。
@@ -140,10 +151,18 @@ export function CoursePanel() {
         return
       }
 
+      const nextLectureKey = detail.lectures.some(
+        (lecture) => lecture.lecture_key === selectedLectureKeyRef.current,
+      )
+        ? selectedLectureKeyRef.current
+        : detail.lectures[0]?.lecture_key ?? ''
+
       startTransition(() => {
         setSelectedCourseDetail(detail)
+        setSelectedLectureKey(nextLectureKey)
+        setPreviewMode('asr')
         setMarkdownPreview(nextMarkdownPreview)
-        setPreviewTitle('课程总稿预览')
+        setPreviewTitle('课程 ASR')
         setPreviewMessage(nextPreviewMessage)
         setIsPreviewLoading(false)
       })
@@ -151,8 +170,10 @@ export function CoursePanel() {
       if (detailRequestIdRef.current === requestId) {
         startTransition(() => {
           setSelectedCourseDetail(null)
+          setSelectedLectureKey('')
+          setPreviewMode('asr')
           setMarkdownPreview('')
-          setPreviewTitle('课程总稿预览')
+          setPreviewTitle('课程 ASR')
           setPreviewMessage(error instanceof Error ? error.message : '课程详情加载失败')
           setIsPreviewLoading(false)
         })
@@ -204,8 +225,10 @@ export function CoursePanel() {
         } else {
           startTransition(() => {
             setSelectedCourseDetail(null)
+            setSelectedLectureKey('')
+            setPreviewMode('asr')
             setMarkdownPreview('')
-            setPreviewTitle('课程总稿预览')
+            setPreviewTitle('课程 ASR')
             setPreviewMessage('')
             setIsPreviewLoading(false)
           })
@@ -254,8 +277,10 @@ export function CoursePanel() {
   useEffect(() => {
     if (!selectedCourseKey) {
       setSelectedCourseDetail(null)
+      setSelectedLectureKey('')
+      setPreviewMode('asr')
       setMarkdownPreview('')
-      setPreviewTitle('课程总稿预览')
+      setPreviewTitle('课程 ASR')
       setPreviewMessage('')
       setIsPreviewLoading(false)
       return
@@ -270,13 +295,24 @@ export function CoursePanel() {
   const manifestDownloadUrl = selectedCourseDetail?.manifest_path
     ? getCourseArtifactUrl(selectedCourseDetail.course_key, 'manifest.json')
     : ''
+  const selectedLecture = selectedCourseDetail?.lectures.find(
+    (lecture) => lecture.lecture_key === selectedLectureKey,
+  ) ?? selectedCourseDetail?.lectures[0]
+  const selectedLectureIndex = selectedCourseDetail && selectedLecture
+    ? selectedCourseDetail.lectures.findIndex((lecture) => lecture.lecture_key === selectedLecture.lecture_key)
+    : -1
+
+  const buildLectureNotesFilename = (lecture: NonNullable<CourseDetail['lectures']>[number], index: number) => {
+    const title = lecture.notes_title || `${selectedCourseDetail?.course_name ?? '课程'}-课堂笔记`
+    return `${index + 1}-${title}.md`
+  }
 
   const courseActions = selectedCourseDetail
     ? [
         courseMarkdownDownloadUrl
           ? {
               key: 'course.md',
-              label: '下载课程总稿',
+              label: '下载课程 ASR',
               href: courseMarkdownDownloadUrl,
               filename: buildCourseMarkdownDownloadFilename({
                 date: selectedCourseDetail.date,
@@ -293,6 +329,15 @@ export function CoursePanel() {
               href: manifestDownloadUrl,
               filename: `${selectedCourseDetail.course_name}-${selectedCourseDetail.date}-manifest.json`,
               primary: false,
+            }
+          : null,
+        selectedLecture?.notes_ready
+          ? {
+              key: `lecture:${selectedLecture.lecture_key}:notes.md`,
+              label: '下载 Notes',
+              href: getLectureArtifactUrl(selectedCourseDetail.course_key, selectedLecture.lecture_key, 'notes.md'),
+              filename: buildLectureNotesFilename(selectedLecture, Math.max(selectedLectureIndex, 0)),
+              primary: true,
             }
           : null,
       ].filter(Boolean) as Array<{ key: string; label: string; href: string; filename: string; primary: boolean }>
@@ -379,38 +424,56 @@ export function CoursePanel() {
     }
   }
 
-  const buildLectureAsrFilename = (lecture: NonNullable<CourseDetail['lectures']>[number]) => {
-    const compactTime = (value: string) => value.replace(/:/g, '')
-    return `${selectedCourseDetail?.date ?? 'lecture'}-${selectedCourseDetail?.course_name ?? '课程'}-${compactTime(lecture.start_time)}-${compactTime(lecture.end_time)}-ASR.md`
-  }
-
-  const buildLectureNotesFilename = (lecture: NonNullable<CourseDetail['lectures']>[number], index: number) => {
-    const title = lecture.notes_title || `${selectedCourseDetail?.course_name ?? '课程'}-课堂笔记`
-    return `${index + 1}-${title}.md`
-  }
-
-  const previewLectureArtifact = async (
-    lecture: NonNullable<CourseDetail['lectures']>[number],
-    artifactName: 'asr.md' | 'notes.md',
-    index: number,
-  ) => {
-    if (!selectedCourseDetail) return
+  const handlePreviewModeChange = async (mode: PreviewMode) => {
+    if (!selectedCourseDetail) {
+      return
+    }
+    setPreviewMode(mode)
     setIsPreviewLoading(true)
     setPreviewMessage('')
+
+    if (mode === 'asr') {
+      try {
+        const cachedEntry = markdownCacheRef.current[selectedCourseDetail.course_key]
+        const markdown = cachedEntry?.markdown || await getCourseMarkdown(selectedCourseDetail.course_key)
+        markdownCacheRef.current[selectedCourseDetail.course_key] = {
+          markdown,
+          updatedAt: selectedCourseDetail.updated_at,
+        }
+        setMarkdownPreview(markdown)
+        setPreviewTitle('课程 ASR')
+      } catch (error) {
+        setMarkdownPreview('')
+        setPreviewMessage(error instanceof Error ? error.message : '课程 ASR 加载失败')
+      } finally {
+        setIsPreviewLoading(false)
+      }
+      return
+    }
+
+    if (!selectedLecture?.notes_ready) {
+      setMarkdownPreview('')
+      setPreviewTitle('Notes')
+      setPreviewMessage(
+        selectedLecture?.notes_status === 'failed'
+          ? selectedLecture.notes_last_error || 'Notes 生成失败，可在上方重试。'
+          : 'Notes 尚未生成完成。',
+      )
+      setIsPreviewLoading(false)
+      return
+    }
+
     try {
       const markdown = await getLectureMarkdown(
         selectedCourseDetail.course_key,
-        lecture.lecture_key,
-        artifactName,
+        selectedLecture.lecture_key,
+        'notes.md',
       )
       setMarkdownPreview(markdown)
-      setPreviewTitle(
-        artifactName === 'asr.md'
-          ? `第 ${index + 1} 堂 · 完整 ASR`
-          : `第 ${index + 1} 堂 · ${lecture.notes_title || '课堂 Notes'}`,
-      )
+      setPreviewTitle(selectedLecture.notes_title || 'Notes')
     } catch (error) {
-      setPreviewMessage(error instanceof Error ? error.message : '课堂 Markdown 加载失败')
+      setMarkdownPreview('')
+      setPreviewMessage(error instanceof Error ? error.message : 'Notes 加载失败')
     } finally {
       setIsPreviewLoading(false)
     }
@@ -423,6 +486,25 @@ export function CoursePanel() {
       await loadCourseDetail(selectedCourseDetail.course_key)
     } catch (error) {
       setPreviewMessage(error instanceof Error ? error.message : 'Notes 任务提交失败')
+    }
+  }
+
+  const handleNotesRecovery = async (
+    lecture: NonNullable<CourseDetail['lectures']>[number],
+    action: LectureNotesRecoveryAction,
+  ) => {
+    if (!selectedCourseDetail) return
+    if (
+      action === 'force_resubmit'
+      && !window.confirm('只有在已经人工确认 Archive 中不存在对应 conversation 时，才应重建。确定继续吗？')
+    ) {
+      return
+    }
+    try {
+      await recoverLectureNotes(selectedCourseDetail.course_key, lecture.lecture_key, action)
+      await loadCourseDetail(selectedCourseDetail.course_key)
+    } catch (error) {
+      setPreviewMessage(error instanceof Error ? error.message : 'Notes 恢复操作失败')
     }
   }
 
@@ -547,8 +629,8 @@ export function CoursePanel() {
           </motion.button>
           <div className="card__header">
             <div>
-              <h3>课程总稿与交付物</h3>
-              <p>右侧只负责课程级产物：课程总稿、课程清单，以及不把整页拉长的总稿预览。</p>
+              <h3>课程 ASR 与 Notes</h3>
+              <p>一次连续授课只展示为一堂完整课堂；45 分钟录像切片仅作为后台聚合信息，不再暴露成独立课程操作。</p>
             </div>
           </div>
 
@@ -608,134 +690,137 @@ export function CoursePanel() {
                 ))}
               </div>
 
-              <div className="lectureList">
-                <div className="lectureList__header">
-                  <strong>完整课堂</strong>
-                  <span>{selectedCourseDetail.lectures.length} 堂</span>
+              {selectedCourseDetail.lectures.length > 1 ? (
+                <label className="lectureSelector">
+                  <span>完整课堂</span>
+                  <select
+                    value={selectedLecture?.lecture_key ?? ''}
+                    onChange={(event) => {
+                      setSelectedLectureKey(event.target.value)
+                      setPreviewMode('asr')
+                      void handlePreviewModeChange('asr')
+                    }}
+                  >
+                    {selectedCourseDetail.lectures.map((lecture, index) => (
+                      <option key={lecture.lecture_key} value={lecture.lecture_key}>
+                        {index + 1}. {lecture.start_time} - {lecture.end_time}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              {selectedLecture ? (
+                <div className="lectureSummary">
+                  <div>
+                    <strong>{selectedLecture.start_time} - {selectedLecture.end_time}</strong>
+                    <span>{selectedLecture.segment_count} 个录播切片已合并为 1 堂完整课堂</span>
+                  </div>
+                  <div className="detailActionGrid">
+                    {selectedLecture.notes_recovery_kind === 'submission_unknown' ? (
+                      <>
+                        <motion.button
+                          type="button"
+                          className="artifactPill artifactPill--primary"
+                          onClick={() => void handleNotesRecovery(selectedLecture, 'reconcile')}
+                          {...pressableProps}
+                        >
+                          核对已有会话
+                        </motion.button>
+                        <motion.button
+                          type="button"
+                          className="artifactPill artifactPill--error"
+                          onClick={() => void handleNotesRecovery(selectedLecture, 'force_resubmit')}
+                          {...pressableProps}
+                        >
+                          确认不存在后重建
+                        </motion.button>
+                      </>
+                    ) : selectedLecture.notes_recovery_kind === 'safe_resubmit' ? (
+                      <motion.button
+                        type="button"
+                        className="artifactPill artifactPill--error"
+                        onClick={() => void handleNotesRecovery(selectedLecture, 'safe_resubmit')}
+                        {...pressableProps}
+                      >
+                        安全重新提交
+                      </motion.button>
+                    ) : selectedLecture.notes_recovery_kind === 'manual_review'
+                      && selectedLecture.notes_conversation_id ? (
+                        <motion.button
+                          type="button"
+                          className="artifactPill artifactPill--pending"
+                          onClick={() => void handleNotesRecovery(selectedLecture, 'resume_existing')}
+                          {...pressableProps}
+                        >
+                          从已有会话继续
+                        </motion.button>
+                      ) : selectedLecture.notes_status === 'failed' ? (
+                        <span className="artifactPill artifactPill--error">需人工核对</span>
+                    ) : selectedLecture.notes_status === 'not_started' ? (
+                      <motion.button
+                        type="button"
+                        className="artifactPill artifactPill--pending"
+                        disabled={!selectedLecture.transcript_ready}
+                        onClick={() => void handleNotesRetry(selectedLecture)}
+                        {...pressableProps}
+                      >
+                        {selectedLecture.transcript_ready ? '生成 Notes' : '等待 ASR'}
+                      </motion.button>
+                    ) : !selectedLecture.notes_ready ? (
+                      <span className="artifactPill artifactPill--pending">
+                        {selectedLecture.notes_recovery_kind === 'submission_unknown'
+                          ? '提交结果待核对'
+                          : selectedLecture.notes_status === 'pending'
+                          ? 'Notes 等待提交'
+                          : selectedLecture.notes_status === 'generating'
+                            ? 'Notes 生成中'
+                            : selectedLecture.notes_status === 'publishing'
+                              ? 'Notes 同步 GitHub'
+                              : 'Notes 处理中'}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
-                {selectedCourseDetail.lectures.length > 0 ? (
-                  selectedCourseDetail.lectures.map((lecture, index) => {
-                    const downloadKey = `lecture:${lecture.lecture_key}:asr.md`
-                    const notesDownloadKey = `lecture:${lecture.lecture_key}:notes.md`
-                    const action = {
-                      key: downloadKey,
-                      href: getLectureArtifactUrl(selectedCourseDetail.course_key, lecture.lecture_key, 'asr.md'),
-                      filename: buildLectureAsrFilename(lecture),
-                    }
-                    return (
-                      <div key={lecture.lecture_key} className="lectureCard">
-                        <div className="lectureCard__meta">
-                          <strong>第 {index + 1} 堂 · {lecture.start_time} - {lecture.end_time}</strong>
-                          <span>
-                            ASR 片段：{lecture.successful_segment_count} / {lecture.segment_count}
-                          </span>
-                        </div>
-                        <div className="detailActionGrid">
-                          <div className="downloadAction">
-                            <motion.button
-                              type="button"
-                              className={
-                                downloadStates[downloadKey]?.status === 'failed'
-                                  ? 'artifactPill artifactPill--error'
-                                  : 'artifactPill artifactPill--primary'
-                              }
-                              onClick={() => void handleCourseDownload(action)}
-                              disabled={!lecture.transcript_ready || downloadStates[downloadKey]?.status === 'downloading'}
-                              {...pressableProps}
-                            >
-                              {!lecture.transcript_ready
-                                ? 'ASR 尚未齐备'
-                                : downloadStates[downloadKey]?.status === 'downloading'
-                                  ? `下载 ASR · ${formatPercent(downloadStates[downloadKey]?.progressPercent)}`
-                                  : '下载 ASR'}
-                            </motion.button>
-                            {downloadStates[downloadKey]?.status === 'failed' ? (
-                              <div className="downloadAction__error">{downloadStates[downloadKey]?.errorMessage}</div>
-                            ) : null}
-                          </div>
-                          <motion.button
-                            type="button"
-                            className="artifactPill"
-                            disabled={!lecture.transcript_ready}
-                            onClick={() => void previewLectureArtifact(lecture, 'asr.md', index)}
-                            {...pressableProps}
-                          >
-                            查看 ASR
-                          </motion.button>
-                          {lecture.notes_ready ? (
-                            <>
-                              <motion.button
-                                type="button"
-                                className="artifactPill artifactPill--primary"
-                                onClick={() => void previewLectureArtifact(lecture, 'notes.md', index)}
-                                {...pressableProps}
-                              >
-                                查看 Notes
-                              </motion.button>
-                              <motion.button
-                                type="button"
-                                className="artifactPill"
-                                onClick={() => void handleCourseDownload({
-                                  key: notesDownloadKey,
-                                  href: getLectureArtifactUrl(selectedCourseDetail.course_key, lecture.lecture_key, 'notes.md'),
-                                  filename: buildLectureNotesFilename(lecture, index),
-                                })}
-                                disabled={downloadStates[notesDownloadKey]?.status === 'downloading'}
-                                {...pressableProps}
-                              >
-                                {downloadStates[notesDownloadKey]?.status === 'downloading'
-                                  ? `下载 Notes · ${formatPercent(downloadStates[notesDownloadKey]?.progressPercent)}`
-                                  : '下载 Notes'}
-                              </motion.button>
-                            </>
-                          ) : lecture.notes_status === 'failed' ? (
-                            <motion.button
-                              type="button"
-                              className="artifactPill artifactPill--error"
-                              onClick={() => void handleNotesRetry(lecture)}
-                              {...pressableProps}
-                            >
-                              重试 Notes
-                            </motion.button>
-                          ) : lecture.notes_status === 'not_started' ? (
-                            <motion.button
-                              type="button"
-                              className="artifactPill artifactPill--pending"
-                              disabled={!lecture.transcript_ready}
-                              onClick={() => void handleNotesRetry(lecture)}
-                              {...pressableProps}
-                            >
-                              {lecture.transcript_ready ? '生成 Notes' : '等待 ASR'}
-                            </motion.button>
-                          ) : (
-                            <span className="artifactPill artifactPill--pending">
-                              {lecture.notes_status === 'pending'
-                                ? 'Notes 等待提交'
-                                : lecture.notes_status === 'generating'
-                                  ? 'Notes 生成中'
-                                  : lecture.notes_status === 'publishing'
-                                    ? 'Notes 同步 GitHub'
-                                    : 'Notes 处理中'}
-                            </span>
-                          )}
-                        </div>
-                        {lecture.notes_last_error ? (
-                          <div className="downloadAction__error">{lecture.notes_last_error}</div>
-                        ) : null}
-                      </div>
-                    )
-                  })
-                ) : (
-                  <div className="detailNotice detailNotice--info">当前还没有可识别的完整课堂。</div>
-                )}
-              </div>
+              ) : (
+                <div className="detailNotice detailNotice--info">当前还没有可识别的完整课堂。</div>
+              )}
+
+              {selectedLecture?.notes_last_error ? (
+                <div className="detailNotice detailNotice--warning detailNotice--scrollable">
+                  {selectedLecture.notes_last_error}
+                </div>
+              ) : null}
 
               {previewMessage ? <div className="detailNotice detailNotice--warning detailNotice--scrollable">{previewMessage}</div> : null}
 
               <div className="previewShell">
+                <div className="artifactSwitch" role="tablist" aria-label="课程内容预览">
+                  <motion.button
+                    type="button"
+                    role="tab"
+                    aria-selected={previewMode === 'asr'}
+                    className={previewMode === 'asr' ? 'artifactSwitch__button is-active' : 'artifactSwitch__button'}
+                    onClick={() => void handlePreviewModeChange('asr')}
+                    {...pressableProps}
+                  >
+                    课程 ASR
+                  </motion.button>
+                  <motion.button
+                    type="button"
+                    role="tab"
+                    aria-selected={previewMode === 'notes'}
+                    className={previewMode === 'notes' ? 'artifactSwitch__button is-active' : 'artifactSwitch__button'}
+                    onClick={() => void handlePreviewModeChange('notes')}
+                    disabled={!selectedLecture}
+                    {...pressableProps}
+                  >
+                    Notes
+                  </motion.button>
+                </div>
                 <div className="previewShell__header">
                   <strong>{previewTitle}</strong>
-                  <span>{isPreviewLoading ? '正在读取...' : markdownPreview ? '已加载' : '暂无总稿'}</span>
+                  <span>{isPreviewLoading ? '正在读取...' : markdownPreview ? '已加载' : '暂无内容'}</span>
                 </div>
 
                 <AnimatePresence mode="wait">
@@ -748,7 +833,7 @@ export function CoursePanel() {
                     transition={{ duration: 0.18, ease: 'easeOut' }}
                   >
                     {isPreviewLoading
-                      ? '正在读取课程总稿...'
+                      ? `正在读取${previewMode === 'asr' ? '课程 ASR' : ' Notes'}...`
                       : markdownPreview || '当前没有可预览的 Markdown。'}
                   </motion.pre>
                 </AnimatePresence>
@@ -756,7 +841,7 @@ export function CoursePanel() {
             </div>
           ) : (
             <div className="detail__body">
-              <div className="emptyState">从左侧选择一个课程查看总稿。</div>
+            <div className="emptyState">从左侧选择一个课程查看 ASR 与 Notes。</div>
             </div>
           )}
         </motion.aside>

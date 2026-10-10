@@ -109,6 +109,9 @@ export interface LectureSummary {
   notes_title: string | null
   notes_ready: boolean
   notes_last_error: string | null
+  notes_recovery_kind: 'submission_unknown' | 'safe_resubmit' | 'manual_review' | string | null
+  notes_conversation_id: string | null
+  notes_submitted_at: string | null
   notes_github_path: string | null
   task_ids: string[]
 }

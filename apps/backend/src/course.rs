@@ -100,6 +100,9 @@ pub fn summarize_lecture(lecture: &LectureGroup) -> LectureSummaryResponse {
         notes_title: None,
         notes_ready: false,
         notes_last_error: None,
+        notes_recovery_kind: None,
+        notes_conversation_id: None,
+        notes_submitted_at: None,
         notes_github_path: None,
         task_ids: lecture.tasks.iter().map(|task| task.id.clone()).collect(),
     }
@@ -107,8 +110,9 @@ pub fn summarize_lecture(lecture: &LectureGroup) -> LectureSummaryResponse {
 
 /// 用户下载/人工检查用的完整 lecture ASR。
 ///
-/// Notes route 使用 `combined_transcript()` 的轻量正文；课程库下载则额外保留元数据，方便离线
-/// 文件脱离 ClassFlow 后仍知道它来自哪堂课和哪些录像片段。
+/// Notes 首次发送与课程库下载共用这一份 Markdown，不再维护第二套轻量正文格式。
+/// 这样既保留课程/时间/Lecture Key 等可追踪元数据，也让提交结果未知时能用 Lecture Key
+/// 在 Archive 本地索引中安全认领已经创建的 conversation。
 pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
     let combined = lecture.combined_transcript()?;
     Some(format!(

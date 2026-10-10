@@ -30,6 +30,7 @@ pub mod notes;
 pub mod pipeline;
 pub mod repository;
 pub mod routes;
+pub mod schedule;
 pub mod smartclass;
 pub mod smartclass_session;
 pub mod worker;

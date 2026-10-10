@@ -273,6 +273,9 @@ pub struct LectureSummaryResponse {
     pub notes_title: Option<String>,
     pub notes_ready: bool,
     pub notes_last_error: Option<String>,
+    pub notes_recovery_kind: Option<String>,
+    pub notes_conversation_id: Option<String>,
+    pub notes_submitted_at: Option<String>,
     pub notes_github_path: Option<String>,
     pub task_ids: Vec<String>,
 }
@@ -337,6 +340,7 @@ pub struct LectureNotesRecord {
     pub github_notes_path: Option<String>,
     pub github_commit_sha: Option<String>,
     pub last_error: Option<String>,
+    pub recovery_kind: Option<String>,
     pub submit_attempt_count: i64,
     pub submitted_at: Option<String>,
     pub completed_at: Option<String>,

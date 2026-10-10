@@ -29,6 +29,7 @@ use crate::{
     pipeline::{PipelineIo, RealPipelineIo},
     repository::Repository,
     routes::build_router,
+    schedule::CourseSchedule,
     smartclass::spawn_smartclass_collector,
     smartclass_session::SmartClassSessionManager,
     worker::{TaskQueue, cleanup_stale_temp_dirs, spawn_workers},
@@ -42,6 +43,7 @@ pub struct AppState {
     pub pipeline: Arc<dyn PipelineIo>,
     pub asr_provider: Arc<dyn AsrProvider>,
     pub network_health: Arc<NetworkHealthGate>,
+    pub course_schedule: Arc<CourseSchedule>,
     /// `direct_http` 模式下的 SmartClass 会话管理器。
     ///
     /// `browser_bridge` 作为救援模式时这里为空，Collector 会走旧的 8790 bridge。
@@ -139,6 +141,20 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
     tokio::fs::create_dir_all("./data").await?;
 
     let repo = Repository::connect(&config.db_url).await?;
+    let course_schedule =
+        Arc::new(CourseSchedule::load_optional(&config.course_schedule_path).await?);
+    if course_schedule.courses.is_empty() {
+        warn!(
+            "未加载课程表先验，Notes 将退回录像片段启发式: {}",
+            config.course_schedule_path.display()
+        );
+    } else {
+        info!(
+            "已加载课程表先验: {} 门课程，来源 {}",
+            course_schedule.courses.len(),
+            config.course_schedule_path.display()
+        );
+    }
     let network_health = Arc::new(NetworkHealthGate::from_config(&config));
     let artifact_store = build_artifact_store(&config).await?;
     let artifact_store =
@@ -183,6 +199,7 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
         pipeline,
         asr_provider,
         network_health,
+        course_schedule,
         smartclass_session,
         queue: placeholder_queue,
         task_list_events,

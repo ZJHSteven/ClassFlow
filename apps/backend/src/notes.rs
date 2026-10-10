@@ -27,7 +27,7 @@ use crate::{
 };
 
 const SHANGHAI_OFFSET_SECS: i32 = 8 * 3600;
-const TITLE_PROMPT: &str = "请只为你刚刚生成的整堂课堂笔记起一个简洁、具体、可区分的中文主题名。要求：1）概括整堂课最核心的知识主题；2）不要包含课程名、日期、老师姓名、‘课堂笔记’、‘理论课’、‘第几部分’等元信息；3）尽量控制在 12～32 个汉字，必要时可用顿号、‘与’连接多个并列主题；4）只输出标题本身，不要加序号、引号、解释、Markdown 标记或句号。";
+const TITLE_MAX_CHARS: usize = 24;
 
 pub fn spawn_notes_worker(state: AppState) {
     if !state.config.notes_enabled {
@@ -74,19 +74,10 @@ pub async fn enqueue_lecture_notes(
         .repo
         .get_lecture_group(course_key, lecture_key)
         .await?;
-    let transcript = lecture
-        .combined_transcript()
+    let source_markdown = build_lecture_asr_markdown(&lecture)
         .ok_or_else(|| AppError::BadRequest("完整课堂 ASR 尚未齐备，不能生成 Notes".to_string()))?;
-    let transcript_hash = sha256_text(&transcript);
+    let transcript_hash = sha256_text(&source_markdown);
     match state.repo.get_lecture_notes(lecture_key).await? {
-        Some(existing) if existing.status == LectureNotesStatus::Failed => {
-            state.repo.retry_lecture_notes(lecture_key).await?;
-            state
-                .repo
-                .get_lecture_notes(lecture_key)
-                .await?
-                .ok_or_else(|| AppError::Internal("重试 Notes 后无法读回任务".to_string()))
-        }
         Some(existing) => Ok(existing),
         None => {
             state
@@ -95,6 +86,28 @@ pub async fn enqueue_lecture_notes(
                 .await
         }
     }
+}
+
+pub async fn reconcile_lecture_notes_now(
+    state: &AppState,
+    lecture_key: &str,
+) -> AppResult<LectureNotesRecord> {
+    let job = state
+        .repo
+        .get_lecture_notes(lecture_key)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Notes 任务不存在".to_string()))?;
+    if job.recovery_kind.as_deref() != Some("submission_unknown") {
+        return Err(AppError::BadRequest(
+            "当前任务不是“提交结果未知”，无需执行 conversation 核对".to_string(),
+        ));
+    }
+    reconcile_unknown_submission(state, &job).await?;
+    state
+        .repo
+        .get_lecture_notes(lecture_key)
+        .await?
+        .ok_or_else(|| AppError::Internal("核对后无法读回 Notes 任务".to_string()))
 }
 
 async fn discover_ready_lectures(state: &AppState) -> AppResult<()> {
@@ -106,22 +119,36 @@ async fn discover_ready_lectures(state: &AppState) -> AppResult<()> {
     for course_key in course_keys {
         let tasks = state.repo.list_tasks_by_course_key(&course_key).await?;
         for lecture in group_tasks_into_lectures(&tasks) {
-            if !lecture.transcript_ready() || !lecture_is_closed(&lecture, now) {
+            if !lecture.transcript_ready() || !lecture_is_closed(state, &lecture, now) {
                 continue;
             }
-            let Some(transcript) = lecture.combined_transcript() else {
+            let Some(source_markdown) = build_lecture_asr_markdown(&lecture) else {
                 continue;
             };
             state
                 .repo
-                .ensure_lecture_notes_job(&lecture, &sha256_text(&transcript))
+                .ensure_lecture_notes_job(&lecture, &sha256_text(&source_markdown))
                 .await?;
         }
     }
     Ok(())
 }
 
-pub fn lecture_is_closed(lecture: &LectureGroup, now: chrono::DateTime<Utc>) -> bool {
+pub fn lecture_is_closed(
+    state: &AppState,
+    lecture: &LectureGroup,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    if let Some(planned_end) = state.course_schedule.planned_end_utc(
+        &lecture.semester,
+        &lecture.course_name,
+        &lecture.date,
+    ) {
+        return now
+            >= planned_end
+                + chrono::Duration::minutes(state.config.notes_schedule_grace_minutes.max(0));
+    }
+
     let Some(offset) = FixedOffset::east_opt(SHANGHAI_OFFSET_SECS) else {
         return false;
     };
@@ -154,6 +181,10 @@ fn parse_clock(value: &str) -> Option<NaiveTime> {
 }
 
 async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
+    if job.recovery_kind.as_deref() == Some("submission_unknown") {
+        reconcile_unknown_submission(state, job).await?;
+        return Ok(());
+    }
     if let Some(conversation_id) = job.conversation_id.as_deref() {
         state
             .repo
@@ -166,8 +197,7 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
         .repo
         .get_lecture_group(&job.course_key, &job.lecture_key)
         .await?;
-    let transcript = lecture
-        .combined_transcript()
+    let source_markdown = build_lecture_asr_markdown(&lecture)
         .ok_or_else(|| AppError::BadRequest("Notes 提交时完整课堂 ASR 已不再可用".to_string()))?;
     let client = bridge_client(state)?;
     let url = format!(
@@ -179,7 +209,9 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
             "mode": "new",
             "targetMode": "guardian",
             "projectName": state.config.notes_project_name,
-            "text": transcript,
+            // 和课程库下载的完整 lecture ASR 使用完全相同的 Markdown。
+            // 不再为了给 ChatGPT 发送而另造一份“抽掉元数据”的正文，避免后续两套格式漂移。
+            "text": source_markdown,
         })),
         state,
     );
@@ -199,9 +231,9 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
         Err(error) => {
             state
                 .repo
-                .mark_lecture_notes_failed(
+                .mark_lecture_notes_submission_unknown(
                     &job.lecture_key,
-                    &format!("Archive 提交结果不确定，已停止自动重试: {error}"),
+                    &format!("Archive 提交结果未知，正在异步核对已有 conversation: {error}"),
                 )
                 .await?;
             return Ok(());
@@ -210,7 +242,7 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    if matches!(status.as_u16(), 429 | 502 | 503 | 504) {
+    if status.as_u16() == 429 {
         state
             .repo
             .mark_lecture_notes_pending_error(
@@ -220,12 +252,40 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
             .await?;
         return Ok(());
     }
-    if !status.is_success() {
+    if matches!(status.as_u16(), 502..=504) {
         state
             .repo
-            .mark_lecture_notes_failed(
+            .mark_lecture_notes_submission_unknown(
+                &job.lecture_key,
+                &format!(
+                    "Archive/代理返回 {status}，不能证明提交是否已到达；正在异步核对已有 conversation: {}",
+                    truncate(&body, 180)
+                ),
+            )
+            .await?;
+        return Ok(());
+    }
+    if !status.is_success() {
+        if status == StatusCode::CONFLICT && body.contains("DOM drift detected before navigation") {
+            state
+                .repo
+                .mark_lecture_notes_failed_with_kind(
+                    &job.lecture_key,
+                    &format!(
+                        "Archive 明确在导航前拒绝提交，可安全重新提交: {}",
+                        truncate(&body, 240)
+                    ),
+                    "safe_resubmit",
+                )
+                .await?;
+            return Ok(());
+        }
+        state
+            .repo
+            .mark_lecture_notes_failed_with_kind(
                 &job.lecture_key,
                 &format!("Archive 提交失败: HTTP {status} {}", truncate(&body, 240)),
+                "manual_review",
             )
             .await?;
         return Ok(());
@@ -237,17 +297,142 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
         .pointer("/result/conversationId")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::Internal("Archive 已接受提交但没有返回 conversationId".to_string())
-        })?;
+        .map(ToOwned::to_owned);
+    let Some(conversation_id) = conversation_id else {
+        state
+            .repo
+            .mark_lecture_notes_submission_unknown(
+                &job.lecture_key,
+                "Archive 返回成功但缺少 conversationId；正在异步核对已有 conversation",
+            )
+            .await?;
+        return Ok(());
+    };
     state
         .repo
-        .mark_lecture_notes_generating(&job.lecture_key, conversation_id)
+        .mark_lecture_notes_generating(&job.lecture_key, &conversation_id)
         .await?;
     info!(
         "Phase 3 Notes 已提交: lecture_key={}, conversation_id={}",
         job.lecture_key, conversation_id
     );
+    Ok(())
+}
+
+async fn reconcile_unknown_submission(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
+    let client = bridge_client(state)?;
+    let base = state.config.archive_bridge_base_url.trim_end_matches('/');
+    let response = match apply_bridge_auth(
+        client
+            .get(format!("{base}/v1/search"))
+            .query(&[("q", job.lecture_key.as_str()), ("limit", "20")]),
+        state,
+    )
+    .send()
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!("提交结果未知；Archive 搜索暂不可达，稍后继续核对: {error}"),
+                )
+                .await?;
+            return Ok(());
+        }
+    };
+    if !response.status().is_success() {
+        state
+            .repo
+            .update_lecture_notes_error(
+                &job.lecture_key,
+                &format!(
+                    "提交结果未知；Archive 搜索返回 HTTP {}，稍后继续核对",
+                    response.status()
+                ),
+            )
+            .await?;
+        return Ok(());
+    }
+    let payload: Value = response.json().await?;
+    let mut candidates = payload
+        .get("hits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|hit| hit.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(|hit| hit.get("conversationId").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+
+    let marker = format!("Lecture Key：{}", job.lecture_key);
+    let mut verified = Vec::new();
+    for conversation_id in candidates {
+        let messages = match apply_bridge_auth(
+            client.get(format!(
+                "{base}/v1/conversations/{}/messages?limit=80",
+                urlencoding::encode(&conversation_id)
+            )),
+            state,
+        )
+        .send()
+        .await
+        {
+            Ok(response) if response.status().is_success() => response.json::<Value>().await?,
+            _ => continue,
+        };
+        let exact_match = messages
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|message| {
+                message.get("role").and_then(Value::as_str) == Some("user")
+                    && message
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| text.contains(&marker))
+            });
+        if exact_match {
+            verified.push(conversation_id);
+        }
+    }
+
+    match verified.as_slice() {
+        [conversation_id] => {
+            state
+                .repo
+                .mark_lecture_notes_generating(&job.lecture_key, conversation_id)
+                .await?;
+            info!(
+                "Phase 3 Notes 已从提交结果未知状态认领 conversation: lecture_key={}, conversation_id={}",
+                job.lecture_key, conversation_id
+            );
+        }
+        [] => {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    "提交结果未知；Archive 暂未找到带相同 Lecture Key 的用户消息，将继续异步核对。若人工确认不存在，可在前端强制重建 conversation。",
+                )
+                .await?;
+        }
+        _ => {
+            state
+                .repo
+                .mark_lecture_notes_failed_with_kind(
+                    &job.lecture_key,
+                    "Archive 找到多个带同一 Lecture Key 的 conversation，无法自动判定，应人工选择后再继续",
+                    "manual_review",
+                )
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -397,12 +582,18 @@ async fn process_title_stage(
         .notes_final_ordinal
         .ok_or_else(|| AppError::Internal("标题阶段缺少 notes_final_ordinal".to_string()))?;
 
+    let existing_titles = state
+        .repo
+        .list_lecture_note_titles_for_course(&job.course_name, &job.lecture_key)
+        .await?;
+
     if job.title_requested_at.is_none() {
+        let title_prompt = build_title_prompt(&existing_titles, None);
         let request = apply_bridge_auth(
             client.post(format!("{base}/v1/turns")).json(&json!({
                 "mode": "continue",
                 "conversationId": conversation_id,
-                "text": TITLE_PROMPT,
+                "text": title_prompt,
             })),
             state,
         );
@@ -525,11 +716,32 @@ async fn process_title_stage(
             .and_then(Value::as_str)
             .unwrap_or_default(),
     );
-    if title.is_empty() {
-        state
-            .repo
-            .mark_lecture_notes_failed(&job.lecture_key, "标题模型返回空标题")
-            .await?;
+    let rejection = title_rejection_reason(&title, &existing_titles);
+    if let Some(reason) = rejection {
+        let marker = format!("标题重做请求已提交: {title}");
+        if job.last_error.as_deref() == Some(marker.as_str()) {
+            return Ok(());
+        }
+        let retry_prompt = build_title_prompt(&existing_titles, Some((&title, reason)));
+        let response = apply_bridge_auth(
+            client.post(format!("{base}/v1/turns")).json(&json!({
+                "mode": "continue",
+                "conversationId": conversation_id,
+                "text": retry_prompt,
+            })),
+            state,
+        )
+        .send()
+        .await;
+        let Ok(response) = response else {
+            return Ok(());
+        };
+        if response.status().is_success() {
+            state
+                .repo
+                .update_lecture_notes_error(&job.lecture_key, &marker)
+                .await?;
+        }
         return Ok(());
     }
     state
@@ -912,7 +1124,74 @@ fn normalize_title_response(raw: &str) -> String {
         title.truncate(title.len().saturating_sub(3));
         title = title.trim().to_string();
     }
-    truncate(&title, 40)
+    title
+}
+
+fn build_title_prompt(existing_titles: &[String], rejected: Option<(&str, &str)>) -> String {
+    let existing = if existing_titles.is_empty() {
+        "（暂无）".to_string()
+    } else {
+        existing_titles.join("；")
+    };
+    let retry = rejected
+        .map(|(title, reason)| {
+            format!(
+                "\n你上一版标题“{title}”不合格：{reason}。请重新命名，不要只加“一/二/上/下/续”等弱区分。"
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "请只为你刚刚生成的整堂课堂笔记起一个简洁、具体、可区分的中文主题名。\
+要求：1）概括本堂真正讲授的核心知识主题；2）不要包含课程名、日期、老师姓名、‘课堂笔记’、‘理论课’、‘第几部分’等元信息；\
+3）优先 4～9 个汉字，尽量不超过 12 个汉字；只有确实无法准确概括时才允许更长，但不要超过 {TITLE_MAX_CHARS} 个汉字；\
+4）同一课程不同课堂的名字必须能一眼区分，不能重名，也不要用‘病理一/病理二’、‘上/下/续’这类序号式弱区分；主题接近时，应写出真正不同的知识点；\
+5）只输出标题本身，不要加序号、引号、解释、Markdown 标记或句号。\
+同一课程已经使用过的标题：{existing}。{retry}"
+    )
+}
+
+fn canonical_title(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && !ch.is_ascii_punctuation())
+        .filter(|ch| {
+            !matches!(
+                ch,
+                '，' | '。'
+                    | '、'
+                    | '；'
+                    | '：'
+                    | '！'
+                    | '？'
+                    | '（'
+                    | '）'
+                    | '《'
+                    | '》'
+                    | '“'
+                    | '”'
+                    | '‘'
+                    | '’'
+            )
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+fn title_rejection_reason<'a>(title: &str, existing_titles: &'a [String]) -> Option<&'a str> {
+    if title.trim().is_empty() {
+        return Some("标题为空");
+    }
+    if title.chars().count() > TITLE_MAX_CHARS {
+        return Some("标题过长");
+    }
+    let canonical = canonical_title(title);
+    if existing_titles
+        .iter()
+        .any(|existing| canonical_title(existing) == canonical)
+    {
+        return Some("与同一课程已有标题重复");
+    }
+    None
 }
 
 fn github_contents_url(repo: &str, path: &str) -> AppResult<Url> {
@@ -1061,6 +1340,28 @@ mod tests {
             ),
             "宫颈癌、子宫内膜异位症与子宫体肿瘤"
         );
+    }
+
+    #[test]
+    fn title_prompt_should_prefer_short_distinct_names() {
+        let prompt = build_title_prompt(&["肾功能不全".to_string()], None);
+        assert!(prompt.contains("优先 4～9 个汉字"));
+        assert!(prompt.contains("尽量不超过 12 个汉字"));
+        assert!(prompt.contains("肾功能不全"));
+    }
+
+    #[test]
+    fn duplicate_title_should_be_rejected_after_punctuation_normalization() {
+        assert_eq!(
+            title_rejection_reason("肾功能不全！", &["肾功能不全".to_string()]),
+            Some("与同一课程已有标题重复")
+        );
+    }
+
+    #[test]
+    fn overly_long_title_should_be_rejected_for_retry() {
+        let title = "这是一个明显超过二十四个汉字并且完全没有必要这么长的课堂主题名称";
+        assert_eq!(title_rejection_reason(title, &[]), Some("标题过长"));
     }
 
     #[test]

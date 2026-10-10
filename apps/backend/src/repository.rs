@@ -171,6 +171,7 @@ impl Repository {
                 github_notes_path TEXT,
                 github_commit_sha TEXT,
                 last_error TEXT,
+                recovery_kind TEXT,
                 submit_attempt_count INTEGER NOT NULL DEFAULT 0,
                 submitted_at TEXT,
                 completed_at TEXT,
@@ -211,6 +212,31 @@ impl Repository {
             .await?;
         self.ensure_optional_lecture_notes_column("title_requested_at", "TEXT")
             .await?;
+        self.ensure_optional_lecture_notes_column("recovery_kind", "TEXT")
+            .await?;
+        // 兼容 Phase 3 早期留下的两类已知失败，让升级后前端和 worker 能立刻用新语义接管。
+        sqlx::query(
+            r#"
+            UPDATE lecture_notes
+            SET status='pending', recovery_kind='submission_unknown'
+            WHERE status='failed'
+              AND recovery_kind IS NULL
+              AND last_error LIKE '%提交结果不确定%'
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            r#"
+            UPDATE lecture_notes
+            SET recovery_kind='safe_resubmit'
+            WHERE status='failed'
+              AND recovery_kind IS NULL
+              AND last_error LIKE '%DOM drift detected before navigation%'
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -1015,6 +1041,9 @@ impl Repository {
                 summary.notes_title = notes.notes_title.clone();
                 summary.notes_ready = notes.status == LectureNotesStatus::Succeeded;
                 summary.notes_last_error = notes.last_error.clone();
+                summary.notes_recovery_kind = notes.recovery_kind.clone();
+                summary.notes_conversation_id = notes.conversation_id.clone();
+                summary.notes_submitted_at = notes.submitted_at.clone();
                 summary.notes_github_path = notes.github_notes_path.clone();
             }
         }
@@ -1068,6 +1097,29 @@ impl Repository {
             .fetch_optional(&self.pool)
             .await?;
         row.as_ref().map(map_lecture_notes_row).transpose()
+    }
+
+    pub async fn list_lecture_note_titles_for_course(
+        &self,
+        course_name: &str,
+        exclude_lecture_key: &str,
+    ) -> AppResult<Vec<String>> {
+        Ok(sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT notes_title
+            FROM lecture_notes
+            WHERE course_name = ?
+              AND lecture_key <> ?
+              AND notes_title IS NOT NULL
+              AND trim(notes_title) <> ''
+              AND status IN ('publishing', 'succeeded')
+            ORDER BY sequence_no ASC
+            "#,
+        )
+        .bind(course_name)
+        .bind(exclude_lecture_key)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     pub async fn ensure_lecture_notes_job(
@@ -1145,7 +1197,7 @@ impl Repository {
         lecture_key: &str,
         error: &str,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='pending', last_error=?, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='pending', last_error=?, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
             .bind(error)
             .bind(Utc::now().to_rfc3339())
             .bind(lecture_key)
@@ -1161,7 +1213,7 @@ impl Repository {
     ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "UPDATE lecture_notes SET status='generating', conversation_id=?, submit_attempt_count=submit_attempt_count+1, submitted_at=COALESCE(submitted_at, ?), last_error=NULL, updated_at=? WHERE lecture_key=?",
+            "UPDATE lecture_notes SET status='generating', conversation_id=?, submit_attempt_count=submit_attempt_count+1, submitted_at=COALESCE(submitted_at, ?), last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?",
         )
         .bind(conversation_id)
         .bind(&now)
@@ -1173,12 +1225,39 @@ impl Repository {
     }
 
     pub async fn mark_lecture_notes_failed(&self, lecture_key: &str, error: &str) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='failed', last_error=?, updated_at=? WHERE lecture_key=?")
+        self.mark_lecture_notes_failed_with_kind(lecture_key, error, "manual_review")
+            .await
+    }
+
+    pub async fn mark_lecture_notes_failed_with_kind(
+        &self,
+        lecture_key: &str,
+        error: &str,
+        recovery_kind: &str,
+    ) -> AppResult<()> {
+        sqlx::query("UPDATE lecture_notes SET status='failed', last_error=?, recovery_kind=?, updated_at=? WHERE lecture_key=?")
             .bind(error)
+            .bind(recovery_kind)
             .bind(Utc::now().to_rfc3339())
             .bind(lecture_key)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub async fn mark_lecture_notes_submission_unknown(
+        &self,
+        lecture_key: &str,
+        error: &str,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE lecture_notes SET status='pending', last_error=?, recovery_kind='submission_unknown', updated_at=? WHERE lecture_key=?",
+        )
+        .bind(error)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -1203,7 +1282,7 @@ impl Repository {
         notes_sha256: &str,
         final_ordinal: i64,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=NULL, notes_markdown=?, notes_sha256=?, notes_final_ordinal=?, title_requested_at=NULL, last_error=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=NULL, notes_markdown=?, notes_sha256=?, notes_final_ordinal=?, title_requested_at=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
             .bind(markdown)
             .bind(notes_sha256)
             .bind(final_ordinal)
@@ -1215,7 +1294,7 @@ impl Repository {
     }
 
     pub async fn mark_lecture_notes_title_requested(&self, lecture_key: &str) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET title_requested_at=?, last_error=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET title_requested_at=?, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
             .bind(Utc::now().to_rfc3339())
             .bind(Utc::now().to_rfc3339())
             .bind(lecture_key)
@@ -1229,7 +1308,7 @@ impl Repository {
         lecture_key: &str,
         title: &str,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='publishing', notes_title=?, last_error=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='publishing', notes_title=?, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
             .bind(title)
             .bind(Utc::now().to_rfc3339())
             .bind(lecture_key)
@@ -1246,7 +1325,7 @@ impl Repository {
         github_commit_sha: Option<&str>,
     ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE lecture_notes SET status='succeeded', github_audio_path=?, github_notes_path=?, github_commit_sha=?, last_error=NULL, completed_at=?, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='succeeded', github_audio_path=?, github_notes_path=?, github_commit_sha=?, last_error=NULL, recovery_kind=NULL, completed_at=?, updated_at=? WHERE lecture_key=?")
             .bind(github_audio_path)
             .bind(github_notes_path)
             .bind(github_commit_sha)
@@ -1272,10 +1351,80 @@ impl Repository {
             if existing.notes_markdown.as_deref().is_some_and(|value| !value.trim().is_empty())
                 && existing.conversation_id.as_deref().is_some_and(|value| !value.trim().is_empty())
             {
-                "UPDATE lecture_notes SET status='generating', notes_title=NULL, title_requested_at=NULL, last_error=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+                "UPDATE lecture_notes SET status='generating', notes_title=NULL, title_requested_at=NULL, last_error=NULL, recovery_kind=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
             } else {
-                "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+                "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
             },
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn prepare_lecture_notes_safe_resubmit(&self, lecture_key: &str) -> AppResult<()> {
+        let existing = self
+            .get_lecture_notes(lecture_key)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Notes 任务不存在".to_string()))?;
+        if existing.recovery_kind.as_deref() != Some("safe_resubmit") {
+            return Err(AppError::BadRequest(
+                "当前失败没有被证明为“明确未提交”，禁止直接重建 conversation".to_string(),
+            ));
+        }
+        sqlx::query(
+            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn force_lecture_notes_resubmit_after_review(
+        &self,
+        lecture_key: &str,
+    ) -> AppResult<()> {
+        let existing = self
+            .get_lecture_notes(lecture_key)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Notes 任务不存在".to_string()))?;
+        if existing.recovery_kind.as_deref() != Some("submission_unknown") {
+            return Err(AppError::BadRequest(
+                "只有“提交结果未知”的任务允许人工确认后强制重建 conversation".to_string(),
+            ));
+        }
+        sqlx::query(
+            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn resume_lecture_notes_existing_conversation(
+        &self,
+        lecture_key: &str,
+    ) -> AppResult<()> {
+        let existing = self
+            .get_lecture_notes(lecture_key)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Notes 任务不存在".to_string()))?;
+        if existing
+            .conversation_id
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(AppError::BadRequest(
+                "当前任务没有已知 conversation_id，不能从已有会话继续".to_string(),
+            ));
+        }
+        sqlx::query(
+            "UPDATE lecture_notes SET status='generating', last_error=NULL, recovery_kind=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
         )
         .bind(Utc::now().to_rfc3339())
         .bind(lecture_key)
@@ -1463,6 +1612,7 @@ fn map_lecture_notes_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<LectureNote
         github_notes_path: row.get("github_notes_path"),
         github_commit_sha: row.get("github_commit_sha"),
         last_error: row.get("last_error"),
+        recovery_kind: row.get("recovery_kind"),
         submit_attempt_count: row.get("submit_attempt_count"),
         submitted_at: row.get("submitted_at"),
         completed_at: row.get("completed_at"),

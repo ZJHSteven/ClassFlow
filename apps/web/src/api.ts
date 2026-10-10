@@ -243,6 +243,27 @@ export async function retryLectureNotes(courseKey: string, lectureKey: string): 
   )
 }
 
+export type LectureNotesRecoveryAction =
+  | 'reconcile'
+  | 'safe_resubmit'
+  | 'force_resubmit'
+  | 'resume_existing'
+
+export async function recoverLectureNotes(
+  courseKey: string,
+  lectureKey: string,
+  action: LectureNotesRecoveryAction,
+): Promise<void> {
+  await readJson(
+    `/api/v1/courses/${encodeURIComponent(courseKey)}/lectures/${encodeURIComponent(lectureKey)}/notes/recover`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action }),
+    },
+  )
+}
+
 export function getTaskArtifactUrl(taskId: string, artifactName: TaskArtifactName): string {
   return `/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${artifactName}`
 }

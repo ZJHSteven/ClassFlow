@@ -8,6 +8,22 @@
 - 正式实验工具面固定为禁用 Pi 内建工具、只开放 codex_search、每次 --no-session。OAuth 后依次进行 auth readiness、真实模型目录、搜索 smoke、Mihomo 路由复核，再跑 2 样本 × 4 模型矩阵。
 - 重试语义同步修正：客户端没收到反馈只代表 transport unknown，不等于服务端没接受；已有 CID/job identity 时继续异步取回，unknown 状态优先通过 client request id / idempotency / Bridge audit 反查，只有明确 terminal retryable 才重建 conversation。
 
+# 2026-10-10 Phase 3 正式结项
+
+- Phase 3 生产主链已从“单堂 smoke”升级为连续三堂真实课全部 `succeeded`：
+  - `2026-10-08 13:30-16:15` -> conversation `6ac9426f-6124-83e9-9cc8-84f010189e53` -> `子宫卵巢与乳腺肿瘤`；
+  - `2026-10-09 13:30-16:15` -> conversation `6ac9e328-f8fc-83ea-8f1e-bdbbec69b752` -> `急性肾损伤机制与表现`；
+  - `2026-10-10 08:00-08:45` -> conversation `6ac9eb3d-d298-83ea-b976-10e989bdde24` -> `慢性肾衰机制与表现`。
+- 10/9 的 Bridge 响应曾在客户端侧丢失，但实际 Project conversation 已存在；现在数据库支持 `submission_unknown`，会用 Lecture Key 通过 Archive 本地索引反查并验证用户消息，找到唯一 CID 后自动认领继续，禁止盲目双发。
+- 10/10 的旧失败是 `DOM drift detected before navigation`，Archive 明确证明请求尚未导航，因此归类为 `safe_resubmit`；DOM baseline 修复后安全重新提交成功，没有制造重复 conversation。
+- Notes 首次输入不再维护第二套“轻量正文”，直接复用课程库可下载的完整 lecture Markdown，保留学期/课程/老师/日期/时间/录像片段数/Lecture Key，便于审计和模糊提交恢复。
+- lecture 封堂现在优先使用 LifeOps/学习通课表先验：快照包含 13 门课程、56 个时间块；有匹配课表时按计划结束时间 + 15min grace 进入 Notes，无匹配课表才退回原来的录像间隔启发式。10/9 三段明确聚成 `13:30-16:15` 一堂，10/10 明确只是一节 `08:00-08:45`。
+- 标题规则已收紧：优先 4-9 个汉字、尽量不超过 12 个字，确实无法概括时最多 24 字；同一课程历史标题会随 title-only prompt 一并提供，重复标题或过长标题会在同一 CID 自动要求重命名，不允许“病理一/病理二/上/下/续”式弱区分。
+- 前端已改为课程级“课程 ASR / Notes”双视图。45min SmartClass segment 只作为后台聚合信息，不再逐段暴露“查看/下载 ASR”；课程级保留课程 ASR、课程清单、Notes 下载，异常时按 `submission_unknown / safe_resubmit / manual_review` 显示不同恢复动作。
+- 本轮最终回归：backend 58/58 unit + 11/11 API、`cargo fmt --check`、Clippy `-D warnings` 全绿；web 23/23 Vitest + production build 全绿。
+- ARM64 production binary SHA256=`f67ddaa60317fcf52e10d9a7b0012a932c95a988806ea317194f9f3c4acf7fe9`，与 N1 当前运行文件完全一致；N1 15:36 启动日志明确加载 13 门课程课表先验。最新前端 Worker Version ID=`52bd1590-b3bb-4a96-8db2-165a8742be46`。
+- 结论：Phase 3（lecture -> ASR -> ChatGPT Project Notes -> title -> GitHub -> 课程库展示/恢复）正式结项。后续工作转入 Phase 2.5 课表驱动采集、Phase 3X Pi/Codex 旁路对照、全阶段通知和 Phase 5 摘要/分享，不再作为 Phase 3 阻塞项。
+
 # 2026-10-10 Phase 3 首堂生产 E2E 已闭环
 
 - 单堂 smoke：`2026-10-08 泌尿生殖系统 / 王栋`，lecture key=`778240ecd041a40a7ef28f4c50a8b858a1e353e4d8579b85ce40fed820f9dfe9`，Notes conversation=`6ac9426f-6124-83e9-9cc8-84f010189e53`。

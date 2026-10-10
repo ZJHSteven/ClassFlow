@@ -21,6 +21,7 @@ use axum::{
 };
 use chrono::Utc;
 use futures_util::stream;
+use serde::Deserialize;
 use serde_json::json;
 use std::{convert::Infallible, time::Duration};
 
@@ -29,7 +30,7 @@ use crate::{
     course::build_lecture_asr_markdown,
     error::{AppError, AppResult},
     models::{CourseListQuery, IntakeBatchRequest, TaskListQuery, TaskStatus},
-    notes::enqueue_lecture_notes,
+    notes::{enqueue_lecture_notes, reconcile_lecture_notes_now},
     smartclass_session::SmartClassLoginRequest,
     worker::sync_course_artifacts,
 };
@@ -58,6 +59,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/courses/{course_key}/lectures/{lecture_key}/notes/retry",
             post(retry_lecture_notes),
+        )
+        .route(
+            "/courses/{course_key}/lectures/{lecture_key}/notes/recover",
+            post(recover_lecture_notes),
         )
         .route("/intake/batches", post(create_batch))
         .route("/smartclass/auth", get(get_smartclass_auth))
@@ -432,12 +437,88 @@ async fn retry_lecture_notes(
     Path((course_key, lecture_key)): Path<(String, String)>,
 ) -> AppResult<impl IntoResponse> {
     let job = enqueue_lecture_notes(&state, &course_key, &lecture_key).await?;
+    if job.status == crate::models::LectureNotesStatus::Failed
+        || job.recovery_kind.as_deref() == Some("submission_unknown")
+    {
+        return Err(AppError::BadRequest(
+            "该 Notes 任务需要使用精细恢复动作，不能使用旧版通用重试".to_string(),
+        ));
+    }
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({
             "lecture_key": job.lecture_key,
             "status": job.status.as_str(),
             "conversation_id": job.conversation_id,
+        })),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct RecoverLectureNotesRequest {
+    action: String,
+}
+
+async fn recover_lecture_notes(
+    State(state): State<AppState>,
+    Path((course_key, lecture_key)): Path<(String, String)>,
+    Json(request): Json<RecoverLectureNotesRequest>,
+) -> AppResult<impl IntoResponse> {
+    state
+        .repo
+        .get_lecture_group(&course_key, &lecture_key)
+        .await?;
+
+    let job = match request.action.as_str() {
+        "reconcile" => reconcile_lecture_notes_now(&state, &lecture_key).await?,
+        "safe_resubmit" => {
+            state
+                .repo
+                .prepare_lecture_notes_safe_resubmit(&lecture_key)
+                .await?;
+            state
+                .repo
+                .get_lecture_notes(&lecture_key)
+                .await?
+                .ok_or_else(|| AppError::Internal("安全重新提交后无法读回任务".to_string()))?
+        }
+        "force_resubmit" => {
+            state
+                .repo
+                .force_lecture_notes_resubmit_after_review(&lecture_key)
+                .await?;
+            state
+                .repo
+                .get_lecture_notes(&lecture_key)
+                .await?
+                .ok_or_else(|| AppError::Internal("强制重新提交后无法读回任务".to_string()))?
+        }
+        "resume_existing" => {
+            state
+                .repo
+                .resume_lecture_notes_existing_conversation(&lecture_key)
+                .await?;
+            state
+                .repo
+                .get_lecture_notes(&lecture_key)
+                .await?
+                .ok_or_else(|| AppError::Internal("继续已有会话后无法读回任务".to_string()))?
+        }
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "未知 Notes 恢复动作: {other}"
+            )));
+        }
+    };
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "lecture_key": job.lecture_key,
+            "status": job.status.as_str(),
+            "conversation_id": job.conversation_id,
+            "recovery_kind": job.recovery_kind,
+            "last_error": job.last_error,
         })),
     ))
 }

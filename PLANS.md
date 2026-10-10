@@ -14,6 +14,8 @@
 
 重试不再只有“重建整个 conversation”一种语义：
 
+**当前状态：已完成并部署。** 生产实现使用持久化 `recovery_kind`：`submission_unknown` 只反查/认领已有 conversation，`safe_resubmit` 仅用于 Archive 明确证明未导航/未提交的错误，`manual_review` 保留人工判断；前端对应拆成“核对已有会话 / 安全重新提交 / 确认不存在后重建 / 从已有会话继续”。
+
 1. not_submitted：能证明上游从未接受，才允许安全自动提交。
 2. accepted / cid_known：已有 conversation/job identity 后，本地断网、Bridge 502、客户端超时都只继续异步取回，绝不重建。
 3. transport_unknown：客户端没收到响应不等于服务端没收到；优先用 client_request_id / idempotency_key / Bridge audit 反查，查到就转 accepted，明确未创建才转 not_submitted；协议暂时无法证明时继续 fail-safe 等待，不盲目双发。
@@ -36,17 +38,17 @@
 
 本阶段不再在 Windows 本机维护课程笔记 working tree，也不让 Cloudflare Worker 轮询 Archive。N1 ClassFlow backend 作为唯一任务状态机，Archive Bridge 只是异步黑盒生成器，GitHub 是最终同步源。
 
-1. **输入单元**：继续使用现有 lecture 聚类（同日/同课程/同老师、课间 <=30min、最多 4 个 SmartClass segment），只有完整 lecture ASR 齐备后才能创建 Notes 子任务。
-2. **提交**：N1 调 Archive Bridge `POST /v1/turns`，固定 `mode=new / targetMode=guardian / projectName=课堂录音→笔记`，正文为完整 lecture transcript。Bridge 返回 canonical conversation ID 后立即 checkpoint 到 SQLite。
+1. **输入单元**：继续使用现有 lecture 聚类（同日/同课程/同老师、课间 <=30min、最多 4 个 SmartClass segment），只有完整 lecture ASR 齐备后才能创建 Notes 子任务。实时封堂优先读取 LifeOps/学习通课表先验，以计划结束时间 + grace 判断整堂课是否结束；没有课表匹配时才回退录像间隔启发式。
+2. **提交**：N1 调 Archive Bridge `POST /v1/turns`，固定 `mode=new / targetMode=guardian / projectName=课堂录音→笔记`，正文直接复用课程库同一份完整 lecture Markdown（包含课程元数据和 Lecture Key），不再另造第二套 transcript 文本。Bridge 返回 canonical conversation ID 后立即 checkpoint 到 SQLite。
 3. **等待**：N1 之后只轮询自家 Archive Bridge 的 canonical 生命周期接口，不轮询 ChatGPT。Bridge/Windows 离线、连接失败等明确“未提交”错误保持 pending 并自动稍后再试；CID 已拿到后即使网络中断也绝不重发，只等待 body/final 恢复。
-4. **失败**：Archive incident / abnormal terminal / 明确业务错误标记 Notes failed，不自动创建新 conversation，前端提供手动 retry。对“请求是否已提交”无法判定的模糊网络错误同样 fail-safe 等人工处理，避免重复笔记。
+4. **失败**：失败分三类：`submission_unknown` 自动只做 Archive 反查与 CID 认领、绝不重发；`safe_resubmit` 仅在 Archive 明确证明请求未导航/未提交时允许重建；其余不确定或异常终止进入 `manual_review`。前端按状态显示不同恢复动作，不再只有一个“重试 Notes”。
 5. **成功**：读取最后一个 canonical assistant final 作为 `notes.md`；生成稳定课程内序号 + 具体主题文件名。标题第一版优先复用 ChatGPT conversation title；过泛时后续再加 title-only model，不阻塞 MVP。
 6. **GitHub 发布**：N1 直接调用 GitHub API 写入 `ZJHSteven/med-notes-2026-fall-y3`，不在 N1 维护 git working tree。每堂 lecture 至少发布 `课程/Audio/<日期-时间>-ASR.md` 与 `课程/Notes/<序号>-<标题>.md`。Windows 桌面 `大三上笔记` 只作为普通 clone，用户手动 `git pull` 即可。
 7. **前端**：课程库每堂 lecture 显示 Notes 状态（等待提交/生成中/完成/失败），支持 Markdown 直接查看 ASR/Notes，同时保留下载按钮和失败后的手动 retry。
 8. **未来分享站**：直接以 GitHub 仓库或 ClassFlow API 为只读数据源渲染 Markdown，供朋友浏览实时更新的 ASR 与 Notes；不让分享站拥有 Archive/ChatGPT 控制权限。
 9. **聊天展示层剥离**：Archive final 若包含 ChatGPT `:::writing{...}` document block，ClassFlow 发布前只取 block 内 Markdown，并丢弃 block 前后的聊天说明。GitHub 中永远保存可直接渲染的纯 Markdown，不保存 ChatGPT UI wrapper。
 10. **严格复用“大二下”文件命名**：Audio 固定为 `月.日-课程-老师.md`；Notes 固定为课程目录内 `N-主题.md`。Notes 主题不得直接复用课程名、ChatGPT conversation title 或“理论课第三部分”等元信息。
-11. **标题独立二阶段**：Notes final 先落 checkpoint；随后通过 Archive Bridge 在同一 Project conversation 上 `mode=continue` 追加一个 title-only turn，只返回 12~32 字的具体主题。记录 `notes_final_ordinal` 与 `title_requested_at`，确保标题阶段断线/重启不会重新生成整堂 Notes；标题失败时人工 retry 只重试标题阶段。
+11. **标题独立二阶段**：Notes final 先落 checkpoint；随后通过 Archive Bridge 在同一 Project conversation 上 `mode=continue` 追加一个 title-only turn。标题优先 4~9 个汉字、尽量不超过 12 个汉字，确实无法准确概括时允许更长但硬上限 24 字；同一课程已用标题会随 prompt 一并提供，重复或超长会在同一 CID 自动要求重命名。记录 `notes_final_ordinal` 与 `title_requested_at`，确保标题阶段断线/重启不会重新生成整堂 Notes。
 
 # 2026-10-09 Phase 3 MVP 收敛：优先复用云端“课堂录音→笔记”Project
 
@@ -60,7 +62,7 @@ SmartClass 一条录像仍是约 45 分钟 segment；Notes 的生成单元不能
 2. 按 `start_time` 排序；相邻 segment 的 `next.start - previous.end <= 30min` 时归入同一 lecture；
 3. 课程名/老师变化，或间隔 >30min，立即关闭上一 lecture；
 4. 一簇最多 4 个 segment，异常数据不得无限合并；
-5. 实时新课只有在 `now >= last.end + 30min` 后才进入 `ready_for_notes`，避免课间时提前把前两节发出去；历史/backfill 数据可直接按完整时间轴聚类；
+5. 实时新课优先以课表计划结束时间作为封堂先验；当前生产默认在计划结束 +15min 后允许进入 Notes。若没有匹配课表，才使用 `last.end + 30min` 作为保守 fallback；历史/backfill 数据仍可直接按完整时间轴聚类；
 6. 一个 lecture 的源身份由 `semester + date + course + teacher + first_start + last_end + ordered task ids` 计算稳定 `lecture_key`，manifest 记录全部源 task/hash。
 
 例如 2026-10-08 泌尿生殖系统 13:30/14:25/15:30 三个 45min segment 应合成**一个 lecture**，只创建一个 ChatGPT conversation。

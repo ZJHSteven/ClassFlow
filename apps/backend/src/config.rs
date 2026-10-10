@@ -141,6 +141,8 @@ pub struct AppConfig {
     pub notes_enabled: bool,
     pub notes_auto_since_date: String,
     pub notes_poll_interval_secs: f64,
+    pub course_schedule_path: PathBuf,
+    pub notes_schedule_grace_minutes: i64,
     pub notes_project_name: String,
     pub archive_bridge_base_url: String,
     pub archive_bridge_token: String,
@@ -429,6 +431,14 @@ impl AppConfig {
             notes_enabled: env_or_parse("CLASSFLOW_NOTES_ENABLED", false)?,
             notes_auto_since_date: env_or("CLASSFLOW_NOTES_AUTO_SINCE_DATE", "9999-12-31"),
             notes_poll_interval_secs: env_or_parse("CLASSFLOW_NOTES_POLL_INTERVAL_SECS", 15.0)?,
+            course_schedule_path: PathBuf::from(env_or(
+                "CLASSFLOW_COURSE_SCHEDULE_PATH",
+                "./config/class-schedule-lifeops.json",
+            )),
+            notes_schedule_grace_minutes: env_or_parse(
+                "CLASSFLOW_NOTES_SCHEDULE_GRACE_MINUTES",
+                15,
+            )?,
             notes_project_name: env_or("CLASSFLOW_NOTES_PROJECT_NAME", "课堂录音→笔记"),
             archive_bridge_base_url: env_or(
                 "CLASSFLOW_ARCHIVE_BRIDGE_BASE_URL",

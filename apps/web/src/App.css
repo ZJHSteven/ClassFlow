@@ -743,6 +743,45 @@
   color: #6e8280;
 }
 
+.lectureSelector {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: #526b69;
+  font-size: 0.84rem;
+}
+
+.lectureSelector select {
+  min-width: 0;
+  border: 1px solid rgba(17, 48, 56, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 8px 10px;
+  color: #17343b;
+}
+
+.lectureSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(17, 48, 56, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.lectureSummary > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.lectureSummary span {
+  color: #6e8280;
+  font-size: 0.82rem;
+}
+
 .transferCard {
   display: grid;
   gap: 8px;
@@ -835,6 +874,42 @@
   min-height: 0;
   flex-direction: column;
   gap: 10px;
+}
+
+.artifactSwitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  width: min(340px, 100%);
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(17, 48, 56, 0.08);
+}
+
+.artifactSwitch__button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #617674;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.artifactSwitch__button.is-active {
+  background: rgba(255, 255, 255, 0.96);
+  color: #17343b;
+  box-shadow: 0 5px 14px rgba(15, 49, 52, 0.12);
+}
+
+.artifactSwitch__button:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .previewShell__header {

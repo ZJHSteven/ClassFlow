@@ -623,6 +623,8 @@ mod tests {
             notes_enabled: false,
             notes_auto_since_date: "9999-12-31".to_string(),
             notes_poll_interval_secs: 15.0,
+            course_schedule_path: temp_root.join("class-schedule.json"),
+            notes_schedule_grace_minutes: 15,
             notes_project_name: "课堂录音→笔记".to_string(),
             archive_bridge_base_url: "http://127.0.0.1:47832".to_string(),
             archive_bridge_token: String::new(),

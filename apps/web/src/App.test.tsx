@@ -134,6 +134,14 @@ const courseDetailPayload = {
       segment_count: 1,
       successful_segment_count: 1,
       transcript_ready: true,
+      notes_status: 'succeeded',
+      notes_title: '肾功能不全',
+      notes_ready: true,
+      notes_last_error: null,
+      notes_recovery_kind: null,
+      notes_conversation_id: 'conversation-1',
+      notes_submitted_at: '2026-03-22T00:00:00Z',
+      notes_github_path: '病理学/Notes/1-肾功能不全.md',
       task_ids: ['task-1'],
     },
   ],
@@ -223,6 +231,13 @@ function buildMockResponse(input: RequestInfo | URL): Response {
     })
   }
 
+  if (requestUrl.includes('/api/v1/courses/') && requestUrl.includes('/lectures/') && requestUrl.endsWith('/artifacts/notes.md')) {
+    return new Response('# 肾功能不全\n\n这是测试 Notes', {
+      status: 200,
+      headers: { 'Content-Length': '40' },
+    })
+  }
+
   if (requestUrl.includes('/api/v1/courses/')) {
     return new Response(JSON.stringify(courseDetailPayload), { status: 200 })
   }
@@ -278,7 +293,7 @@ describe('App', () => {
     fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
 
     await waitFor(() => {
-      expect(screen.getByText('课程总稿与交付物')).toBeInTheDocument()
+      expect(screen.getByText('课程 ASR 与 Notes')).toBeInTheDocument()
     })
   })
 
@@ -373,15 +388,35 @@ describe('App', () => {
     expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 8000)
   })
 
-  it('课程库应该提供总稿与清单下载按钮', async () => {
+  it('课程库应该提供课程 ASR、清单与 Notes 下载按钮', async () => {
     render(<App />)
 
     fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: '下载课程总稿' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载课程 ASR' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '下载课程清单' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '下载 Notes' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '下载 ASR' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '查看 ASR' })).not.toBeInTheDocument()
     }, { timeout: 3_000 })
+  })
+
+  it('课程库应该用课程 ASR / Notes 双视图切换预览', async () => {
+    render(<App />)
+
+    fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: '课程 ASR' })).toHaveAttribute('aria-selected', 'true')
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Notes' }))
+
+    await waitFor(() => {
+      expect(document.querySelector('.markdownPreview')?.textContent).toContain('这是测试 Notes')
+      expect(screen.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'true')
+    })
   })
 
   it('任务台应该提供任务级下载按钮', async () => {
@@ -445,7 +480,7 @@ describe('App', () => {
 
     fetchMock.mockClear()
 
-    fireEvent.click(screen.getByRole('button', { name: '下载课程总稿' }))
+    fireEvent.click(screen.getByRole('button', { name: '下载课程 ASR' }))
 
     await waitFor(() => {
       expect(anchorClickSpy).toHaveBeenCalled()
