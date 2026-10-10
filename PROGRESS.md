@@ -1,3 +1,8 @@
+# 2026-10-11 历史 Notes backfill 改为严格串行
+
+- Notes worker 现在只要检测到任意 generating/publishing 任务，就不会再提交新的 pending conversation；一堂课必须完成主 Notes、标题和 GitHub 发布后，下一堂才允许进入 ChatGPT。
+- 该保护与既有 429 cooldown 叠加：避免历史回灌每个 poll 周期都继续开新会话，降低 ChatGPT/Archive 限流与并发状态复杂度。
+- 2026-09-07 综合素养课程5 已完成真实恢复验证：canonical title prompt 被安全认领，没有重复 title turn；最终发布为 综合素养课程5/Notes/1-科研素养与科研诚信.md。
 # 2026-10-11 Notes 标题阶段支持 canonical 反查恢复
 
 - 历史 backfill 暴露出 title-only turn 与主 Notes 一样存在 transport unknown：请求可能已被 ChatGPT 接受，但 ClassFlow 没收到 Bridge 响应。旧逻辑会转 manual_review，之后若直接 resume 会再次提交标题，存在重复 turn 风险。
@@ -540,6 +545,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 
