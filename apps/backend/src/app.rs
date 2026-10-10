@@ -200,7 +200,6 @@ pub async fn build_state(config: AppConfig) -> AppResult<AppState> {
         asr_provider,
         network_health,
         course_schedule,
-        notes_submit_cooldown_until: Arc::new(Mutex::new(None)),
         smartclass_session,
         queue: placeholder_queue,
         task_list_events,

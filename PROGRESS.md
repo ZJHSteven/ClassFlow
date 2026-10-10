@@ -1,3 +1,4 @@
+- 2026-10-11 cooldown 清理首轮编译发现 build_state() 还残留一行已删除字段的初始化；已补删该行，继续全量扫描/回归。
 - 2026-10-11 ClassFlow 本地 429 cooldown 已彻底移除：删除 notes_submit_cooldown_until、CLASSFLOW_NOTES_429_COOLDOWN_SECS、相关解析/测试与测试夹具字段。429/恢复时间现在只有 Archive 一个真相源；历史 submission_unknown/safe_resubmit 数据结构仅为旧任务兼容保留。
 - 2026-10-11 title-only 与标题重做均迁入 Archive 幂等 submission：初次 key 固定到 lecture+notes_final_ordinal，重做 key 再绑定被拒标题 final 的 ordinal。Archive 一旦持久化 queued，ClassFlow 即 checkpoint title_requested_at；之后只查 submission/canonical，retry_waiting/429 不再由 ClassFlow 自己计时。
 - 2026-10-11 Archive submission helper 已拆为只读 get_archive_submission 与 get-or-enqueue 两层；标题进入队列后可持续只读检查 failed/retry_waiting，而不必重建或重复 POST 动态 title prompt。
