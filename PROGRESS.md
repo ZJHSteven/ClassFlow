@@ -1,3 +1,15 @@
+# 2026-10-10 Phase 3 首堂生产 E2E 已闭环
+
+- 单堂 smoke：`2026-10-08 泌尿生殖系统 / 王栋`，lecture key=`778240ecd041a40a7ef28f4c50a8b858a1e353e4d8579b85ce40fed820f9dfe9`，Notes conversation=`6ac9426f-6124-83e9-9cc8-84f010189e53`。
+- 完整 lecture ASR -> Archive Bridge -> Project `课堂录音→笔记` -> Notes final -> 同 CID 标题 continue turn -> GitHub Contents API 全链成功；最终 SQLite 状态=`succeeded`。
+- 最终主题名：`宫颈子宫与卵巢肿瘤、滋养层疾病及乳腺癌`。标题 turn 已由 Archive canonical SQLite 确认为 `finished_successfully / end_turn=1`，没有创建第二个 conversation。
+- GitHub 最终发布 commit=`0a7e3372930d339146765dd91fb07ddb4db0f66f`；规范路径：
+  - `泌尿生殖系统/Audio/10.8-泌尿生殖系统-王栋.md`
+  - `泌尿生殖系统/Notes/1-宫颈子宫与卵巢肿瘤、滋养层疾病及乳腺癌.md`
+- GitHub tree 已核验旧临时路径 `2026-10-08-1330-1615-ASR.md` 与 `1-病理学｜泌尿生殖系统疾病理论课第三部分.md` 均已清理，不会保留重复文件。
+- N1 曾出现一次 `error decoding response body`，最终定位不是 Bridge JSON 格式错误，而是 Windows Archive daemon 意外退出导致 Cloudflare 到本机 origin 返回 502。daemon 恢复后 N1 公网 `/health`=HTTP 200，worker 自动从已有 CID/canonical messages 继续完成标题解析与发布，无需重新生成 Notes。
+- 生产自动 Notes 起点仍为 `2026-10-10`；历史课程不会因为本次 E2E 自动批量回灌，失败历史 job 仍维持人工 retry 策略。
+
 # 2026-10-10 移动端任务/课程详情改为独立页面
 
 - 根因：此前 `@media (max-width: 1100px)` 仅把 `.panel__grid` 从双列改成单列，导致手机端详情被简单堆在完整列表下方；列表越长，用户点击后越难抵达详情。
