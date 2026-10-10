@@ -114,7 +114,7 @@ export function useResponsiveDetailNavigation(scope: string) {
 
     // 详情替换列表后，把视口带回当前 panel 顶部，而不是停在原列表深处的 scrollY。
     window.requestAnimationFrame(() => {
-      panelRef.current?.scrollIntoView({
+      panelRef.current?.scrollIntoView?.({
         block: 'start',
         behavior: 'auto',
       })
