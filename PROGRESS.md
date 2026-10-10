@@ -1,3 +1,11 @@
+# 2026-10-10 Phase 3 架构收敛：Notes 复用既有 course 聚合
+
+- 已确认用户质疑成立：ClassFlow 早期即以 `course_key = semester|date|course|teacher` 作为课程聚合真相源，并持续生成 `manifest.json + merged/course.md`；Phase 3 后来新增的“30 分钟课间 + 最多 4 段”lecture 聚类属于重复业务边界。
+- 生产数据库实证：2026-09-01 以来旧 course 聚合共 22 组，新 lecture 算法也得到 22 组，单组最多 3 个 segment，没有任何真实课程因新规则获得额外拆分价值。
+- 代码已收敛：保留 `LectureGroup/lecture_key` 仅作为现有 Notes 状态机与 API 的兼容包装/稳定 ID；`group_tasks_into_lectures()` 现在只按既有 `course_key` 分组，不再使用 30 分钟间隔或 4 段上限重新定义课堂。
+- `LECTURE_MAX_GAP_MINUTES=30` 仅保留为“无课表时，最后录像结束后多久允许启动 Notes”的 fallback grace，不再参与分组。
+- 回归已通过 backend 58/58 unit、11/11 API integration、cargo fmt、Clippy -D warnings。
+- 当前历史补跑事实：tasks 中 234 条 succeeded、10 条 failed；本学期 9/7 至 10/10 已成功 ASR 的 course 聚合约 22 堂，而 lecture_notes 目前只有 3 条且全部 succeeded，因此约 19 堂历史课程尚未进入 Notes 状态机，后续将从 2026-09-01 起逐步 backfill。
 # 2026-10-10 Pi/Codex Notes 旁路实验已启动
 
 - Life Ops 已把 ClassFlow 新规划拆成独立子项：精细失败判定与重试路由、N1 Pi/Codex 原生搜索 Notes 对照实验、代理 fail-closed、全阶段通知、Notes 二次摘要推送、朋友 ASR/Notes 分享页；ClassFlow 根项下一步已改为“生产主线收口 + 旁路实验并行”。
@@ -489,3 +497,4 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+

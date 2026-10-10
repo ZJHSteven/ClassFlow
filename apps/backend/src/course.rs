@@ -15,18 +15,18 @@ use crate::models::{
     CourseSummaryResponse, LectureSummaryResponse, NormalizedTranscript, TaskRecord, TaskStatus,
 };
 
-/// 两个 SmartClass 录像片段之间允许被视为同一堂完整课的最大课间。
+/// 无课表先验时，Notes worker 在课程最后一个录像结束后继续等待的保守时间。
 ///
-/// 天津医科大学当前常见节次间隔是 10~20 分钟；30 分钟留出足够余量，又不会把下午
-/// 同一门课的另一场独立教学误并进来。
+/// 注意：这个常量**不再参与课程分组**。ClassFlow 早已有稳定的
+/// `course_key = semester|date|course|teacher` 聚合层，Phase 3 直接复用它；
+/// 这里只把 30 分钟当作“课程大概率已经结束”的 fallback grace。
 pub const LECTURE_MAX_GAP_MINUTES: i64 = 30;
 
-/// 一堂完整课最多允许合并的 45 分钟录像数。
+/// Phase 3 对既有 course 聚合的兼容包装。
 ///
-/// 这是异常数据保护，不是正常排课假设。用户当前实际课程通常 2~3 节，极端不超过 4 节。
-pub const LECTURE_MAX_SEGMENTS: usize = 4;
-
-/// Phase 3 的最小生成单元：一堂“完整 lecture”，而不是单个 45 分钟录像。
+/// 历史上 ClassFlow 已经按 `course_key` 把同日、同课程、同老师的 SmartClass 片段
+/// 聚合成 manifest / merged course。这里保留 `LectureGroup` 类型，是为了不破坏
+/// 已上线的 Notes 状态机/API 字段；它不再维护第二套“30 分钟课间/最多 4 段”的业务边界。
 #[derive(Debug, Clone)]
 pub struct LectureGroup {
     pub lecture_key: String,
@@ -202,45 +202,6 @@ pub fn build_segment_key(
     format!("{:x}", hasher.finalize())
 }
 
-fn parse_segment_time(value: &str) -> Option<NaiveTime> {
-    let normalized = normalize_segment_time(value);
-    for pattern in ["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"] {
-        if let Ok(time) = NaiveTime::parse_from_str(&normalized, pattern) {
-            return Some(time);
-        }
-    }
-    None
-}
-
-fn same_lecture_identity(left: &TaskRecord, right: &TaskRecord) -> bool {
-    left.course_key == right.course_key
-        && left.semester == right.semester
-        && left.date == right.date
-        && left.course_name == right.course_name
-        && left.teacher_name == right.teacher_name
-}
-
-fn can_append_to_lecture(current: &[TaskRecord], next: &TaskRecord) -> bool {
-    let Some(previous) = current.last() else {
-        return true;
-    };
-    if current.len() >= LECTURE_MAX_SEGMENTS || !same_lecture_identity(previous, next) {
-        return false;
-    }
-
-    let (Some(previous_end), Some(next_start)) = (
-        parse_segment_time(&previous.end_time),
-        parse_segment_time(&next.start_time),
-    ) else {
-        // 无法解释的旧时间数据必须保守拆开，不能为了“多合并”而把两堂课混在一起。
-        return false;
-    };
-
-    let gap_minutes = next_start.signed_duration_since(previous_end).num_minutes();
-    // 录像时间有极小重叠时仍属于同一堂课；跨日课程不会进入同一 identity。
-    gap_minutes <= LECTURE_MAX_GAP_MINUTES
-}
-
 fn build_lecture_group(mut tasks: Vec<TaskRecord>) -> LectureGroup {
     sort_tasks_for_course(&mut tasks);
     let first = tasks.first().expect("lecture 至少需要一个片段");
@@ -270,11 +231,13 @@ fn build_lecture_group(mut tasks: Vec<TaskRecord>) -> LectureGroup {
     }
 }
 
-/// 把 SmartClass 的 45 分钟录像按真实“完整一节课”聚类。
+/// 把任务映射回 ClassFlow **既有 course 聚合**。
 ///
-/// 调用方可以直接给任意顺序、甚至混合课程的任务；函数会先按日期/课程/老师/开始时间排序，
-/// 再按 identity + 30 分钟课间 + 最多 4 段规则切分。这样 repository/API/Notes worker 以后都
-/// 复用同一个定义，避免各自发明一套“什么算一堂课”。
+/// `course_key` 从项目早期就定义为 `semester|date|course|teacher`，worker 也一直用它
+/// 生成 manifest 与 merged/course.md。因此 Phase 3 不应该再发明第二套 lecture 聚类规则。
+///
+/// 调用方仍可以传任意顺序、甚至混合课程的任务；这里只按 `course_key` 分组，并在每组内
+/// 按开始时间排序。这样 Notes、课程库和历史 course artifact 永远共享同一个业务边界。
 pub fn group_tasks_into_lectures(tasks: &[TaskRecord]) -> Vec<LectureGroup> {
     let mut ordered = tasks.to_vec();
     ordered.sort_by(|left, right| {
@@ -291,7 +254,10 @@ pub fn group_tasks_into_lectures(tasks: &[TaskRecord]) -> Vec<LectureGroup> {
     let mut current = Vec::new();
 
     for task in ordered {
-        if !current.is_empty() && !can_append_to_lecture(&current, &task) {
+        if current
+            .first()
+            .is_some_and(|first: &TaskRecord| first.course_key != task.course_key)
+        {
             groups.push(build_lecture_group(std::mem::take(&mut current)));
         }
         current.push(task);
@@ -642,20 +608,19 @@ mod tests {
     }
 
     #[test]
-    fn should_split_same_course_when_gap_exceeds_thirty_minutes() {
+    fn should_keep_same_course_key_even_when_segment_gap_is_large() {
         let tasks = vec![
             demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("下午第一场")),
             demo_task("17:00", "17:45", TaskStatus::Succeeded, Some("晚上另一场")),
         ];
 
         let lectures = group_tasks_into_lectures(&tasks);
-        assert_eq!(lectures.len(), 2);
-        assert_eq!(lectures[0].segment_count(), 1);
-        assert_eq!(lectures[1].segment_count(), 1);
+        assert_eq!(lectures.len(), 1);
+        assert_eq!(lectures[0].segment_count(), 2);
     }
 
     #[test]
-    fn should_split_after_four_segments_even_when_schedule_is_contiguous() {
+    fn should_not_invent_a_second_boundary_after_four_segments() {
         let tasks = vec![
             demo_task("08:00", "08:45", TaskStatus::Succeeded, Some("1")),
             demo_task("08:55", "09:40", TaskStatus::Succeeded, Some("2")),
@@ -665,9 +630,8 @@ mod tests {
         ];
 
         let lectures = group_tasks_into_lectures(&tasks);
-        assert_eq!(lectures.len(), 2);
-        assert_eq!(lectures[0].segment_count(), 4);
-        assert_eq!(lectures[1].segment_count(), 1);
+        assert_eq!(lectures.len(), 1);
+        assert_eq!(lectures[0].segment_count(), 5);
     }
 
     #[test]
