@@ -174,6 +174,13 @@ function stubCompactLayout() {
     dispatchEvent: vi.fn(),
   })))
   vi.stubGlobal('scrollTo', vi.fn())
+  // 让滚动恢复回调在测试断言期间同步完成，避免 afterEach 撤销 scrollTo stub 后
+  // jsdom 才异步执行 RAF，从而输出“window.scrollTo not implemented”的假警告。
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+    callback(0)
+    return 1
+  }))
+  vi.stubGlobal('cancelAnimationFrame', vi.fn())
 }
 
 /**

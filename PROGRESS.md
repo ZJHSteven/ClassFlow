@@ -8,6 +8,7 @@
 - 新增移动端回归测试：任务台与课程库分别覆盖 `list-page -> 点击 row -> detail-page -> popstate -> list-page`，并断言点击详情时只创建一条 `history.pushState()`。
 - 测试环境说明：jsdom 不会因为 stub `matchMedia()` 自动执行真实 CSS media query，因此移动端返回按钮在 role 查询中按 hidden 元素读取；测试关注 React/history 状态机，最终 CSS 可见性另由生产构建与浏览器实测确认。
 - Testing Library 对 CSS `display:none` 元素不会稳定计算 accessible name，即使 `{hidden:true}` 也会受 jsdom CSS 能力影响；返回按钮断言改为直接检查 `.mobileDetailBack` DOM 文本，history 与页面 class 仍按真实状态机验证。
+- 移动端测试把 `requestAnimationFrame` stub 成同步执行，确保 scroll restore 在 `afterEach` 撤销全局 stub 前完成，消除 jsdom 自带 `window.scrollTo` 未实现警告。
 
 - 2026-10-10 Phase 3 生产架构最终收敛：N1 ClassFlow backend 作为唯一状态机；完整 lecture ASR 通过 Archive Bridge 发往既有 ChatGPT Project `课堂录音→笔记`，拿到 CID 后 checkpoint，后续只读 Bridge canonical lifecycle/messages。Windows/Bridge 明确离线时 pending 自动恢复；incident/abnormal/模糊提交结果均不自动重发，等待人工 retry。成功后 N1 通过 GitHub API 直接发布到新仓库 `ZJHSteven/med-notes-2026-fall-y3`，Windows 桌面仅保留普通 clone `大三上笔记`，不再承担生成 daemon 或自动 push。
 - 2026-10-10 03:37~03:43 首个 production E2E 已成功：`2026-10-08 泌尿生殖系统` 三段 lecture 只创建 1 个 Project conversation `6ac9426f-6124-83e9-9cc8-84f010189e53`，Archive 于 03:43:06 落 canonical final，N1 于 03:43:34 标记 succeeded 并通过 GitHub Contents API 发布 `Audio/2026-10-08-1330-1615-ASR.md` 与 `Notes/1-病理学｜泌尿生殖系统疾病理论课第三部分.md`。全程 `passive429=0 / cooldown=null`。
