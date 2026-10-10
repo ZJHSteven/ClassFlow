@@ -34,7 +34,11 @@ export interface R2BucketLike {
   delete(key: string): Promise<void>
 }
 
-export interface WorkerEnv {
+export interface PublicNotesEnv {
+  NOTES_PUBLIC_REPO?: string
+}
+
+export interface WorkerEnv extends PublicNotesEnv {
   BACKEND_BASE_URL: string
   BACKEND_TOKEN: string
   CF_ACCESS_CLIENT_ID?: string
@@ -42,7 +46,6 @@ export interface WorkerEnv {
   ARTIFACT_PROXY_TOKEN?: string
   ARTIFACTS?: R2BucketLike
   ASSETS: AssetBindingLike
-  NOTES_PUBLIC_REPO?: string
 }
 
 interface TaskArtifactLookupResponse {
@@ -289,7 +292,7 @@ interface GithubTreeResponse {
 
 const DEFAULT_PUBLIC_NOTES_REPO = 'ZJHSteven/med-notes-2026-fall-y3'
 
-function publicNotesRepo(env: WorkerEnv): string {
+function publicNotesRepo(env: PublicNotesEnv): string {
   return env.NOTES_PUBLIC_REPO?.trim() || DEFAULT_PUBLIC_NOTES_REPO
 }
 
@@ -301,7 +304,7 @@ function githubPublicHeaders(): Headers {
   return headers
 }
 
-async function handlePublicNotesRequest(request: Request, env: WorkerEnv): Promise<Response | null> {
+export async function handlePublicNotesRequest(request: Request, env: PublicNotesEnv): Promise<Response | null> {
   if (request.method !== 'GET') {
     return null
   }

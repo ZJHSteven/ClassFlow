@@ -1,3 +1,11 @@
+# 2026-10-10 429 冷却与公开分享站生产验收
+
+- 新 backend 已部署，SHA-256 205431b5b04ad096314e7079ad7c1bcf2d25be02fb8ce60ab65f8f2670ba4701；CLASSFLOW_NOTES_ENABLED 已恢复 true，历史 backfill 继续保留 18 条 pending。
+- 生产 429 验收通过：首次 Archive 429 后 SQLite 中只有 1 条 pending 被写入“已触发全局提交冷却”，其余 17 条没有轮流重试；日志记录全局冷却 600 秒至 18:28:51。
+- 管理 Worker 的 Cloudflare Access 无法通过应用代码绕过，因此朋友分享页改为独立 public Worker，避免降低管理端 Access 安全边界。
+- 新公开 Worker：classflow-notes-share.zhangjiahe0830.workers.dev，Version 8b9b3483-c493-4f5a-82ee-3b33a957f37a；仅绑定 ASSETS，不含 BACKEND_TOKEN/R2 私有写入/SmartClass/Archive。
+- 线上 smoke：/share 无 Access 登录；公开 tree 返回真实 6 个 Markdown；泌尿生殖系统 Notes 为 2/3/4；Markdown 正文 200；/api/v1/tasks 返回 404。
+- 分享 Worker 测试新增根路径重定向、管理 API/私有产物拒绝、SPA 回退；web 当前 29/29 tests，lint/build 通过。
 # 2026-10-10 历史 Notes 补跑 429 全局冷却
 
 - 历史 backfill 放开后暴露真实调度缺陷：18 个 pending 在 Archive 返回 429 时会因为当前 job 的 updated_at 后移而轮换到下一堂，短时间内把整批课程逐一撞限流。
@@ -518,6 +526,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 
