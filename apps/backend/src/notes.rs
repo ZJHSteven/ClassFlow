@@ -261,13 +261,12 @@ fn parse_archive_submission_outcome(body: &str) -> AppResult<ArchiveSubmissionOu
     ))
 }
 
-async fn get_or_enqueue_archive_submission(
+async fn get_archive_submission(
     state: &AppState,
     client: &Client,
     base: &str,
     idempotency_key: &str,
-    submit_body: Value,
-) -> Result<ArchiveSubmissionOutcome, (Option<StatusCode>, String)> {
+) -> Result<Option<ArchiveSubmissionOutcome>, (Option<StatusCode>, String)> {
     let lookup = apply_bridge_auth(
         client
             .get(format!("{base}/v1/submissions"))
@@ -278,12 +277,10 @@ async fn get_or_enqueue_archive_submission(
     .await
     .map_err(|error| (None, format!("Archive submission 查询失败: {error}")))?;
 
-    if lookup.status().is_success() {
-        let body = lookup.text().await.unwrap_or_default();
-        return parse_archive_submission_outcome(&body)
-            .map_err(|error| (None, error.to_string()));
+    if lookup.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
     }
-    if lookup.status() != StatusCode::NOT_FOUND {
+    if !lookup.status().is_success() {
         let status = lookup.status();
         let body = lookup.text().await.unwrap_or_default();
         return Err((
@@ -293,6 +290,25 @@ async fn get_or_enqueue_archive_submission(
                 truncate(&body, 200)
             ),
         ));
+    }
+
+    let body = lookup.text().await.unwrap_or_default();
+    parse_archive_submission_outcome(&body)
+        .map(Some)
+        .map_err(|error| (None, error.to_string()))
+}
+
+async fn get_or_enqueue_archive_submission(
+    state: &AppState,
+    client: &Client,
+    base: &str,
+    idempotency_key: &str,
+    submit_body: Value,
+) -> Result<ArchiveSubmissionOutcome, (Option<StatusCode>, String)> {
+    if let Some(existing) =
+        get_archive_submission(state, client, base, idempotency_key).await?
+    {
+        return Ok(existing);
     }
 
     let response = apply_bridge_auth(
@@ -317,7 +333,6 @@ async fn get_or_enqueue_archive_submission(
     }
     parse_archive_submission_outcome(&body).map_err(|error| (None, error.to_string()))
 }
-
 /// 判断当前是否处于 Archive 429 的全局 submission 冷却期。
 ///
 /// 冷却只影响“新建 Notes conversation”。已经拿到 CID 的 generating、以及 GitHub publishing
@@ -1680,4 +1695,5 @@ mod tests {
         );
     }
 }
+
 
