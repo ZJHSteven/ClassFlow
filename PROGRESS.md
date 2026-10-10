@@ -1,3 +1,4 @@
+- 2026-10-11 Phase 3 worker 已取消 ClassFlow 侧“整堂严格串行”门禁：pending job 可以在同一轮交给 Archive，真正的 ChatGPT POST 串行、间隔与 429 cooldown 由 Archive submission queue 统一控制。
 # 2026-10-11 标题 429 纳入全局 cooldown
 
 - 真实 9/14 思政 title-only 重试收到 Archive 429，响应明确给出 active API cooldown 的绝对截止时间；旧逻辑只对主 Notes 429 启动 600 秒本地 cooldown，标题 429 会掉进 manual_review，且可能早于 Archive 实际截止时间再次撞限流。

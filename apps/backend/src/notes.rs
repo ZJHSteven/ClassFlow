@@ -53,27 +53,12 @@ pub async fn run_notes_cycle(state: AppState) -> AppResult<()> {
     // 历史 backfill 必须严格串行：只要已经有一堂处于 generating / publishing，
     // 本轮就不再打开新的 pending conversation。这样既保护 Archive/ChatGPT 的限流，
     // 也让每堂课的 title-only 与 GitHub 发布先完整收口，再进入下一堂。
-    let has_in_flight = jobs.iter().any(|job| {
-        matches!(
-            job.status,
-            LectureNotesStatus::Generating | LectureNotesStatus::Publishing
-        )
-    });
-    let mut submitted_this_cycle = false;
-    let submission_cooldown_active = notes_submission_cooldown_active(&state).await;
     for job in jobs {
         match job.status {
-            LectureNotesStatus::Pending
-                if !has_in_flight && !submitted_this_cycle && !submission_cooldown_active =>
-            {
-                process_pending(&state, &job).await?;
-                submitted_this_cycle = true;
-            }
+            LectureNotesStatus::Pending => process_pending(&state, &job).await?,
             LectureNotesStatus::Generating => process_generating(&state, &job).await?,
             LectureNotesStatus::Publishing => process_publishing(&state, &job).await?,
-            LectureNotesStatus::Pending
-            | LectureNotesStatus::Succeeded
-            | LectureNotesStatus::Failed => {}
+            LectureNotesStatus::Succeeded | LectureNotesStatus::Failed => {}
         }
     }
     Ok(())
