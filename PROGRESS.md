@@ -1,3 +1,10 @@
+# 2026-10-10 Notes 课程内序号修复
+
+- GitHub 实仓核对发现真实命名缺陷：Notes 序号此前按“课程 + 老师”取 MAX(sequence_no)+1，导致同一课程换老师后重新从 1 开始；泌尿生殖系统已出现 1 / 2 / 1。
+- 已改为同一学期、同一课程按 date + start_time 全量重排，完全脱离老师维度和发现顺序。
+- 历史 backfill 若插入更早课程，后续已 succeeded 且序号变化的 Notes 会自动切回 publishing；发布器会写新编号路径并删除数据库记录的旧 GitHub 路径。
+- 新增真实场景回归：10/8、10/9、10/10 已发布后再补 9/30，最终必须得到 1/2/3/4，三个旧 succeeded 自动变 publishing。专项测试通过，Clippy -D warnings 通过。
+- 为避免修复期间错误编号继续发布，生产 classflow-backend 已临时停止；待新 binary 部署后再恢复并继续 9 月历史补跑。
 # 2026-10-10 Phase 3 架构收敛：Notes 复用既有 course 聚合
 
 - 已确认用户质疑成立：ClassFlow 早期即以 `course_key = semester|date|course|teacher` 作为课程聚合真相源，并持续生成 `manifest.json + merged/course.md`；Phase 3 后来新增的“30 分钟课间 + 最多 4 段”lecture 聚类属于重复业务边界。
@@ -497,4 +504,5 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 

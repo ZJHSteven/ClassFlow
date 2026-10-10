@@ -1122,54 +1122,111 @@ impl Repository {
         .await?)
     }
 
+    /// 确保某个 course 聚合拥有 Notes 状态机记录，并维护课程内连续编号。
+    ///
+    /// ClassFlow 的 Notes 文件名沿用 N-主题.md。这个 N 必须是“同一课程按日期/时间”
+    /// 的连续序号，而不是按老师分别计数，也不能依赖 job 恰好何时被发现。历史 backfill
+    /// 可能晚于新课进入数据库，因此每次 ensure 后都重新计算该课程的顺序。
+    ///
+    /// 如果重排导致一个已经发布成功的 Notes 序号变化，就把它重新置为 publishing。
+    /// 发布阶段会先写入新路径，再依据数据库里保存的旧 github_notes_path 删除旧文件，
+    /// 从而让 GitHub 目录最终保持唯一、连续、无残留的编号。
     pub async fn ensure_lecture_notes_job(
         &self,
         lecture: &LectureGroup,
         transcript_sha256: &str,
     ) -> AppResult<LectureNotesRecord> {
-        if let Some(existing) = self.get_lecture_notes(&lecture.lecture_key).await? {
-            return Ok(existing);
+        if self
+            .get_lecture_notes(&lecture.lecture_key)
+            .await?
+            .is_none()
+        {
+            let now = Utc::now().to_rfc3339();
+            sqlx::query(
+                r#"
+                INSERT OR IGNORE INTO lecture_notes(
+                    lecture_key, course_key, semester, course_name, teacher_name, date,
+                    start_time, end_time, sequence_no, status, transcript_sha256,
+                    created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?, ?)
+                "#,
+            )
+            .bind(&lecture.lecture_key)
+            .bind(&lecture.course_key)
+            .bind(&lecture.semester)
+            .bind(&lecture.course_name)
+            .bind(&lecture.teacher_name)
+            .bind(&lecture.date)
+            .bind(&lecture.start_time)
+            .bind(&lecture.end_time)
+            .bind(transcript_sha256)
+            .bind(&now)
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
         }
 
-        let next_sequence = sqlx::query_scalar::<_, i64>(
-            r#"
-            SELECT COALESCE(MAX(sequence_no), 0) + 1
-            FROM lecture_notes
-            WHERE semester = ? AND course_name = ? AND teacher_name = ?
-            "#,
-        )
-        .bind(&lecture.semester)
-        .bind(&lecture.course_name)
-        .bind(&lecture.teacher_name)
-        .fetch_one(&self.pool)
-        .await?;
-        let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO lecture_notes(
-                lecture_key, course_key, semester, course_name, teacher_name, date,
-                start_time, end_time, sequence_no, status, transcript_sha256,
-                created_at, updated_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-            "#,
-        )
-        .bind(&lecture.lecture_key)
-        .bind(&lecture.course_key)
-        .bind(&lecture.semester)
-        .bind(&lecture.course_name)
-        .bind(&lecture.teacher_name)
-        .bind(&lecture.date)
-        .bind(&lecture.start_time)
-        .bind(&lecture.end_time)
-        .bind(next_sequence)
-        .bind(transcript_sha256)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await?;
+        self.resequence_lecture_notes_for_course(&lecture.semester, &lecture.course_name)
+            .await?;
+
         self.get_lecture_notes(&lecture.lecture_key)
             .await?
             .ok_or_else(|| AppError::Internal("创建 lecture Notes 任务后无法读回".to_string()))
+    }
+
+    /// 重新计算同一课程全部 Notes 的课程内顺序。
+    ///
+    /// 这里故意不用一条复杂 SQL window UPDATE，而是先按正式排序读出记录再逐条更新：
+    /// 1. 代码语义更直观，便于审计历史 backfill；
+    /// 2. 可以只把“序号真的发生变化”的 succeeded 记录切回 publishing；
+    /// 3. 不改未变化记录的 updated_at，避免扰乱 Notes worker 的调度顺序。
+    async fn resequence_lecture_notes_for_course(
+        &self,
+        semester: &str,
+        course_name: &str,
+    ) -> AppResult<()> {
+        let rows = sqlx::query(
+            r#"
+            SELECT lecture_key, sequence_no, status
+            FROM lecture_notes
+            WHERE semester = ? AND course_name = ?
+            ORDER BY date ASC, start_time ASC, lecture_key ASC
+            "#,
+        )
+        .bind(semester)
+        .bind(course_name)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for (index, row) in rows.iter().enumerate() {
+            let lecture_key: String = row.get("lecture_key");
+            let old_sequence: i64 = row.get("sequence_no");
+            let status: String = row.get("status");
+            let new_sequence = index as i64 + 1;
+
+            if old_sequence == new_sequence {
+                continue;
+            }
+
+            let next_status = if status == "succeeded" {
+                // 已发布文件名包含旧序号；必须重新进入 publishing 才能迁移 GitHub 路径。
+                "publishing"
+            } else {
+                status.as_str()
+            };
+
+            sqlx::query(
+                "UPDATE lecture_notes SET sequence_no=?, status=?, updated_at=? WHERE lecture_key=?",
+            )
+            .bind(new_sequence)
+            .bind(next_status)
+            .bind(Utc::now().to_rfc3339())
+            .bind(&lecture_key)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
     }
 
     pub async fn list_active_lecture_notes(
@@ -1765,6 +1822,75 @@ mod tests {
             .await
             .expect("旧记录兼容去重应正常返回");
         assert_eq!(second.accepted_count, 0);
+    }
+
+    #[tokio::test]
+    async fn should_resequence_course_notes_when_historical_job_arrives_late() {
+        let repo = repo().await;
+        let now = Utc::now().to_rfc3339();
+
+        // 先模拟三堂 10 月课程已经按“发现顺序”生成并发布，
+        // 其中老师变化曾导致序号重复；随后 9 月历史课才进入 backfill。
+        for (lecture_key, teacher, date, sequence_no, status) in [
+            ("late-1008", "王老师", "2026-10-08", 1_i64, "succeeded"),
+            ("late-1009", "张老师", "2026-10-09", 2_i64, "succeeded"),
+            ("late-1010", "张老师", "2026-10-10", 1_i64, "succeeded"),
+            ("history-0930", "王老师", "2026-09-30", 2_i64, "pending"),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO lecture_notes(
+                    lecture_key, course_key, semester, course_name, teacher_name, date,
+                    start_time, end_time, sequence_no, status, transcript_sha256,
+                    created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, '13:30', '16:15', ?, ?, 'hash', ?, ?)
+                "#,
+            )
+            .bind(lecture_key)
+            .bind(format!("course-{lecture_key}"))
+            .bind("2026-2027-1")
+            .bind("泌尿生殖系统")
+            .bind(teacher)
+            .bind(date)
+            .bind(sequence_no)
+            .bind(status)
+            .bind(&now)
+            .bind(&now)
+            .execute(&repo.pool)
+            .await
+            .expect("应能写入模拟 Notes 记录");
+        }
+
+        repo.resequence_lecture_notes_for_course("2026-2027-1", "泌尿生殖系统")
+            .await
+            .expect("历史课补入后应能按课程重新编号");
+
+        let rows =
+            sqlx::query("SELECT date, sequence_no, status FROM lecture_notes ORDER BY date ASC")
+                .fetch_all(&repo.pool)
+                .await
+                .expect("应能读取重排结果");
+
+        let actual = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("date"),
+                    row.get::<i64, _>("sequence_no"),
+                    row.get::<String, _>("status"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                ("2026-09-30".into(), 1, "pending".into()),
+                ("2026-10-08".into(), 2, "publishing".into()),
+                ("2026-10-09".into(), 3, "publishing".into()),
+                ("2026-10-10".into(), 4, "publishing".into()),
+            ]
+        );
     }
 
     #[tokio::test]
