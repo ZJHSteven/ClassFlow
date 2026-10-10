@@ -1,3 +1,26 @@
+# 2026-10-10 Phase 3X：N1 Pi/Codex 原生搜索 Notes 旁路对照实验
+
+目标：在不改动现有生产 Phase 3 的前提下，建立一条完全绕开 ChatGPT Project / Archive / DOM 协议的脚本化 Notes 生成旁路，验证“同一系统提示词 + 同一课堂输入 + Codex 订阅模型 + OpenAI 原生搜索”是否能稳定复现现有云端 Notes 质量。实验只回答架构选择问题；在结果出来前，不替换当前生产链。
+
+1. 运行节点固定为 N1，运行用户固定为 zjhsteven；禁止 root 跑 Pi。Pi 只开放 codex_search，禁用内建 read/bash/edit/write 与第三方搜索。
+2. 模型按用户指定的 GPT-5.6 Sol / GPT-6 Sol / GPT-6.1 Sol / GPT-6 Astra 从 openai-codex 实际目录核验；不可见就明确记录，不静默换型号。
+3. 正式固定 2 个已有云端 Project 原答案的真实课堂输入，每模型每样本各跑一次，共 8 篇旁路产物；与 2 篇原云端产物一起放入 Windows Downloads 独立实验目录。
+4. 系统提示词使用历史“课堂录音→笔记/科学实验”工作流原始完整 prompt，不在本实验中优化；每次 --no-session，保证模型是唯一主变量。
+5. 任何模型请求前先做 fail-closed：Mihomo ChatGPT/Codex selector 的配置和运行时 current selection 都必须属于 替补-美东1 / 美东-纯净 / 替补-美东2；出现 DIRECT、非 uid=1000 或 OpenAI 连通失败即在启动 Pi 前退出。
+6. OAuth 使用 openai-codex device-code；登录后依次验证 auth readiness、真实模型目录、仅 codex_search 的原生搜索 smoke、Mihomo 实际路由，再跑 4×2 矩阵。
+7. 盲评维度：课堂忠实度、来源越界、完整性、结构可读性、搜索使用与运行可靠性。若两例均无明显质量退化，Pi/Codex 将成为 ClassFlow Notes route adapter 的优先候选，Archive 降为兼容/回退路线。
+
+# 2026-10-10 Phase 3R：精细失败判定与重试状态机
+
+重试不再只有“重建整个 conversation”一种语义：
+
+1. not_submitted：能证明上游从未接受，才允许安全自动提交。
+2. accepted / cid_known：已有 conversation/job identity 后，本地断网、Bridge 502、客户端超时都只继续异步取回，绝不重建。
+3. transport_unknown：客户端没收到响应不等于服务端没收到；优先用 client_request_id / idempotency_key / Bridge audit 反查，查到就转 accepted，明确未创建才转 not_submitted；协议暂时无法证明时继续 fail-safe 等待，不盲目双发。
+4. terminal_retryable：上游明确终止且错误可重试，才允许重建新 conversation/job，并保留旧 identity 作为审计链。
+5. terminal_nonretryable：输入、权限、确定性业务错误直接显示原因，不自动重建。
+6. 前端分开显示“尚未提交 / 已接受生成中 / 本地失联继续取回 / 明确失败可重建 / 确定性失败”，并把“继续取回”和“重建”拆成不同动作。
+
 # 2026-10-10 移动端 Master-Detail 页面化 ExecPlan
 
 目标：保留桌面端“列表 + 右侧详情”的高信息密度布局，同时把手机/窄屏从当前的纵向堆叠改成真正的两层页面导航，避免用户必须滚到整张列表底部才能看到详情。
