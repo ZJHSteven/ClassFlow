@@ -1,3 +1,14 @@
+# 2026-10-10 Phase 3 收敛：复用既有 course 聚合 + 历史补跑
+
+目标：纠正 Phase 3 中重复实现“lecture 聚合”的架构冗余，直接复用 ClassFlow 既有 course_key（semester|date|course|teacher）、manifest 与 merged/course.md 作为完整课堂真相源；在不破坏现有 3 条生产 Notes 身份的前提下补跑本学期历史课程。
+
+1. lecture_notes 继续保留为 Notes 状态机表，但不再维护独立的 30 分钟课间 / 最多 4 段聚类语义。
+2. Notes 的输入单元直接使用既有 course_key 下全部任务；排序、完整 ASR 检查和课程总稿继续复用现有 course 聚合。
+3. 现有 lecture_key 生成方式暂时保留，只作为 Notes 状态机稳定 ID，避免迁移已完成的 10/8、10/9、10/10 三条记录；它不再表示第二套业务聚类。
+4. 课表先验只负责“这堂课是否已经结束，可以开始 Notes”，不参与重新定义课程边界；无课表时仍以 course 最后一个 segment 结束 + grace 作为 fallback。
+5. 生产历史补跑窗口放开到 2026-09-01；先由现有成功 ASR 的 course 聚合创建缺失 Notes job，再按单提交节流逐步跑，避免一次性向 Archive 双发/洪泛。
+6. 同步核对 med-notes-2026-fall-y3 GitHub 目录与命名，确保历史 backfill 使用同一 Audio/Notes 结构。
+7. Phase 3 补跑稳定后继续实现全阶段通知、Notes 二次摘要和朋友分享只读前端。
 # 2026-10-10 Phase 3X：N1 Pi/Codex 原生搜索 Notes 旁路对照实验
 
 目标：在不改动现有生产 Phase 3 的前提下，建立一条完全绕开 ChatGPT Project / Archive / DOM 协议的脚本化 Notes 生成旁路，验证“同一系统提示词 + 同一课堂输入 + Codex 订阅模型 + OpenAI 原生搜索”是否能稳定复现现有云端 Notes 质量。实验只回答架构选择问题；在结果出来前，不替换当前生产链。
@@ -938,3 +949,4 @@ CapsWriter Server :6016
 - 已完成：临时反向 SSH 已把 N100 `127.0.0.1:8790` 映射到 Windows 浏览器桥，跨机 `/health` 与视频列表请求链路已实际验证。
 - 当前阻塞：原 SmartClass 登录态在 12 小时保活实验结束后的下午/晚间已自然失效；Collector 当前正确进入“未授权后等待下一轮”状态，不误入队。
 - 后续：用户重新正常登录 SmartClass 后，当前临时链路会自动在下一轮开始 21 天补录；最终无人值守形态改为 N100/N1 本机独立 Chromium profile + 本机桥，去除对 Windows 与反向 SSH 的依赖。
+
