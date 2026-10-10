@@ -49,9 +49,10 @@ pub async fn run_notes_cycle(state: AppState) -> AppResult<()> {
     discover_ready_lectures(&state).await?;
     let jobs = state.repo.list_active_lecture_notes(24).await?;
     let mut submitted_this_cycle = false;
+    let submission_cooldown_active = notes_submission_cooldown_active(&state).await;
     for job in jobs {
         match job.status {
-            LectureNotesStatus::Pending if !submitted_this_cycle => {
+            LectureNotesStatus::Pending if !submitted_this_cycle && !submission_cooldown_active => {
                 process_pending(&state, &job).await?;
                 submitted_this_cycle = true;
             }
@@ -180,6 +181,44 @@ fn parse_clock(value: &str) -> Option<NaiveTime> {
         .ok()
 }
 
+/// 判断当前是否处于 Archive 429 的全局 submission 冷却期。
+///
+/// 冷却只影响“新建 Notes conversation”。已经拿到 CID 的 generating、以及 GitHub publishing
+/// 仍会正常推进，因此限流不会把整个 Phase 3 状态机冻结。
+fn cooldown_until_is_active(
+    cooldown_until: Option<chrono::DateTime<Utc>>,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    cooldown_until.is_some_and(|until| now < until)
+}
+
+async fn notes_submission_cooldown_active(state: &AppState) -> bool {
+    let now = Utc::now();
+    let mut cooldown_until = state.notes_submit_cooldown_until.lock().await;
+    if cooldown_until_is_active(*cooldown_until, now) {
+        return true;
+    }
+    if cooldown_until.is_some() {
+        // 到期后主动清空，避免后续日志/调试误以为仍处于 cooldown。
+        *cooldown_until = None;
+    }
+    false
+}
+
+/// Archive 明确返回 429 时设置**全局**冷却。
+///
+/// 不能只给当前 job 加等待：429 是 actor/账号级资源状态，如果把当前 job 的 updated_at
+/// 后移再换下一堂提交，就会让所有 pending 在几分钟内轮流撞同一个限流。
+async fn start_notes_429_cooldown(state: &AppState) {
+    let seconds = state.config.notes_429_cooldown_secs.max(60);
+    let until = Utc::now() + chrono::Duration::seconds(seconds as i64);
+    *state.notes_submit_cooldown_until.lock().await = Some(until);
+    warn!(
+        "Archive 返回 429，Notes 新提交进入全局冷却: {} 秒，截止 {}",
+        seconds, until
+    );
+}
+
 async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
     if job.recovery_kind.as_deref() == Some("submission_unknown") {
         reconcile_unknown_submission(state, job).await?;
@@ -243,11 +282,15 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if status.as_u16() == 429 {
+        start_notes_429_cooldown(state).await;
         state
             .repo
             .mark_lecture_notes_pending_error(
                 &job.lecture_key,
-                &format!("Archive 暂不可用: HTTP {status} {}", truncate(&body, 180)),
+                &format!(
+                    "Archive 暂不可用: HTTP {status} {}；已触发全局提交冷却",
+                    truncate(&body, 180)
+                ),
             )
             .await?;
         return Ok(());
@@ -1362,6 +1405,20 @@ mod tests {
     fn overly_long_title_should_be_rejected_for_retry() {
         let title = "这是一个明显超过二十四个汉字并且完全没有必要这么长的课堂主题名称";
         assert_eq!(title_rejection_reason(title, &[]), Some("标题过长"));
+    }
+
+    #[test]
+    fn notes_429_cooldown_should_only_be_active_before_deadline() {
+        let now = Utc::now();
+        assert!(cooldown_until_is_active(
+            Some(now + chrono::Duration::seconds(60)),
+            now
+        ));
+        assert!(!cooldown_until_is_active(
+            Some(now - chrono::Duration::seconds(1)),
+            now
+        ));
+        assert!(!cooldown_until_is_active(None, now));
     }
 
     #[test]

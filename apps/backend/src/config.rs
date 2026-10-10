@@ -141,6 +141,8 @@ pub struct AppConfig {
     pub notes_enabled: bool,
     pub notes_auto_since_date: String,
     pub notes_poll_interval_secs: f64,
+    /// Archive 返回 429 后，禁止任何新的 Notes submission 多久；生成中/发布中任务不受影响。
+    pub notes_429_cooldown_secs: u64,
     pub course_schedule_path: PathBuf,
     pub notes_schedule_grace_minutes: i64,
     pub notes_project_name: String,
@@ -431,6 +433,7 @@ impl AppConfig {
             notes_enabled: env_or_parse("CLASSFLOW_NOTES_ENABLED", false)?,
             notes_auto_since_date: env_or("CLASSFLOW_NOTES_AUTO_SINCE_DATE", "9999-12-31"),
             notes_poll_interval_secs: env_or_parse("CLASSFLOW_NOTES_POLL_INTERVAL_SECS", 15.0)?,
+            notes_429_cooldown_secs: env_or_parse("CLASSFLOW_NOTES_429_COOLDOWN_SECS", 600)?,
             course_schedule_path: PathBuf::from(env_or(
                 "CLASSFLOW_COURSE_SCHEDULE_PATH",
                 "./config/class-schedule-lifeops.json",

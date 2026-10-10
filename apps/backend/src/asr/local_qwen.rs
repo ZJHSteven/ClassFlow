@@ -623,6 +623,7 @@ mod tests {
             notes_enabled: false,
             notes_auto_since_date: "9999-12-31".to_string(),
             notes_poll_interval_secs: 15.0,
+            notes_429_cooldown_secs: 600,
             course_schedule_path: temp_root.join("class-schedule.json"),
             notes_schedule_grace_minutes: 15,
             notes_project_name: "课堂录音→笔记".to_string(),

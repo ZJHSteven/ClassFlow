@@ -1,3 +1,11 @@
+# 2026-10-10 历史 Notes 补跑 429 全局冷却
+
+- 历史 backfill 放开后暴露真实调度缺陷：18 个 pending 在 Archive 返回 429 时会因为当前 job 的 updated_at 后移而轮换到下一堂，短时间内把整批课程逐一撞限流。
+- 已临时将生产 CLASSFLOW_NOTES_ENABLED=false，保留 18 个 pending，不删除、不重建 conversation。
+- AppState 新增全局 Notes submission cooldown；Archive 任一新建请求收到 429 后，整条“新建 conversation”通道默认冷却 600 秒。冷却期间 generating / publishing 继续推进，不冻结已有 CID 的收尾。
+- 新增 CLASSFLOW_NOTES_429_COOLDOWN_SECS，默认 600；低于 60 秒会被保护性提升到 60 秒。
+- 冷却判断补了未来/过期/空值边界测试；本轮 backend 60/60 unit、11/11 API integration、Clippy -D warnings 全通过。
+- 下一步为部署后重新开启 Notes，并用真实 SQLite updated_at 验证 429 后只触碰 1 条 pending，而不是轮询整批。
 # 2026-10-10 朋友分享页进入实现
 
 - 分享前端采用同一 Worker 的 /share，但与管理 API 完全隔离：浏览器只调用 /public/notes/tree 与 /public/notes/file。
@@ -510,6 +518,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 
