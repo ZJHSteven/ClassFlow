@@ -1,3 +1,9 @@
+# 2026-10-11 标题 429 纳入全局 cooldown
+
+- 真实 9/14 思政 title-only 重试收到 Archive 429，响应明确给出 active API cooldown 的绝对截止时间；旧逻辑只对主 Notes 429 启动 600 秒本地 cooldown，标题 429 会掉进 manual_review，且可能早于 Archive 实际截止时间再次撞限流。
+- 现在主 Notes / title-only 共用同一全局 cooldown；优先解析 Archive 响应中的 "until <RFC3339>"，与本地配置冷却取较晚者。
+- title-only 提交前会先检查全局 cooldown；429 时保持 generating，仅记录“标题请求遇到 Archive 429，已进入全局冷却”，到期后自动继续，不再转 manual_review。
+- 新增 Archive 绝对 cooldown 解析回归测试；Notes targeted tests 12/12 + Clippy -D warnings 全绿。
 # 2026-10-11 历史 Notes backfill 改为严格串行
 
 - Notes worker 现在只要检测到任意 generating/publishing 任务，就不会再提交新的 pending conversation；一堂课必须完成主 Notes、标题和 GitHub 发布后，下一堂才允许进入 ChatGPT。
@@ -545,6 +551,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 

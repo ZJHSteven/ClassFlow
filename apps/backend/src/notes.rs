@@ -222,14 +222,31 @@ async fn notes_submission_cooldown_active(state: &AppState) -> bool {
 ///
 /// 不能只给当前 job 加等待：429 是 actor/账号级资源状态，如果把当前 job 的 updated_at
 /// 后移再换下一堂提交，就会让所有 pending 在几分钟内轮流撞同一个限流。
-async fn start_notes_429_cooldown(state: &AppState) {
+async fn start_notes_429_cooldown(state: &AppState, response_body: &str) {
     let seconds = state.config.notes_429_cooldown_secs.max(60);
-    let until = Utc::now() + chrono::Duration::seconds(seconds as i64);
+    let configured_until = Utc::now() + chrono::Duration::seconds(seconds as i64);
+    let archive_until = parse_archive_cooldown_until(response_body);
+    let until = archive_until
+        .filter(|value| *value > configured_until)
+        .unwrap_or(configured_until);
+
     *state.notes_submit_cooldown_until.lock().await = Some(until);
     warn!(
-        "Archive 返回 429，Notes 新提交进入全局冷却: {} 秒，截止 {}",
-        seconds, until
+        "Archive 返回 429，Notes/标题新提交进入全局冷却: 截止 {}{}",
+        until,
+        archive_until
+            .map(|value| format!("（Archive 明示 {}）", value))
+            .unwrap_or_default()
     );
+}
+
+fn parse_archive_cooldown_until(response_body: &str) -> Option<chrono::DateTime<Utc>> {
+    let payload: Value = serde_json::from_str(response_body).ok()?;
+    let message = payload.get("error")?.as_str()?;
+    let (_, raw_until) = message.rsplit_once(" until ")?;
+    chrono::DateTime::parse_from_rfc3339(raw_until.trim())
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
 }
 
 async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
@@ -295,7 +312,7 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if status.as_u16() == 429 {
-        start_notes_429_cooldown(state).await;
+        start_notes_429_cooldown(state, &body).await;
         state
             .repo
             .mark_lecture_notes_pending_error(
@@ -695,6 +712,17 @@ async fn process_title_stage(
             return Ok(());
         }
 
+        if notes_submission_cooldown_active(state).await {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    "Archive 仍处于全局 429 冷却，标题请求暂缓",
+                )
+                .await?;
+            return Ok(());
+        }
+
         let title_prompt = build_title_prompt(&existing_titles, None);
         let request = apply_bridge_auth(
             client.post(format!("{base}/v1/turns")).json(&json!({
@@ -729,6 +757,20 @@ async fn process_title_stage(
         };
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if status.as_u16() == 429 {
+            start_notes_429_cooldown(state, &body).await;
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!(
+                        "标题请求遇到 Archive 429，已进入全局冷却: {}",
+                        truncate(&body, 200)
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
         if !status.is_success() {
             state
                 .repo
@@ -1513,6 +1555,18 @@ mod tests {
     fn overly_long_title_should_be_rejected_for_retry() {
         let title = "这是一个明显超过二十四个汉字并且完全没有必要这么长的课堂主题名称";
         assert_eq!(title_rejection_reason(title, &[]), Some("标题过长"));
+    }
+
+    #[test]
+    fn should_parse_archive_explicit_cooldown_deadline() {
+        let parsed = parse_archive_cooldown_until(
+            r#"{"error":"ChatGPT actor blocked by active API cooldown until 2026-10-10T19:27:38.462Z"}"#,
+        )
+        .expect("应能解析 Archive 明示的 cooldown 截止时间");
+        assert_eq!(
+            parsed.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "2026-10-10T19:27:38.462Z"
+        );
     }
 
     #[test]
