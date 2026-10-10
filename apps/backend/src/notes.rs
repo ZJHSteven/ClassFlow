@@ -763,11 +763,14 @@ async fn process_title_stage(
         .repo
         .list_lecture_note_titles_for_course(&job.course_name, &job.lecture_key)
         .await?;
+    let initial_submission_key = format!(
+        "classflow:lecture:{}:title:{}:initial",
+        job.lecture_key, notes_final_ordinal
+    );
 
     if job.title_requested_at.is_none() {
-        // title-only 提交也可能出现“服务端已接受，但本地没收到响应”。
-        // 在任何重新提交前，先读取 canonical messages 检查我们自己的标题 prompt 是否已存在。
-        // 只有明确不存在时才允许继续提交；读不到 canonical 状态时宁可等待，也不冒重复 title turn 的风险。
+        // 历史兼容：升级 submission queue 之前，title turn 可能已经真正进入 canonical，
+        // 但 ClassFlow 没来得及 checkpoint。先查 canonical 可以避免给旧 conversation 再发一遍。
         let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
         let response = match apply_bridge_auth(client.get(messages_url), state)
             .send()
@@ -779,7 +782,7 @@ async fn process_title_stage(
                     .repo
                     .update_lecture_notes_error(
                         &job.lecture_key,
-                        &format!("标题提交前核对已有会话失败，暂不重发: {error}"),
+                        &format!("标题提交前读取 canonical conversation 失败: {error}"),
                     )
                     .await?;
                 return Ok(());
@@ -791,7 +794,7 @@ async fn process_title_stage(
                 .update_lecture_notes_error(
                     &job.lecture_key,
                     &format!(
-                        "标题提交前核对已有会话失败，暂不重发: HTTP {}",
+                        "标题提交前读取 canonical conversation 失败: HTTP {}",
                         response.status()
                     ),
                 )
@@ -810,106 +813,158 @@ async fn process_title_stage(
                 .mark_lecture_notes_title_requested(&job.lecture_key)
                 .await?;
             info!(
-                "Phase 3 Notes 已认领既有标题请求，避免重复提交: lecture_key={}, conversation_id={}",
+                "Phase 3 Notes 已认领 canonical title 请求: lecture_key={}, conversation_id={}",
                 job.lecture_key, conversation_id
             );
             return Ok(());
         }
 
-        if notes_submission_cooldown_active(state).await {
-            state
-                .repo
-                .update_lecture_notes_error(
-                    &job.lecture_key,
-                    "Archive 仍处于全局 429 冷却，标题请求暂缓",
-                )
-                .await?;
-            return Ok(());
-        }
-
         let title_prompt = build_title_prompt(&existing_titles, None);
-        let request = apply_bridge_auth(
-            client.post(format!("{base}/v1/turns")).json(&json!({
+        let outcome = get_or_enqueue_archive_submission(
+            state,
+            client,
+            base,
+            &initial_submission_key,
+            json!({
                 "mode": "continue",
                 "conversationId": conversation_id,
+                "idempotencyKey": initial_submission_key,
                 "text": title_prompt,
-            })),
-            state,
-        );
-        let response = match request.send().await {
-            Ok(response) => response,
-            Err(error) if error.is_connect() => {
+            }),
+        )
+        .await;
+
+        match outcome {
+            Ok(ArchiveSubmissionOutcome::Queued {
+                status,
+                next_attempt_at,
+                last_error,
+            }) => {
+                // Archive 已把请求持久化，因此从这里起 ClassFlow 不需要再次重建 prompt。
+                state
+                    .repo
+                    .mark_lecture_notes_title_requested(&job.lecture_key)
+                    .await?;
+                let retry = next_attempt_at
+                    .map(|value| format!("，nextAttemptAt={value}"))
+                    .unwrap_or_default();
+                let detail = last_error
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| format!("，{value}"))
+                    .unwrap_or_default();
                 state
                     .repo
                     .update_lecture_notes_error(
                         &job.lecture_key,
-                        &format!("标题请求等待 Archive 恢复: {error}"),
+                        &format!("Archive 已接管标题 submission：{status}{retry}{detail}"),
                     )
                     .await?;
-                return Ok(());
             }
-            Err(error) => {
+            Ok(ArchiveSubmissionOutcome::Accepted { conversation_id: returned_cid }) => {
+                if returned_cid != conversation_id {
+                    state
+                        .repo
+                        .mark_lecture_notes_failed(
+                            &job.lecture_key,
+                            "标题 submission 没有继续原 conversation，停止自动处理",
+                        )
+                        .await?;
+                    return Ok(());
+                }
+                state
+                    .repo
+                    .mark_lecture_notes_title_requested(&job.lecture_key)
+                    .await?;
+                info!(
+                    "Phase 3 Notes 标题 submission 已由 Archive 接受: lecture_key={}, conversation_id={}",
+                    job.lecture_key, conversation_id
+                );
+            }
+            Ok(ArchiveSubmissionOutcome::Failed { error }) => {
                 state
                     .repo
                     .mark_lecture_notes_failed(
                         &job.lecture_key,
-                        &format!("标题请求提交结果不确定，等待人工重试: {error}"),
+                        &format!("Archive 标题 submission 终止: {error}"),
                     )
                     .await?;
-                return Ok(());
             }
-        };
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if status.as_u16() == 429 {
-            start_notes_429_cooldown(state, &body).await;
+            Err((status, message)) => {
+                let fatal_client_error = status.is_some_and(|value| {
+                    value.is_client_error() && value != StatusCode::TOO_MANY_REQUESTS
+                });
+                if fatal_client_error {
+                    state
+                        .repo
+                        .mark_lecture_notes_failed(&job.lecture_key, &message)
+                        .await?;
+                } else {
+                    state
+                        .repo
+                        .update_lecture_notes_error(&job.lecture_key, &message)
+                        .await?;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // title_requested_at 表示请求已经由 Archive 持久化接管（或是历史 canonical 已证实存在）。
+    // 对新队列任务先只读 submission 状态；retry_waiting 不需要 ClassFlow 自己计时或重发。
+    match get_archive_submission(state, client, base, &initial_submission_key).await {
+        Ok(Some(ArchiveSubmissionOutcome::Queued {
+            status,
+            next_attempt_at,
+            last_error,
+        })) => {
+            let retry = next_attempt_at
+                .map(|value| format!("，nextAttemptAt={value}"))
+                .unwrap_or_default();
+            let detail = last_error
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("，{value}"))
+                .unwrap_or_default();
             state
                 .repo
                 .update_lecture_notes_error(
                     &job.lecture_key,
-                    &format!(
-                        "标题请求遇到 Archive 429，已进入全局冷却: {}",
-                        truncate(&body, 200)
-                    ),
+                    &format!("Archive 标题 submission 尚未正式发送：{status}{retry}{detail}"),
                 )
                 .await?;
             return Ok(());
         }
-        if !status.is_success() {
+        Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
             state
                 .repo
                 .mark_lecture_notes_failed(
                     &job.lecture_key,
-                    &format!("标题请求提交失败: HTTP {status} {}", truncate(&body, 200)),
+                    &format!("Archive 标题 submission 终止: {error}"),
                 )
                 .await?;
             return Ok(());
         }
-        let payload: Value = serde_json::from_str(&body)
-            .map_err(|error| AppError::Internal(format!("解析标题 submit 响应失败: {error}")))?;
-        let returned_cid = payload
-            .pointer("/result/conversationId")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if returned_cid != conversation_id {
+        Ok(Some(ArchiveSubmissionOutcome::Accepted { conversation_id: returned_cid })) => {
+            if returned_cid != conversation_id {
+                state
+                    .repo
+                    .mark_lecture_notes_failed(
+                        &job.lecture_key,
+                        "标题 submission 返回了不同 conversationId",
+                    )
+                    .await?;
+                return Ok(());
+            }
+        }
+        Ok(None) => {
+            // 旧版同步 Bridge 没有 submission 记录；直接按 canonical messages 继续。
+        }
+        Err((_status, message)) => {
             state
                 .repo
-                .mark_lecture_notes_failed(
-                    &job.lecture_key,
-                    "标题请求没有继续原 conversation，已停止自动处理",
-                )
+                .update_lecture_notes_error(&job.lecture_key, &message)
                 .await?;
             return Ok(());
         }
-        state
-            .repo
-            .mark_lecture_notes_title_requested(&job.lecture_key)
-            .await?;
-        info!(
-            "Phase 3 Notes 标题请求已提交: lecture_key={}, conversation_id={}",
-            job.lecture_key, conversation_id
-        );
-        return Ok(());
     }
 
     let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
@@ -963,6 +1018,10 @@ async fn process_title_stage(
     let Some(title_message) = title_message else {
         return Ok(());
     };
+    let title_message_ordinal = title_message
+        .get("ordinal")
+        .and_then(Value::as_i64)
+        .unwrap_or(notes_final_ordinal + 1);
     let title = normalize_title_response(
         title_message
             .get("text")
@@ -971,39 +1030,82 @@ async fn process_title_stage(
     );
     let rejection = title_rejection_reason(&title, &existing_titles);
     if let Some(reason) = rejection {
-        let marker = format!("标题重做请求已提交: {title}");
+        let marker = format!("标题重做请求已托管: {title}");
+        let retry_submission_key = format!(
+            "classflow:lecture:{}:title:{}:retry:{}",
+            job.lecture_key, notes_final_ordinal, title_message_ordinal
+        );
+
         if job.last_error.as_deref() == Some(marker.as_str()) {
+            match get_archive_submission(state, client, base, &retry_submission_key).await {
+                Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
+                    state
+                        .repo
+                        .mark_lecture_notes_failed(
+                            &job.lecture_key,
+                            &format!("Archive 标题重做 submission 终止: {error}"),
+                        )
+                        .await?;
+                }
+                Ok(_) => {}
+                Err((_status, message)) => {
+                    state
+                        .repo
+                        .update_lecture_notes_error(&job.lecture_key, &message)
+                        .await?;
+                }
+            }
             return Ok(());
         }
+
         let retry_prompt = build_title_prompt(&existing_titles, Some((&title, reason)));
-        let response = apply_bridge_auth(
-            client.post(format!("{base}/v1/turns")).json(&json!({
+        let outcome = get_or_enqueue_archive_submission(
+            state,
+            client,
+            base,
+            &retry_submission_key,
+            json!({
                 "mode": "continue",
                 "conversationId": conversation_id,
+                "idempotencyKey": retry_submission_key,
                 "text": retry_prompt,
-            })),
-            state,
+            }),
         )
-        .send()
         .await;
-        let Ok(response) = response else {
-            return Ok(());
-        };
-        if response.status().is_success() {
-            state
-                .repo
-                .update_lecture_notes_error(&job.lecture_key, &marker)
-                .await?;
+
+        match outcome {
+            Ok(ArchiveSubmissionOutcome::Queued { .. })
+            | Ok(ArchiveSubmissionOutcome::Accepted { .. }) => {
+                state
+                    .repo
+                    .update_lecture_notes_error(&job.lecture_key, &marker)
+                    .await?;
+            }
+            Ok(ArchiveSubmissionOutcome::Failed { error }) => {
+                state
+                    .repo
+                    .mark_lecture_notes_failed(
+                        &job.lecture_key,
+                        &format!("Archive 标题重做 submission 终止: {error}"),
+                    )
+                    .await?;
+            }
+            Err((_status, message)) => {
+                state
+                    .repo
+                    .update_lecture_notes_error(&job.lecture_key, &message)
+                    .await?;
+            }
         }
         return Ok(());
     }
+
     state
         .repo
         .mark_lecture_notes_publishing(&job.lecture_key, &title)
         .await?;
     Ok(())
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NormalizedNotes {
     markdown: String,
@@ -1695,5 +1797,6 @@ mod tests {
         );
     }
 }
+
 
 

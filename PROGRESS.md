@@ -1,3 +1,4 @@
+- 2026-10-11 title-only 与标题重做均迁入 Archive 幂等 submission：初次 key 固定到 lecture+notes_final_ordinal，重做 key 再绑定被拒标题 final 的 ordinal。Archive 一旦持久化 queued，ClassFlow 即 checkpoint title_requested_at；之后只查 submission/canonical，retry_waiting/429 不再由 ClassFlow 自己计时。
 - 2026-10-11 Archive submission helper 已拆为只读 get_archive_submission 与 get-or-enqueue 两层；标题进入队列后可持续只读检查 failed/retry_waiting，而不必重建或重复 POST 动态 title prompt。
 - 2026-10-11 Notes 新建 conversation 已切换到 Archive 幂等 submission：key=classflow:lecture:<lecture_key>:notes；queued/processing/retry_waiting 保持 pending，accepted 才 checkpoint conversationId 进入 generating，failed 才转人工失败。网络超时/5xx/429 只保留 pending 等 Archive/下一轮恢复，不再制造新的 submission_unknown，也不再判断 DOM drift 字符串。
 - 2026-10-11 Phase 3 新增统一 Archive submission helper：先 GET /v1/submissions?key=...，只有 404 才 POST /v1/turns；解析 queued/processing/retry_waiting/accepted/failed，并兼容旧 Bridge 的同步 result.conversationId。网络不确定时下一轮只查同一幂等键，不再需要靠重发正文猜测是否已提交。
@@ -555,6 +556,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 
