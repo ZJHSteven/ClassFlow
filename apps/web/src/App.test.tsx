@@ -157,6 +157,26 @@ function countTaskListRequests() {
 }
 
 /**
+ * 模拟手机/窄屏环境。
+ *
+ * responsive detail hook 只依赖 `matchMedia('(max-width: 1100px)')` 的 matches 值；
+ * 这里提供最小完整对象，避免测试依赖真实浏览器布局引擎。
+ */
+function stubCompactLayout() {
+  vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+    matches: query === '(max-width: 1100px)',
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })))
+  vi.stubGlobal('scrollTo', vi.fn())
+}
+
+/**
  * 按 URL 分发假响应，避免使用“第几次 fetch 返回什么”的脆弱写法。
  *
  * React 组件里存在首次加载、详情加载、轮询等多条请求链。
@@ -426,5 +446,69 @@ describe('App', () => {
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(downloadedFilenames[downloadedFilenames.length - 1]).toBe('3.20-病理学-王老师.md')
+  })
+
+  it('手机端任务列表点击后应该进入独立详情，并能通过 popstate 回到列表', async () => {
+    stubCompactLayout()
+    const pushStateSpy = vi.spyOn(window.history, 'pushState')
+
+    render(<App />)
+
+    await waitFor(() => {
+      expect(MockEventSource.instances.length).toBeGreaterThan(0)
+    })
+    emitTaskSnapshot()
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('row').length).toBeGreaterThanOrEqual(2)
+    })
+
+    const panelGrid = document.querySelector('.panel__grid')
+    expect(panelGrid).toHaveClass('panel__grid--list-page')
+
+    fireEvent.click(screen.getAllByRole('row')[1])
+
+    await waitFor(() => {
+      expect(panelGrid).toHaveClass('panel__grid--detail-page')
+      expect(screen.getByRole('button', { name: /返回任务队列/ })).toBeInTheDocument()
+    })
+    expect(pushStateSpy).toHaveBeenCalledTimes(1)
+
+    window.dispatchEvent(new PopStateEvent('popstate'))
+
+    await waitFor(() => {
+      expect(panelGrid).toHaveClass('panel__grid--list-page')
+    })
+    pushStateSpy.mockRestore()
+  })
+
+  it('手机端课程库点击后应该进入独立详情，并能通过 popstate 回到课程列表', async () => {
+    stubCompactLayout()
+    const pushStateSpy = vi.spyOn(window.history, 'pushState')
+
+    render(<App />)
+    fireEvent.click(screen.getAllByRole('button', { name: '课程库' })[0])
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('row').length).toBeGreaterThanOrEqual(2)
+    })
+
+    const panelGrid = document.querySelector('.panel__grid')
+    expect(panelGrid).toHaveClass('panel__grid--list-page')
+
+    fireEvent.click(screen.getAllByRole('row')[1])
+
+    await waitFor(() => {
+      expect(panelGrid).toHaveClass('panel__grid--detail-page')
+      expect(screen.getByRole('button', { name: /返回课程库/ })).toBeInTheDocument()
+    })
+    expect(pushStateSpy).toHaveBeenCalledTimes(1)
+
+    window.dispatchEvent(new PopStateEvent('popstate'))
+
+    await waitFor(() => {
+      expect(panelGrid).toHaveClass('panel__grid--list-page')
+    })
+    pushStateSpy.mockRestore()
   })
 })
