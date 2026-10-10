@@ -14,6 +14,13 @@ export type CourseArtifactName = 'course.md' | 'manifest.json'
 export type LectureArtifactName = 'asr.md' | 'notes.md'
 export type TaskArtifactName = 'segment.md' | 'segment.json' | 'events.json' | 'task.json'
 
+export interface PublicNoteFile {
+  path: string
+  course: string
+  kind: 'Audio' | 'Notes'
+  name: string
+}
+
 async function readErrorMessage(response: Response): Promise<string> {
   let message = `请求失败，HTTP ${response.status}`
   try {
@@ -295,4 +302,15 @@ export function loginSmartClass(request: SmartClassLoginRequest): Promise<SmartC
     },
     body: JSON.stringify(request),
   })
+}
+
+/** 读取朋友分享页使用的公开 GitHub 资料索引。 */
+export async function listPublicNoteFiles(): Promise<PublicNoteFile[]> {
+  const payload = await readJson<{ files: PublicNoteFile[] }>('/public/notes/tree')
+  return payload.files
+}
+
+/** 读取单个公开 Markdown；该接口不经过 ClassFlow 管理后端。 */
+export function getPublicNoteMarkdown(path: string): Promise<string> {
+  return readText('/public/notes/file?path=' + encodeURIComponent(path))
 }

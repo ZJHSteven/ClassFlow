@@ -42,6 +42,7 @@ export interface WorkerEnv {
   ARTIFACT_PROXY_TOKEN?: string
   ARTIFACTS?: R2BucketLike
   ASSETS: AssetBindingLike
+  NOTES_PUBLIC_REPO?: string
 }
 
 interface TaskArtifactLookupResponse {
@@ -276,6 +277,94 @@ async function tryHandlePublicArtifactRequest(request: Request, env: WorkerEnv):
   return buildStoredObjectResponse(object)
 }
 
+
+interface GithubTreeEntry {
+  path?: string
+  type?: string
+}
+
+interface GithubTreeResponse {
+  tree?: GithubTreeEntry[]
+}
+
+const DEFAULT_PUBLIC_NOTES_REPO = 'ZJHSteven/med-notes-2026-fall-y3'
+
+function publicNotesRepo(env: WorkerEnv): string {
+  return env.NOTES_PUBLIC_REPO?.trim() || DEFAULT_PUBLIC_NOTES_REPO
+}
+
+function githubPublicHeaders(): Headers {
+  const headers = new Headers()
+  headers.set('Accept', 'application/vnd.github+json')
+  headers.set('User-Agent', 'ClassFlow-Public-Notes')
+  headers.set('X-GitHub-Api-Version', '2022-11-28')
+  return headers
+}
+
+async function handlePublicNotesRequest(request: Request, env: WorkerEnv): Promise<Response | null> {
+  if (request.method !== 'GET') {
+    return null
+  }
+
+  const url = new URL(request.url)
+  const repo = publicNotesRepo(env)
+
+  if (url.pathname === '/public/notes/tree') {
+    const response = await fetch('https://api.github.com/repos/' + repo + '/git/trees/main?recursive=1', {
+      headers: githubPublicHeaders(),
+    })
+    if (!response.ok) {
+      return jsonResponse(502, '公开笔记仓库目录读取失败。')
+    }
+
+    const payload = (await response.json()) as GithubTreeResponse
+    const files = (payload.tree || [])
+      .filter((entry) => entry.type === 'blob' && typeof entry.path === 'string')
+      .map((entry) => entry.path as string)
+      .filter((path) => /^[^/]+\/(Audio|Notes)\/[^/]+\.md$/i.test(path))
+      .map((path) => {
+        const [course, kind, name] = path.split('/')
+        return { path, course, kind, name }
+      })
+
+    return new Response(JSON.stringify({ repo, files }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'public, max-age=60',
+      },
+    })
+  }
+
+  if (url.pathname === '/public/notes/file') {
+    const path = url.searchParams.get('path') || ''
+    if (!/^[^/]+\/(Audio|Notes)\/[^/]+\.md$/i.test(path) || path.includes('..')) {
+      return jsonResponse(400, '公开 Markdown 路径不合法。')
+    }
+
+    const encodedPath = path.split('/').map((part) => encodeURIComponent(part)).join('/')
+    const response = await fetch('https://raw.githubusercontent.com/' + repo + '/main/' + encodedPath, {
+      headers: { 'User-Agent': 'ClassFlow-Public-Notes' },
+    })
+    if (response.status === 404) {
+      return jsonResponse(404, '共享资料不存在。')
+    }
+    if (!response.ok) {
+      return jsonResponse(502, '共享 Markdown 读取失败。')
+    }
+
+    return new Response(await response.text(), {
+      status: 200,
+      headers: {
+        'content-type': 'text/markdown; charset=utf-8',
+        'cache-control': 'public, max-age=60',
+      },
+    })
+  }
+
+  return null
+}
+
 export async function proxyApiRequest(request: Request, env: WorkerEnv): Promise<Response> {
   const incomingUrl = new URL(request.url)
   const backendUrl = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, env.BACKEND_BASE_URL)
@@ -310,6 +399,16 @@ export async function proxyApiRequest(request: Request, env: WorkerEnv): Promise
 
 export async function handleWorkerRequest(request: Request, env: WorkerEnv): Promise<Response> {
   const url = new URL(request.url)
+
+  const publicNotesResponse = await handlePublicNotesRequest(request, env)
+  if (publicNotesResponse) {
+    return publicNotesResponse
+  }
+
+  if (url.pathname === '/share') {
+    const rootUrl = new URL('/', request.url)
+    return env.ASSETS.fetch(new Request(rootUrl.toString(), { method: 'GET', headers: request.headers }))
+  }
   if (url.pathname.startsWith('/__classflow/artifacts/')) {
     return handleArtifactRequest(request, env)
   }

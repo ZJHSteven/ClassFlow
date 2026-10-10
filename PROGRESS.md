@@ -1,3 +1,9 @@
+# 2026-10-10 朋友分享页进入实现
+
+- 分享前端采用同一 Worker 的 /share，但与管理 API 完全隔离：浏览器只调用 /public/notes/tree 与 /public/notes/file。
+- Worker 只读取公开仓库 ZJHSteven/med-notes-2026-fall-y3 的 Git tree 与 raw Markdown，并过滤为 课程/Audio/*.md 与 课程/Notes/*.md；不向朋友暴露 BACKEND_TOKEN、SmartClass 登录、任务重试或 Archive 控制面。
+- 分享页支持按课程切换、Notes/ASR 双分类、Markdown 预览与下载；移动端自动改为单列阅读。
+- 已新增 SharePage 独立回归测试，验证公开索引 -> Notes Markdown 读取且页面不出现管理入口。
 # 2026-10-10 Notes 课程内序号修复
 
 - GitHub 实仓核对发现真实命名缺陷：Notes 序号此前按“课程 + 老师”取 MAX(sequence_no)+1，导致同一课程换老师后重新从 1 开始；泌尿生殖系统已出现 1 / 2 / 1。
@@ -504,5 +510,6 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 

@@ -15,12 +15,20 @@ import { AnimatePresence, motion } from 'motion/react'
 import { useState } from 'react'
 import { CoursePanel } from './components/CoursePanel'
 import { SmartClassSessionCard } from './components/SmartClassSessionCard'
+import { SharePage } from './components/SharePage'
 import { TaskPanel } from './components/TaskPanel'
 import './App.css'
 
 type ViewMode = 'tasks' | 'courses'
 
 function App() {
+  const isShareView =
+    window.location.pathname === '/share' || new URLSearchParams(window.location.search).get('share') === '1'
+
+  if (isShareView) {
+    return <SharePage />
+  }
+
   const [viewMode, setViewMode] = useState<ViewMode>('tasks')
   const tabMotionProps = {
     whileHover: { y: -2, scale: 1.015 },
