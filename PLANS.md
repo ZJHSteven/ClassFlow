@@ -1,3 +1,13 @@
+# 2026-10-11 Phase 3 Archive 职责回收 ExecPlan
+
+目标：让 ClassFlow 只表达“为 lecture 生成 Notes/标题”这一业务意图，不再自行理解 Archive 的 429、Guardian、DOM、transport unknown 等内部状态。
+
+1. Notes 与 title-only 提交统一携带稳定 idempotencyKey；Archive 返回 queued/retry_waiting 时保持业务 pending/generating，不把它解释为 ClassFlow 自己的限流错误。
+2. 删除 ClassFlow 本地 429 全局 cooldown；429 的节流、熔断、恢复全部由 Archive 提交服务负责。
+3. 删除新的 DOM drift 字符串特判与新建 submission_unknown 流程；网络超时可安全重发同一幂等请求，Archive 负责去重与判定是否已经真正提交。
+4. 去掉“必须等上一堂 Notes+标题+GitHub 全部完成后才允许下一堂提交”的严格串行保护；ClassFlow 可以把多个业务 job 交给 Archive 队列，真正的 ChatGPT POST 串行由 Archive 控制。
+5. 保留旧数据库 recovery_kind 与人工恢复 API 作为历史兼容，只是不再为新幂等提交流程制造这些状态。
+6. 增加 queued/accepted/failed/网络重试、title 幂等重试和多 pending 入队回归；完成后再部署 N1 并观察历史 backfill 吞吐。
 # 2026-10-10 Phase 3 收敛：复用既有 course 聚合 + 历史补跑
 
 目标：纠正 Phase 3 中重复实现“lecture 聚合”的架构冗余，直接复用 ClassFlow 既有 course_key（semester|date|course|teacher）、manifest 与 merged/course.md 作为完整课堂真相源；在不破坏现有 3 条生产 Notes 身份的前提下补跑本学期历史课程。
@@ -949,4 +959,5 @@ CapsWriter Server :6016
 - 已完成：临时反向 SSH 已把 N100 `127.0.0.1:8790` 映射到 Windows 浏览器桥，跨机 `/health` 与视频列表请求链路已实际验证。
 - 当前阻塞：原 SmartClass 登录态在 12 小时保活实验结束后的下午/晚间已自然失效；Collector 当前正确进入“未授权后等待下一轮”状态，不误入队。
 - 后续：用户重新正常登录 SmartClass 后，当前临时链路会自动在下一轮开始 21 天补录；最终无人值守形态改为 N100/N1 本机独立 Chromium profile + 本机桥，去除对 Windows 与反向 SSH 的依赖。
+
 
