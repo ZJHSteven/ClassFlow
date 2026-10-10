@@ -1602,6 +1602,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn archive_submission_parser_should_cover_queue_terminal_and_legacy_shapes() {
+        assert_eq!(
+            parse_archive_submission_outcome(
+                r#"{"submission":{"status":"retry_waiting","nextAttemptAt":1791660458462,"lastError":"cooldown"}}"#
+            )
+            .expect("queued submission 应可解析"),
+            ArchiveSubmissionOutcome::Queued {
+                status: "retry_waiting".to_string(),
+                next_attempt_at: Some(1_791_660_458_462),
+                last_error: Some("cooldown".to_string()),
+            }
+        );
+
+        assert_eq!(
+            parse_archive_submission_outcome(
+                r#"{"submission":{"status":"accepted","result":{"conversationId":"cid-accepted"}}}"#
+            )
+            .expect("accepted submission 应可解析"),
+            ArchiveSubmissionOutcome::Accepted {
+                conversation_id: "cid-accepted".to_string(),
+            }
+        );
+
+        assert_eq!(
+            parse_archive_submission_outcome(
+                r#"{"submission":{"status":"failed","lastError":"bad request"}}"#
+            )
+            .expect("failed submission 应可解析"),
+            ArchiveSubmissionOutcome::Failed {
+                error: "bad request".to_string(),
+            }
+        );
+
+        assert_eq!(
+            parse_archive_submission_outcome(
+                r#"{"accepted":true,"result":{"conversationId":"legacy-cid"}}"#
+            )
+            .expect("旧 Bridge result 应继续兼容"),
+            ArchiveSubmissionOutcome::Accepted {
+                conversation_id: "legacy-cid".to_string(),
+            }
+        );
+    }
+
+    #[test]
     fn title_prefers_readable_markdown_heading() {
         assert_eq!(
             derive_notes_title(
