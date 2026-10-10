@@ -1,3 +1,9 @@
+# 2026-10-11 Notes 标题阶段支持 canonical 反查恢复
+
+- 历史 backfill 暴露出 title-only turn 与主 Notes 一样存在 transport unknown：请求可能已被 ChatGPT 接受，但 ClassFlow 没收到 Bridge 响应。旧逻辑会转 manual_review，之后若直接 resume 会再次提交标题，存在重复 turn 风险。
+- 已新增“提交标题前先查 canonical messages”保护：当 title_requested_at 为空时，先在 notes_final_ordinal 之后搜索本系统固定前缀的 user title prompt；若已存在则认领并写 title_requested_at，绝不重发；canonical 暂不可达时宁可等待，也不提交。
+- 真实 2026-09-07 综合素养课程5 已验证该场景：主 Notes final ordinal=28；title prompt ordinal=29；assistant final ordinal=31，标题为“科研素养与科研诚信”。此前客户端只记录到“标题请求结果未知”，现在可无重复 turn 地恢复。
+- 新增回归测试 should_recognize_existing_title_prompt_after_transport_unknown；backend 64/64 unit + 11/11 API integration + Clippy -D warnings 全绿。
 # 2026-10-11 ClassFlow 全阶段通知 outbox 完成
 
 - 新增持久化 stage_events outbox：业务主链只负责把事件写入 SQLite，独立 notification worker 异步 POST webhook；通知渠道故障不会反向拖垮下载、ASR 或 Notes。
@@ -534,6 +540,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 

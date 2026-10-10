@@ -28,6 +28,8 @@ use crate::{
 
 const SHANGHAI_OFFSET_SECS: i32 = 8 * 3600;
 const TITLE_MAX_CHARS: usize = 24;
+const TITLE_PROMPT_PREFIX: &str =
+    "请只为你刚刚生成的整堂课堂笔记起一个简洁、具体、可区分的中文主题名。";
 
 pub fn spawn_notes_worker(state: AppState) {
     if !state.config.notes_enabled {
@@ -631,6 +633,57 @@ async fn process_title_stage(
         .await?;
 
     if job.title_requested_at.is_none() {
+        // title-only 提交也可能出现“服务端已接受，但本地没收到响应”。
+        // 在任何重新提交前，先读取 canonical messages 检查我们自己的标题 prompt 是否已存在。
+        // 只有明确不存在时才允许继续提交；读不到 canonical 状态时宁可等待，也不冒重复 title turn 的风险。
+        let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
+        let response = match apply_bridge_auth(client.get(messages_url), state)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                state
+                    .repo
+                    .update_lecture_notes_error(
+                        &job.lecture_key,
+                        &format!("标题提交前核对已有会话失败，暂不重发: {error}"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
+        if !response.status().is_success() {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!(
+                        "标题提交前核对已有会话失败，暂不重发: HTTP {}",
+                        response.status()
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
+        let payload: Value = response.json().await?;
+        let messages = payload
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if find_existing_title_prompt_ordinal(&messages, notes_final_ordinal).is_some() {
+            state
+                .repo
+                .mark_lecture_notes_title_requested(&job.lecture_key)
+                .await?;
+            info!(
+                "Phase 3 Notes 已认领既有标题请求，避免重复提交: lecture_key={}, conversation_id={}",
+                job.lecture_key, conversation_id
+            );
+            return Ok(());
+        }
+
         let title_prompt = build_title_prompt(&existing_titles, None);
         let request = apply_bridge_auth(
             client.post(format!("{base}/v1/turns")).json(&json!({
@@ -1170,6 +1223,22 @@ fn normalize_title_response(raw: &str) -> String {
     title
 }
 
+fn find_existing_title_prompt_ordinal(messages: &[Value], notes_final_ordinal: i64) -> Option<i64> {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let ordinal = message.get("ordinal").and_then(Value::as_i64)?;
+            let is_title_prompt = ordinal > notes_final_ordinal
+                && message.get("role").and_then(Value::as_str) == Some("user")
+                && message
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.trim_start().starts_with(TITLE_PROMPT_PREFIX));
+            is_title_prompt.then_some(ordinal)
+        })
+        .max()
+}
+
 fn build_title_prompt(existing_titles: &[String], rejected: Option<(&str, &str)>) -> String {
     let existing = if existing_titles.is_empty() {
         "（暂无）".to_string()
@@ -1383,6 +1452,34 @@ mod tests {
             ),
             "宫颈癌、子宫内膜异位症与子宫体肿瘤"
         );
+    }
+
+    #[test]
+    fn should_recognize_existing_title_prompt_after_transport_unknown() {
+        let messages = vec![
+            json!({
+                "ordinal": 28,
+                "role": "assistant",
+                "channel": "final",
+                "text": "完整课堂笔记",
+                "endTurn": true
+            }),
+            json!({
+                "ordinal": 29,
+                "role": "user",
+                "text": format!("{}要求：只输出标题。", TITLE_PROMPT_PREFIX)
+            }),
+            json!({
+                "ordinal": 31,
+                "role": "assistant",
+                "channel": "final",
+                "text": "科研素养与科研诚信",
+                "endTurn": true
+            }),
+        ];
+
+        assert_eq!(find_existing_title_prompt_ordinal(&messages, 28), Some(29));
+        assert_eq!(find_existing_title_prompt_ordinal(&messages, 29), None);
     }
 
     #[test]
