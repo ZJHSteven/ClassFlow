@@ -1,3 +1,11 @@
+# 2026-10-11 ClassFlow 全阶段通知 outbox 完成
+
+- 新增持久化 stage_events outbox：业务主链只负责把事件写入 SQLite，独立 notification worker 异步 POST webhook；通知渠道故障不会反向拖垮下载、ASR 或 Notes。
+- 通知事件使用稳定 event_key + UNIQUE 去重，支持 pending/sent/failed、attempt_count、last_error、next_attempt_at、sent_at；失败按 30s/60s/120s... 指数退避，最高 1 小时，达到最大尝试次数后停止。
+- 已覆盖关键流水线事件：新录播 discovered/queued、下载 started/succeeded、后续“开始...”阶段 started、ASR succeeded、task 最终 succeeded/failed、Notes started/succeeded/failed。失败事件保留真实 stage，便于直接判断卡在下载、抽音频、上传、转写或 Notes。
+- Notes 与 task 写通知均为 best-effort；outbox 自身写入异常只记日志，不改变主任务状态。
+- 配置新增 CLASSFLOW_NOTIFICATIONS_ENABLED / CLASSFLOW_NOTIFICATION_WEBHOOK_URL / TOKEN / POLL_INTERVAL_SECS / MAX_ATTEMPTS。当前尚未发现已配置的通知 webhook secret，因此代码可部署但生产投递保持关闭，待绑定实际接收渠道。
+- backend 全量回归：63/63 unit + 11/11 API integration + Clippy -D warnings 全绿。
 # 2026-10-10 429 冷却与公开分享站生产验收
 
 - 新 backend 已部署，SHA-256 205431b5b04ad096314e7079ad7c1bcf2d25be02fb8ce60ab65f8f2670ba4701；CLASSFLOW_NOTES_ENABLED 已恢复 true，历史 backfill 继续保留 18 条 pending。
@@ -526,6 +534,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 

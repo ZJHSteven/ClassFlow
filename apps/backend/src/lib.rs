@@ -27,6 +27,7 @@ pub mod error;
 pub mod models;
 pub mod network;
 pub mod notes;
+pub mod notifications;
 pub mod pipeline;
 pub mod repository;
 pub mod routes;

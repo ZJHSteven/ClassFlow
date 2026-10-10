@@ -153,6 +153,11 @@ pub struct AppConfig {
     pub archive_bridge_request_timeout_secs: f64,
     pub notes_github_repo: String,
     pub notes_github_token: String,
+    pub notifications_enabled: bool,
+    pub notification_webhook_url: String,
+    pub notification_webhook_token: String,
+    pub notification_poll_interval_secs: f64,
+    pub notification_max_attempts: u32,
 }
 
 impl AppConfig {
@@ -473,6 +478,16 @@ impl AppConfig {
                 "ZJHSteven/med-notes-2026-fall-y3",
             ),
             notes_github_token: env::var("CLASSFLOW_NOTES_GITHUB_TOKEN").unwrap_or_default(),
+            notifications_enabled: env_or_parse("CLASSFLOW_NOTIFICATIONS_ENABLED", false)?,
+            notification_webhook_url: env::var("CLASSFLOW_NOTIFICATION_WEBHOOK_URL")
+                .unwrap_or_default(),
+            notification_webhook_token: env::var("CLASSFLOW_NOTIFICATION_WEBHOOK_TOKEN")
+                .unwrap_or_default(),
+            notification_poll_interval_secs: env_or_parse(
+                "CLASSFLOW_NOTIFICATION_POLL_INTERVAL_SECS",
+                15.0,
+            )?,
+            notification_max_attempts: env_or_parse("CLASSFLOW_NOTIFICATION_MAX_ATTEMPTS", 8)?,
         })
     }
 }

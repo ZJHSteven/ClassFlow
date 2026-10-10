@@ -154,6 +154,26 @@ pub struct TaskEventRecord {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageEventRecord {
+    pub id: i64,
+    pub event_key: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub stage: String,
+    pub outcome: String,
+    pub title: String,
+    pub message: String,
+    pub payload: Value,
+    pub delivery_status: String,
+    pub attempt_count: i64,
+    pub last_error: Option<String>,
+    pub next_attempt_at: Option<DateTime<Utc>>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskListQuery {
     pub status: Option<String>,

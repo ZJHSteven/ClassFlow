@@ -157,6 +157,15 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
 
     state
         .repo
+        .emit_task_stage_event(
+            task_id,
+            TaskStage::Downloading.as_str(),
+            "succeeded",
+            "录播下载已完成或已命中可复用检查点",
+        )
+        .await;
+    state
+        .repo
         .update_task_stage(
             task_id,
             TaskStage::ExtractingAudio,
@@ -236,6 +245,16 @@ async fn process_task(state: AppState, task_id: &str) -> AppResult<()> {
         )
         .await?
     };
+
+    state
+        .repo
+        .emit_task_stage_event(
+            task_id,
+            TaskStage::Transcribing.as_str(),
+            "succeeded",
+            "ASR 已完成，开始持久化课程产物",
+        )
+        .await;
 
     let current_task = state.repo.get_task(task_id).await?;
     let (segment_markdown_path, segment_json_path) = build_segment_paths(&current_task);

@@ -26,6 +26,7 @@ use crate::{
     error::AppResult,
     network::NetworkHealthGate,
     notes::spawn_notes_worker,
+    notifications::spawn_notification_worker,
     pipeline::{PipelineIo, RealPipelineIo},
     repository::Repository,
     routes::build_router,
@@ -120,6 +121,7 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
 
     spawn_smartclass_collector(state.clone());
     spawn_notes_worker(state.clone());
+    spawn_notification_worker(state.clone());
 
     let listener = tokio::net::TcpListener::bind(state.config.bind_addr).await?;
     info!("ClassFlow backend 正在监听 {}", state.config.bind_addr);

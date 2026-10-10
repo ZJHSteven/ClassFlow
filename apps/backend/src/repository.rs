@@ -14,6 +14,7 @@ use sqlx::{
     Column, Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
@@ -24,7 +25,7 @@ use crate::{
     error::{AppError, AppResult},
     models::{
         CourseDetailResponse, CourseListQuery, CourseSummaryResponse, IntakeBatchRequest,
-        IntakeBatchResponse, IntakeItem, LectureNotesRecord, LectureNotesStatus,
+        IntakeBatchResponse, IntakeItem, LectureNotesRecord, LectureNotesStatus, StageEventRecord,
         TaskDetailResponse, TaskDetailTaskResponse, TaskEventRecord, TaskListQuery, TaskRecord,
         TaskStage, TaskStatus,
     },
@@ -46,6 +47,17 @@ pub struct TaskTransferUpdate {
     pub total_bytes: Option<u64>,
     pub rate_bytes_per_sec: Option<u64>,
     pub eta_seconds: Option<u64>,
+}
+
+pub struct NewStageEvent<'a> {
+    pub event_key: &'a str,
+    pub source_kind: &'a str,
+    pub source_id: &'a str,
+    pub stage: &'a str,
+    pub outcome: &'a str,
+    pub title: &'a str,
+    pub message: &'a str,
+    pub payload: &'a serde_json::Value,
 }
 
 #[derive(Clone)]
@@ -148,6 +160,28 @@ impl Repository {
             );
 
             CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id);
+
+            CREATE TABLE IF NOT EXISTS stage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL UNIQUE,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                stage TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                delivery_status TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                next_attempt_at TEXT,
+                sent_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_stage_events_delivery
+                ON stage_events(delivery_status, next_attempt_at, created_at);
 
             CREATE TABLE IF NOT EXISTS lecture_notes (
                 lecture_key TEXT PRIMARY KEY,
@@ -395,6 +429,18 @@ impl Repository {
 
         transaction.commit().await?;
 
+        // 只有事务真正提交后才写通知 outbox，避免数据库回滚却留下“发现新录播”的假事件。
+        // 通知写入是 best-effort：即使 outbox 暂时异常，也不能让 intake 主链失败。
+        for task_id in &task_ids {
+            self.emit_task_stage_event(
+                task_id,
+                TaskStage::Queued.as_str(),
+                "discovered",
+                "发现新录播，已进入 ClassFlow 队列",
+            )
+            .await;
+        }
+
         Ok(IntakeBatchResponse {
             batch_id,
             accepted_count: task_ids.len(),
@@ -560,6 +606,8 @@ impl Repository {
         .await?;
         self.add_task_event(task_id, stage.as_str(), "info", "任务开始执行")
             .await?;
+        self.emit_task_stage_event(task_id, stage.as_str(), "started", "任务开始执行")
+            .await;
         Ok(())
     }
 
@@ -579,7 +627,14 @@ impl Repository {
             .execute(&self.pool)
             .await?;
         self.add_task_event(task_id, stage.as_str(), "info", message)
-            .await
+            .await?;
+        // worker 的阶段启动日志统一以“开始...”开头。利用这条已有语义写 started 事件，
+        // 不需要在每个 provider 分支里重复埋点；UNIQUE event_key 会自动去重重启重放。
+        if message.trim_start().starts_with("开始") {
+            self.emit_task_stage_event(task_id, stage.as_str(), "started", message)
+                .await;
+        }
+        Ok(())
     }
 
     /**
@@ -630,7 +685,10 @@ impl Repository {
         .execute(&self.pool)
         .await?;
         self.add_task_event(task_id, stage.as_str(), "error", error)
-            .await
+            .await?;
+        self.emit_task_stage_event(task_id, stage.as_str(), "failed", error)
+            .await;
+        Ok(())
     }
 
     /// 把可安全恢复的外部依赖失败变成“等待重试”，而不是永久失败。
@@ -855,7 +913,15 @@ impl Repository {
         .execute(&self.pool)
         .await?;
         self.add_task_event(task_id, TaskStage::Done.as_str(), "info", "任务执行成功")
-            .await
+            .await?;
+        self.emit_task_stage_event(
+            task_id,
+            TaskStage::Done.as_str(),
+            "succeeded",
+            "课程录播片段已完成 ASR 与产物写入",
+        )
+        .await;
+        Ok(())
     }
 
     pub async fn add_task_event(
@@ -876,6 +942,167 @@ impl Repository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// 把流水线关键状态变化写入 durable notification outbox。
+    ///
+    /// event_key 具有 UNIQUE 约束：同一状态转换即使因为进程重启被重复执行，也只会产生
+    /// 一条通知。业务 worker 只负责落盘；真正的 HTTP 推送由 notifications worker 异步完成。
+    pub async fn enqueue_stage_event(&self, event: NewStageEvent<'_>) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO stage_events(
+                event_key, source_kind, source_id, stage, outcome, title, message,
+                payload_json, delivery_status, created_at, updated_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            "#,
+        )
+        .bind(event.event_key)
+        .bind(event.source_kind)
+        .bind(event.source_id)
+        .bind(event.stage)
+        .bind(event.outcome)
+        .bind(event.title)
+        .bind(event.message)
+        .bind(event.payload.to_string())
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_deliverable_stage_events(
+        &self,
+        limit: usize,
+    ) -> AppResult<Vec<StageEventRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT *
+            FROM stage_events
+            WHERE delivery_status='pending'
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(limit.max(1) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(map_stage_event_row).collect()
+    }
+
+    pub async fn list_stage_events(&self, limit: usize) -> AppResult<Vec<StageEventRecord>> {
+        let rows =
+            sqlx::query("SELECT * FROM stage_events ORDER BY created_at DESC, id DESC LIMIT ?")
+                .bind(limit.max(1) as i64)
+                .fetch_all(&self.pool)
+                .await?;
+        rows.iter().map(map_stage_event_row).collect()
+    }
+
+    pub async fn mark_stage_event_sent(&self, id: i64) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE stage_events SET delivery_status='sent', sent_at=?, last_error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=?",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 记录一次通知投递失败。前几次维持 pending 并指数退避；超过上限后转 failed。
+    pub async fn mark_stage_event_delivery_failed(
+        &self,
+        id: i64,
+        error: &str,
+        max_attempts: u32,
+    ) -> AppResult<()> {
+        let row = sqlx::query("SELECT attempt_count FROM stage_events WHERE id=?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("通知事件不存在: {id}")))?;
+        let next_attempt = row.get::<i64, _>("attempt_count") + 1;
+        let terminal = next_attempt >= max_attempts.max(1) as i64;
+        let delay_secs = notification_retry_delay_secs(next_attempt as u32);
+        let now = Utc::now();
+        let next_at =
+            (!terminal).then(|| (now + chrono::Duration::seconds(delay_secs as i64)).to_rfc3339());
+
+        sqlx::query(
+            "UPDATE stage_events SET delivery_status=?, attempt_count=?, last_error=?, next_attempt_at=?, updated_at=? WHERE id=?",
+        )
+        .bind(if terminal { "failed" } else { "pending" })
+        .bind(next_attempt)
+        .bind(error)
+        .bind(next_at)
+        .bind(now.to_rfc3339())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// task 阶段事件是 best-effort 写 outbox；通知子系统异常绝不能让主任务回滚。
+    ///
+    /// 对同一 attempt + stage + outcome 使用稳定 event_key，因此 worker 重启、检查点恢复或
+    /// 同一“开始阶段”日志重复执行，都不会制造重复通知。
+    pub async fn emit_task_stage_event(
+        &self,
+        task_id: &str,
+        stage: &str,
+        outcome: &str,
+        message: &str,
+    ) {
+        let task = match self.get_task(task_id).await {
+            Ok(task) => task,
+            Err(error) => {
+                warn!(
+                    "读取 task 以生成通知事件失败: task_id={}, error={}",
+                    task_id, error
+                );
+                return;
+            }
+        };
+        let event_key = format!(
+            "task:{}:attempt:{}:{}:{}",
+            task.id, task.attempt_count, stage, outcome
+        );
+        let title = format!(
+            "{} · {} {}-{}",
+            task.course_name, task.date, task.start_time, task.end_time
+        );
+        let payload = serde_json::json!({
+            "task_id": task.id,
+            "course_key": task.course_key,
+            "course_name": task.course_name,
+            "teacher_name": task.teacher_name,
+            "date": task.date,
+            "start_time": task.start_time,
+            "end_time": task.end_time,
+        });
+
+        if let Err(error) = self
+            .enqueue_stage_event(NewStageEvent {
+                event_key: &event_key,
+                source_kind: "task",
+                source_id: &task.id,
+                stage,
+                outcome,
+                title: &title,
+                message,
+                payload: &payload,
+            })
+            .await
+        {
+            warn!("写入 task 通知 outbox 失败，不影响主链: {}", error);
+        }
     }
 
     pub async fn retry_task(&self, task_id: &str) -> AppResult<()> {
@@ -1278,6 +1505,12 @@ impl Repository {
         .bind(lecture_key)
         .execute(&self.pool)
         .await?;
+        self.emit_notes_stage_event(
+            lecture_key,
+            "started",
+            "课堂 Notes 已提交，正在等待 ChatGPT Project 结果",
+        )
+        .await;
         Ok(())
     }
 
@@ -1299,6 +1532,8 @@ impl Repository {
             .bind(lecture_key)
             .execute(&self.pool)
             .await?;
+        self.emit_notes_stage_event(lecture_key, "failed", error)
+            .await;
         Ok(())
     }
 
@@ -1391,7 +1626,70 @@ impl Repository {
             .bind(lecture_key)
             .execute(&self.pool)
             .await?;
+        self.emit_notes_stage_event(lecture_key, "succeeded", "课堂 Notes 已生成并发布到 GitHub")
+            .await;
         Ok(())
+    }
+
+    async fn emit_notes_stage_event(&self, lecture_key: &str, outcome: &str, message: &str) {
+        let notes = match self.get_lecture_notes(lecture_key).await {
+            Ok(Some(notes)) => notes,
+            Ok(None) => return,
+            Err(error) => {
+                warn!(
+                    "读取 Notes 以生成通知事件失败: lecture_key={}, error={}",
+                    lecture_key, error
+                );
+                return;
+            }
+        };
+
+        let event_key = match outcome {
+            "succeeded" => format!("notes:{}:succeeded", notes.lecture_key),
+            "failed" => format!(
+                "notes:{}:failed:{}:{}",
+                notes.lecture_key,
+                notes.submit_attempt_count,
+                notes.recovery_kind.as_deref().unwrap_or("unknown")
+            ),
+            _ => format!(
+                "notes:{}:{}:{}",
+                notes.lecture_key, outcome, notes.submit_attempt_count
+            ),
+        };
+        let title = format!(
+            "{} · {} {}-{}",
+            notes.course_name, notes.date, notes.start_time, notes.end_time
+        );
+        let payload = serde_json::json!({
+            "lecture_key": notes.lecture_key,
+            "course_key": notes.course_key,
+            "course_name": notes.course_name,
+            "teacher_name": notes.teacher_name,
+            "date": notes.date,
+            "start_time": notes.start_time,
+            "end_time": notes.end_time,
+            "notes_title": notes.notes_title,
+            "github_notes_path": notes.github_notes_path,
+            "conversation_id": notes.conversation_id,
+            "recovery_kind": notes.recovery_kind,
+        });
+
+        if let Err(error) = self
+            .enqueue_stage_event(NewStageEvent {
+                event_key: &event_key,
+                source_kind: "notes",
+                source_id: &notes.lecture_key,
+                stage: "notes",
+                outcome,
+                title: &title,
+                message,
+                payload: &payload,
+            })
+            .await
+        {
+            warn!("写入 Notes 通知 outbox 失败，不影响主链: {}", error);
+        }
     }
 
     pub async fn retry_lecture_notes(&self, lecture_key: &str) -> AppResult<()> {
@@ -1508,6 +1806,34 @@ fn validate_intake_item(item: &crate::models::IntakeItem) -> AppResult<()> {
         }
     }
     Ok(())
+}
+
+fn map_stage_event_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<StageEventRecord> {
+    let payload_raw: String = row.get("payload_json");
+    Ok(StageEventRecord {
+        id: row.get("id"),
+        event_key: row.get("event_key"),
+        source_kind: row.get("source_kind"),
+        source_id: row.get("source_id"),
+        stage: row.get("stage"),
+        outcome: row.get("outcome"),
+        title: row.get("title"),
+        message: row.get("message"),
+        payload: serde_json::from_str(&payload_raw).unwrap_or(serde_json::Value::Null),
+        delivery_status: row.get("delivery_status"),
+        attempt_count: row.get("attempt_count"),
+        last_error: row.get("last_error"),
+        next_attempt_at: parse_optional_datetime(row.get::<Option<String>, _>("next_attempt_at"))?,
+        sent_at: parse_optional_datetime(row.get::<Option<String>, _>("sent_at"))?,
+        created_at: parse_datetime(row.get::<String, _>("created_at"))?,
+        updated_at: parse_datetime(row.get::<String, _>("updated_at"))?,
+    })
+}
+
+/// 通知重试采用 30s, 60s, 120s...，最高 1 小时。
+pub(crate) fn notification_retry_delay_secs(attempt_count: u32) -> u64 {
+    let exponent = attempt_count.saturating_sub(1).min(7);
+    (30_u64.saturating_mul(1_u64 << exponent)).min(3600)
 }
 
 fn parse_status(value: &str) -> AppResult<TaskStatus> {
@@ -2003,6 +2329,88 @@ mod tests {
         let cleared = repo.get_task(task_id).await.expect("任务应存在");
         assert!(cleared.remote_capswriter_job_id.is_none());
         assert!(cleared.remote_capswriter_job_id_saved_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn stage_event_outbox_should_deduplicate_and_stop_after_max_attempts() {
+        let repo = repo().await;
+        let payload = serde_json::json!({"course_name": "病理学"});
+
+        for _ in 0..2 {
+            repo.enqueue_stage_event(NewStageEvent {
+                event_key: "demo:event:1",
+                source_kind: "task",
+                source_id: "task-1",
+                stage: "done",
+                outcome: "succeeded",
+                title: "病理学 · 2026-03-20",
+                message: "测试事件",
+                payload: &payload,
+            })
+            .await
+            .expect("重复事件应幂等写入");
+        }
+
+        let events = repo.list_stage_events(10).await.expect("应能读取 outbox");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].delivery_status, "pending");
+        let id = events[0].id;
+
+        repo.mark_stage_event_delivery_failed(id, "第一次失败", 3)
+            .await
+            .expect("第一次失败应进入退避");
+        let event = repo
+            .list_stage_events(10)
+            .await
+            .expect("应能读取事件")
+            .remove(0);
+        assert_eq!(event.attempt_count, 1);
+        assert_eq!(event.delivery_status, "pending");
+        assert!(event.next_attempt_at.is_some());
+
+        repo.mark_stage_event_delivery_failed(id, "第二次失败", 3)
+            .await
+            .expect("第二次失败应继续退避");
+        repo.mark_stage_event_delivery_failed(id, "第三次失败", 3)
+            .await
+            .expect("达到最大次数后应终止");
+        let event = repo
+            .list_stage_events(10)
+            .await
+            .expect("应能读取事件")
+            .remove(0);
+        assert_eq!(event.attempt_count, 3);
+        assert_eq!(event.delivery_status, "failed");
+        assert!(event.next_attempt_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn task_terminal_failure_should_emit_stage_event_without_blocking_task_state() {
+        let repo = repo().await;
+        let response = repo
+            .create_batch_with_tasks(&demo_request(), "2025-2026-2")
+            .await
+            .expect("写入任务应该成功");
+        let task_id = &response.task_ids[0];
+
+        repo.mark_task_failed(task_id, TaskStage::Downloading, "资源不存在")
+            .await
+            .expect("任务失败与通知 outbox 都应可落盘");
+
+        let events = repo.list_stage_events(10).await.expect("应能读取通知事件");
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().any(|event| {
+            event.source_kind == "task"
+                && event.source_id == *task_id
+                && event.outcome == "discovered"
+                && event.stage == "queued"
+        }));
+        assert!(events.iter().any(|event| {
+            event.source_kind == "task"
+                && event.source_id == *task_id
+                && event.outcome == "failed"
+                && event.stage == "downloading"
+        }));
     }
 
     #[tokio::test]

@@ -741,6 +741,11 @@ mod tests {
             archive_bridge_request_timeout_secs: 30.0,
             notes_github_repo: "ZJHSteven/med-notes-2026-fall-y3".to_string(),
             notes_github_token: String::new(),
+            notifications_enabled: false,
+            notification_webhook_url: String::new(),
+            notification_webhook_token: String::new(),
+            notification_poll_interval_secs: 15.0,
+            notification_max_attempts: 8,
         }
     }
 
