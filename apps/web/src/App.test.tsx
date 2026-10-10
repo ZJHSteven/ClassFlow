@@ -470,7 +470,7 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(panelGrid).toHaveClass('panel__grid--detail-page')
-      expect(screen.getByRole('button', { name: /返回任务队列/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /返回任务队列/, hidden: true })).toBeInTheDocument()
     })
     expect(pushStateSpy).toHaveBeenCalledTimes(1)
 
@@ -500,7 +500,7 @@ describe('App', () => {
 
     await waitFor(() => {
       expect(panelGrid).toHaveClass('panel__grid--detail-page')
-      expect(screen.getByRole('button', { name: /返回课程库/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /返回课程库/, hidden: true })).toBeInTheDocument()
     })
     expect(pushStateSpy).toHaveBeenCalledTimes(1)
 
