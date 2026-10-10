@@ -179,6 +179,145 @@ fn parse_clock(value: &str) -> Option<NaiveTime> {
         .ok()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ArchiveSubmissionOutcome {
+    Queued {
+        status: String,
+        next_attempt_at: Option<i64>,
+        last_error: Option<String>,
+    },
+    Accepted {
+        conversation_id: String,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+fn parse_archive_submission_outcome(body: &str) -> AppResult<ArchiveSubmissionOutcome> {
+    let payload: Value = serde_json::from_str(body)
+        .map_err(|error| AppError::Internal(format!("解析 Archive submission 响应失败: {error}")))?;
+
+    if let Some(submission) = payload.get("submission") {
+        let status = submission
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        match status {
+            "accepted" => {
+                let conversation_id = submission
+                    .pointer("/result/conversationId")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        AppError::Internal(
+                            "Archive submission 已 accepted 但缺少 conversationId".to_string(),
+                        )
+                    })?;
+                return Ok(ArchiveSubmissionOutcome::Accepted {
+                    conversation_id: conversation_id.to_string(),
+                });
+            }
+            "failed" => {
+                let error = submission
+                    .get("lastError")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or("Archive submission failed");
+                return Ok(ArchiveSubmissionOutcome::Failed {
+                    error: error.to_string(),
+                });
+            }
+            "queued" | "processing" | "retry_waiting" => {
+                return Ok(ArchiveSubmissionOutcome::Queued {
+                    status: status.to_string(),
+                    next_attempt_at: submission.get("nextAttemptAt").and_then(Value::as_i64),
+                    last_error: submission
+                        .get("lastError")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                });
+            }
+            other => {
+                return Err(AppError::Internal(format!(
+                    "Archive submission 返回未知状态: {other}"
+                )));
+            }
+        }
+    }
+
+    if let Some(conversation_id) = payload
+        .pointer("/result/conversationId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Ok(ArchiveSubmissionOutcome::Accepted {
+            conversation_id: conversation_id.to_string(),
+        });
+    }
+
+    Err(AppError::Internal(
+        "Archive submission 响应既无 submission 也无 conversationId".to_string(),
+    ))
+}
+
+async fn get_or_enqueue_archive_submission(
+    state: &AppState,
+    client: &Client,
+    base: &str,
+    idempotency_key: &str,
+    submit_body: Value,
+) -> Result<ArchiveSubmissionOutcome, (Option<StatusCode>, String)> {
+    let lookup = apply_bridge_auth(
+        client
+            .get(format!("{base}/v1/submissions"))
+            .query(&[("key", idempotency_key)]),
+        state,
+    )
+    .send()
+    .await
+    .map_err(|error| (None, format!("Archive submission 查询失败: {error}")))?;
+
+    if lookup.status().is_success() {
+        let body = lookup.text().await.unwrap_or_default();
+        return parse_archive_submission_outcome(&body)
+            .map_err(|error| (None, error.to_string()));
+    }
+    if lookup.status() != StatusCode::NOT_FOUND {
+        let status = lookup.status();
+        let body = lookup.text().await.unwrap_or_default();
+        return Err((
+            Some(status),
+            format!(
+                "Archive submission 查询失败: HTTP {status} {}",
+                truncate(&body, 200)
+            ),
+        ));
+    }
+
+    let response = apply_bridge_auth(
+        client
+            .post(format!("{base}/v1/turns"))
+            .json(&submit_body),
+        state,
+    )
+    .send()
+    .await
+    .map_err(|error| (None, format!("Archive submission 入队失败: {error}")))?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err((
+            Some(status),
+            format!(
+                "Archive submission 入队失败: HTTP {status} {}",
+                truncate(&body, 240)
+            ),
+        ));
+    }
+    parse_archive_submission_outcome(&body).map_err(|error| (None, error.to_string()))
+}
+
 /// 判断当前是否处于 Archive 429 的全局 submission 冷却期。
 ///
 /// 冷却只影响“新建 Notes conversation”。已经拿到 CID 的 generating、以及 GitHub publishing

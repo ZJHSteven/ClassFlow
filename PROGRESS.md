@@ -1,3 +1,4 @@
+- 2026-10-11 Phase 3 新增统一 Archive submission helper：先 GET /v1/submissions?key=...，只有 404 才 POST /v1/turns；解析 queued/processing/retry_waiting/accepted/failed，并兼容旧 Bridge 的同步 result.conversationId。网络不确定时下一轮只查同一幂等键，不再需要靠重发正文猜测是否已提交。
 - 2026-10-11 Phase 3 worker 已取消 ClassFlow 侧“整堂严格串行”门禁：pending job 可以在同一轮交给 Archive，真正的 ChatGPT POST 串行、间隔与 429 cooldown 由 Archive submission queue 统一控制。
 # 2026-10-11 标题 429 纳入全局 cooldown
 
