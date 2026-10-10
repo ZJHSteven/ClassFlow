@@ -1,3 +1,5 @@
+- 2026-10-11 Archive 职责回收版 backend 已部署 N1：ARM64 binary SHA256=9cea82304ff49b56205510da4f70fea3d0200666820a7b260c2bd35dabdaf60c，classflow-backend.service active，/api/v1/health=ok。首次复杂部署命令因 PowerShell 提前展开远端 $() 导致新文件未 chmod、systemd 203/EXEC，自动 rollback 到旧版成功；随后按上传→hash→chmod→原子替换→restart 分步重新部署成功。
+- 2026-10-11 生产 backfill 从部署前 4 succeeded / 1 generating / 16 pending 推进到 7 succeeded / 12 generating / 2 pending；旧版在 Archive 重启窗口留下的 9/14 思政 manual_review 已通过正式 resume_existing API 恢复，并成功发布为《新时代思想创立与体系》。部署后未产生新的 manual_review/submission_unknown/safe_resubmit/本地全局429冷却。
 - 2026-10-11 ClassFlow Archive 职责回收完整门禁通过：backend lib 64/64 PASS，API integration 11/11 PASS，Clippy --all-targets -D warnings PASS；本地 429 cooldown 已删除，Notes/title 新提交使用 Archive 幂等 submission，历史 recovery_kind 仅保留旧数据兼容。
 - 2026-10-11 新增 Archive submission 解析回归：固定 retry_waiting+nextAttemptAt、accepted+conversationId、failed+lastError、旧 Bridge result.conversationId 四种契约，避免后续接口演进重新把 429/排队语义泄漏回 ClassFlow。
 - 2026-10-11 cooldown 清理首轮编译发现 build_state() 还残留一行已删除字段的初始化；已补删该行，继续全量扫描/回归。
@@ -560,6 +562,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 
