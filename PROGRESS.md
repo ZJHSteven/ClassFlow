@@ -1,3 +1,10 @@
+# 2026-10-10 移动端任务/课程详情改为独立页面
+
+- 根因：此前 `@media (max-width: 1100px)` 仅把 `.panel__grid` 从双列改成单列，导致手机端详情被简单堆在完整列表下方；列表越长，用户点击后越难抵达详情。
+- 新增共享 `useResponsiveDetailNavigation()`：窄屏点击任务/课程时通过 `history.pushState()` 打开详情页，iOS 左滑返回 / 浏览器返回统一由 `popstate` 回到列表；进入详情前保存 `scrollY`，返回恢复原列表位置。
+- TaskPanel / CoursePanel 桌面端行为保持不变；<=1100px 时同一时刻只显示 master 或 detail。详情顶部新增“返回任务队列 / 返回课程库”按钮，与系统返回共用 history 路径。
+- 手机详情改为自然页面滚动：取消窄屏详情 72vh 固定高度、事件区/完整课堂列表内部限高，避免在一个小卡片里再套多个滚动容器。
+
 - 2026-10-10 Phase 3 生产架构最终收敛：N1 ClassFlow backend 作为唯一状态机；完整 lecture ASR 通过 Archive Bridge 发往既有 ChatGPT Project `课堂录音→笔记`，拿到 CID 后 checkpoint，后续只读 Bridge canonical lifecycle/messages。Windows/Bridge 明确离线时 pending 自动恢复；incident/abnormal/模糊提交结果均不自动重发，等待人工 retry。成功后 N1 通过 GitHub API 直接发布到新仓库 `ZJHSteven/med-notes-2026-fall-y3`，Windows 桌面仅保留普通 clone `大三上笔记`，不再承担生成 daemon 或自动 push。
 - 2026-10-10 03:37~03:43 首个 production E2E 已成功：`2026-10-08 泌尿生殖系统` 三段 lecture 只创建 1 个 Project conversation `6ac9426f-6124-83e9-9cc8-84f010189e53`，Archive 于 03:43:06 落 canonical final，N1 于 03:43:34 标记 succeeded 并通过 GitHub Contents API 发布 `Audio/2026-10-08-1330-1615-ASR.md` 与 `Notes/1-病理学｜泌尿生殖系统疾病理论课第三部分.md`。全程 `passive429=0 / cooldown=null`。
 - 首个 Notes 抽检发现 ChatGPT final 使用 `:::writing{variant="document" ...}` UI wrapper，GitHub 因而混入 block 容器和前置说明。已新增发布前规范化：识别完整 writing block 后只保留内部 Markdown，并把 metadata `title` 作为标题兜底；普通 Markdown 保持原样。现有 E2E 将复用同一 CID 重新处理并覆盖文件，不创建第二个 ChatGPT turn。

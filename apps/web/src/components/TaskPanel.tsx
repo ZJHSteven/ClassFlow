@@ -24,6 +24,7 @@ import {
 } from '../api'
 import { downloadWithProgress } from '../downloads'
 import { formatBytes, formatEta, formatPercent, formatSpeed, normalizePercent } from '../progress'
+import { useResponsiveDetailNavigation } from '../responsiveDetailNavigation'
 import type { TaskDetail, TaskStage, TaskStatus, TaskSummary } from '../types'
 
 interface DownloadButtonState {
@@ -169,6 +170,7 @@ export function TaskPanel() {
     whileTap: { y: 0, scale: 0.985 },
     transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
   }
+  const detailNavigation = useResponsiveDetailNavigation('task')
 
   useEffect(() => {
     selectedTaskIdRef.current = selectedTaskId
@@ -454,9 +456,15 @@ export function TaskPanel() {
         blocking: false,
         refreshDetail: true,
       })
+      detailNavigation.closeDetailPage()
     } finally {
       setIsDeleting(false)
     }
+  }
+
+  const handleTaskSelect = (taskId: string) => {
+    setSelectedTaskId(taskId)
+    detailNavigation.openDetailPage(taskId)
   }
 
   const taskActions = selectedTaskDetail
@@ -564,10 +572,10 @@ export function TaskPanel() {
   }
 
   return (
-    <section className="panel">
-      <div className="panel__grid">
+    <section className="panel" ref={detailNavigation.panelRef}>
+      <div className={`panel__grid ${detailNavigation.isDetailPageOpen ? 'panel__grid--detail-page' : 'panel__grid--list-page'}`}>
         <motion.div
-          className="card card--padded card--panel"
+          className="card card--padded card--panel masterPane"
           layout
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
@@ -637,7 +645,7 @@ export function TaskPanel() {
                         ? 'tableRow tableRow--interactive is-selected'
                         : 'tableRow tableRow--interactive'
                     }
-                    onClick={() => setSelectedTaskId(task.id)}
+                    onClick={() => handleTaskSelect(task.id)}
                     {...pressableProps}
                   >
                     <td>
@@ -672,12 +680,21 @@ export function TaskPanel() {
         </motion.div>
 
         <motion.aside
-          className="card card--padded detail detail--panel"
+          className="card card--padded detail detail--panel detailPane"
           layout
           initial={{ opacity: 0, x: 10 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.24, ease: 'easeOut' }}
         >
+          <motion.button
+            type="button"
+            className="mobileDetailBack"
+            onClick={detailNavigation.closeDetailPage}
+            {...pressableProps}
+          >
+            <span aria-hidden="true">←</span>
+            返回任务队列
+          </motion.button>
           <div className="card__header">
             <div>
               <h3>任务详情</h3>

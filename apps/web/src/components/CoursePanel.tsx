@@ -28,6 +28,7 @@ import {
 import { buildCourseMarkdownDownloadFilename } from '../courseDownloadFilename'
 import { downloadBlob, downloadWithProgress } from '../downloads'
 import { formatBytes, formatPercent, formatSpeed, normalizePercent } from '../progress'
+import { useResponsiveDetailNavigation } from '../responsiveDetailNavigation'
 import type { CourseDetail, CourseSummary } from '../types'
 
 interface DownloadButtonState {
@@ -82,6 +83,7 @@ export function CoursePanel() {
     whileTap: { y: 0, scale: 0.985 },
     transition: { type: 'spring' as const, stiffness: 380, damping: 24 },
   }
+  const detailNavigation = useResponsiveDetailNavigation('course')
 
   useEffect(() => {
     selectedCourseKeyRef.current = selectedCourseKey
@@ -424,11 +426,16 @@ export function CoursePanel() {
     }
   }
 
+  const handleCourseSelect = (courseKey: string) => {
+    setSelectedCourseKey(courseKey)
+    detailNavigation.openDetailPage(courseKey)
+  }
+
   return (
-    <section className="panel">
-      <div className="panel__grid">
+    <section className="panel" ref={detailNavigation.panelRef}>
+      <div className={`panel__grid ${detailNavigation.isDetailPageOpen ? 'panel__grid--detail-page' : 'panel__grid--list-page'}`}>
         <motion.div
-          className="card card--padded card--panel"
+          className="card card--padded card--panel masterPane"
           layout
           initial={{ opacity: 0, x: -10 }}
           animate={{ opacity: 1, x: 0 }}
@@ -496,7 +503,7 @@ export function CoursePanel() {
                         ? 'tableRow tableRow--interactive is-selected'
                         : 'tableRow tableRow--interactive'
                     }
-                    onClick={() => setSelectedCourseKey(course.course_key)}
+                    onClick={() => handleCourseSelect(course.course_key)}
                     {...pressableProps}
                   >
                     <td>
@@ -523,12 +530,21 @@ export function CoursePanel() {
         </motion.div>
 
         <motion.aside
-          className="card card--padded detail detail--panel"
+          className="card card--padded detail detail--panel detailPane"
           layout
           initial={{ opacity: 0, x: 10 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.24, ease: 'easeOut' }}
         >
+          <motion.button
+            type="button"
+            className="mobileDetailBack"
+            onClick={detailNavigation.closeDetailPage}
+            {...pressableProps}
+          >
+            <span aria-hidden="true">←</span>
+            返回课程库
+          </motion.button>
           <div className="card__header">
             <div>
               <h3>课程总稿与交付物</h3>

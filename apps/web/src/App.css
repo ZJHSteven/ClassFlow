@@ -224,6 +224,24 @@
   align-items: stretch;
 }
 
+.mobileDetailBack {
+  display: none;
+  width: fit-content;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 4px;
+  padding: 8px 11px;
+  border: 1px solid rgba(17, 48, 56, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #17343b;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(15, 49, 52, 0.08);
+}
+
 .card {
   display: flex;
   flex-direction: column;
@@ -857,6 +875,43 @@
   .panel__grid {
     grid-template-columns: 1fr;
   }
+
+  /*
+   * 窄屏不再把 master/detail 上下堆叠，而是模拟原生两层页面：
+   * 列表页只显示 master，详情页只显示 detail。真正的返回历史由 React hook 负责。
+   */
+  .panel__grid--list-page .detailPane {
+    display: none;
+  }
+
+  .panel__grid--detail-page .masterPane {
+    display: none;
+  }
+
+  .panel__grid--detail-page .detail--panel {
+    height: auto;
+    max-height: none;
+    min-height: min(72vh, 720px);
+  }
+
+  .panel__grid--detail-page .detail__body,
+  .panel__grid--detail-page .detailSection--grow {
+    overflow: visible;
+  }
+
+  .panel__grid--detail-page .detail__events,
+  .panel__grid--detail-page .lectureList {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .panel__grid--detail-page .previewShell {
+    min-height: 420px;
+  }
+
+  .mobileDetailBack {
+    display: inline-flex;
+  }
 }
 
 @media (max-width: 760px) {
@@ -886,6 +941,10 @@
   .detail--panel {
     height: auto;
     max-height: none;
+  }
+
+  .panel__grid--detail-page .detail--panel {
+    min-height: 0;
   }
 
   .tableWrap--list,
