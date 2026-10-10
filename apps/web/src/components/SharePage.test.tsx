@@ -40,8 +40,8 @@ describe('SharePage', () => {
 
     render(<SharePage />)
 
-    expect(await screen.findByText('泌尿生殖系统')).toBeInTheDocument()
-    expect(await screen.findByText('1-急性肾损伤')).toBeInTheDocument()
+    expect((await screen.findAllByText('泌尿生殖系统')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('1-急性肾损伤')).length).toBeGreaterThan(0)
     await waitFor(() => {
       expect(document.querySelector('.sharePreview')?.textContent).toContain('这是共享 Notes')
     })

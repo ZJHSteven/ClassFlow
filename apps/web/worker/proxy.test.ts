@@ -134,6 +134,48 @@ describe('worker proxy', () => {
     expect(response.status).toBe(401)
   })
 
+  it('应该从公开 GitHub tree 只暴露 Audio 与 Notes Markdown', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          tree: [
+            { path: '泌尿生殖系统/Notes/1-测试.md', type: 'blob' },
+            { path: '泌尿生殖系统/Audio/10.1-测试.md', type: 'blob' },
+            { path: 'README.md', type: 'blob' },
+            { path: '泌尿生殖系统/private.json', type: 'blob' },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await handleWorkerRequest(
+      new Request('https://worker.example.com/public/notes/tree'),
+      defaultEnv,
+    )
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { files: Array<{ path: string }> }
+    expect(body.files.map((file) => file.path)).toEqual([
+      '泌尿生殖系统/Notes/1-测试.md',
+      '泌尿生殖系统/Audio/10.1-测试.md',
+    ])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain('/git/trees/main?recursive=1')
+  })
+
+  it('应该拒绝公开 Markdown 路径穿越', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await handleWorkerRequest(
+      new Request('https://worker.example.com/public/notes/file?path=../secret.md'),
+      defaultEnv,
+    )
+    expect(response.status).toBe(400)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('应该直接通过 Worker 绑定的 R2 返回课程总稿，避免再次回打私有 Worker 接口', async () => {
     await defaultEnv.ARTIFACTS?.put(
       'courses/demo/course.md',

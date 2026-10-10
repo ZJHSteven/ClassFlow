@@ -22,6 +22,7 @@ import './App.css'
 type ViewMode = 'tasks' | 'courses'
 
 function App() {
+  const [viewMode, setViewMode] = useState<ViewMode>('tasks')
   const isShareView =
     window.location.pathname === '/share' || new URLSearchParams(window.location.search).get('share') === '1'
 
@@ -29,7 +30,6 @@ function App() {
     return <SharePage />
   }
 
-  const [viewMode, setViewMode] = useState<ViewMode>('tasks')
   const tabMotionProps = {
     whileHover: { y: -2, scale: 1.015 },
     whileTap: { y: 0, scale: 0.985 },
