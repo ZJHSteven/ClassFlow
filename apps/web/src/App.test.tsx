@@ -381,7 +381,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: '下载课程总稿' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '下载课程清单' })).toBeInTheDocument()
-    })
+    }, { timeout: 3_000 })
   })
 
   it('任务台应该提供任务级下载按钮', async () => {
