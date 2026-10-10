@@ -1304,4 +1304,3 @@ async fn task_detail_should_not_inline_transcript_payload_but_task_json_should_k
         "任务快照下载仍应保留完整 transcript_text"
     );
 }
-

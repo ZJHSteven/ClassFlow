@@ -195,8 +195,9 @@ enum ArchiveSubmissionOutcome {
 }
 
 fn parse_archive_submission_outcome(body: &str) -> AppResult<ArchiveSubmissionOutcome> {
-    let payload: Value = serde_json::from_str(body)
-        .map_err(|error| AppError::Internal(format!("解析 Archive submission 响应失败: {error}")))?;
+    let payload: Value = serde_json::from_str(body).map_err(|error| {
+        AppError::Internal(format!("解析 Archive submission 响应失败: {error}"))
+    })?;
 
     if let Some(submission) = payload.get("submission") {
         let status = submission
@@ -305,16 +306,12 @@ async fn get_or_enqueue_archive_submission(
     idempotency_key: &str,
     submit_body: Value,
 ) -> Result<ArchiveSubmissionOutcome, (Option<StatusCode>, String)> {
-    if let Some(existing) =
-        get_archive_submission(state, client, base, idempotency_key).await?
-    {
+    if let Some(existing) = get_archive_submission(state, client, base, idempotency_key).await? {
         return Ok(existing);
     }
 
     let response = apply_bridge_auth(
-        client
-            .post(format!("{base}/v1/turns"))
-            .json(&submit_body),
+        client.post(format!("{base}/v1/turns")).json(&submit_body),
         state,
     )
     .send()
@@ -809,7 +806,9 @@ async fn process_title_stage(
                     )
                     .await?;
             }
-            Ok(ArchiveSubmissionOutcome::Accepted { conversation_id: returned_cid }) => {
+            Ok(ArchiveSubmissionOutcome::Accepted {
+                conversation_id: returned_cid,
+            }) => {
                 if returned_cid != conversation_id {
                     state
                         .repo
@@ -892,7 +891,9 @@ async fn process_title_stage(
                 .await?;
             return Ok(());
         }
-        Ok(Some(ArchiveSubmissionOutcome::Accepted { conversation_id: returned_cid })) => {
+        Ok(Some(ArchiveSubmissionOutcome::Accepted {
+            conversation_id: returned_cid,
+        })) => {
             if returned_cid != conversation_id {
                 state
                     .repo
@@ -1720,7 +1721,3 @@ mod tests {
         );
     }
 }
-
-
-
-
