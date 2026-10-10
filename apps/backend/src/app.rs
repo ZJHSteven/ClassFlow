@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use tokio::signal;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::broadcast;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -45,14 +45,7 @@ pub struct AppState {
     pub asr_provider: Arc<dyn AsrProvider>,
     pub network_health: Arc<NetworkHealthGate>,
     pub course_schedule: Arc<CourseSchedule>,
-    /// Notes 新建 conversation 的全局冷却截止时刻。
-    ///
-    /// 这是全局而不是 per-job：Archive 的 429 表示整个 actor/账号当前受限，
-    /// 此时切换另一堂 pending 继续提交只会制造限流风暴。
-    pub notes_submit_cooldown_until: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
-    /// `direct_http` 模式下的 SmartClass 会话管理器。
-    ///
-    /// `browser_bridge` 作为救援模式时这里为空，Collector 会走旧的 8790 bridge。
+    /// SmartClass 会话管理器；browser_bridge 模式下为空。
     pub smartclass_session: Option<Arc<SmartClassSessionManager>>,
     pub queue: TaskQueue,
     pub task_list_events: broadcast::Sender<()>,
@@ -254,3 +247,4 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
 }
+

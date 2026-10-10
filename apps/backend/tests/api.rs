@@ -278,7 +278,6 @@ async fn build_test_state(
         notes_enabled: false,
         notes_auto_since_date: "9999-12-31".to_string(),
         notes_poll_interval_secs: 15.0,
-        notes_429_cooldown_secs: 600,
         course_schedule_path: temp.path().join("class-schedule.json"),
         notes_schedule_grace_minutes: 15,
         notes_project_name: "课堂录音→笔记".to_string(),
@@ -318,7 +317,6 @@ async fn build_test_state(
         asr_provider: Arc::new(backend::asr::DashScopeAsrProvider::new(pipeline.clone())),
         network_health: Arc::new(NetworkHealthGate::disabled_for_tests()),
         course_schedule: Arc::new(backend::schedule::CourseSchedule::default()),
-        notes_submit_cooldown_until: Arc::new(tokio::sync::Mutex::new(None)),
         smartclass_session: None,
         queue: detached_queue(),
         task_list_events: tokio::sync::broadcast::channel::<()>(64).0,
@@ -1306,3 +1304,4 @@ async fn task_detail_should_not_inline_transcript_payload_but_task_json_should_k
         "任务快照下载仍应保留完整 transcript_text"
     );
 }
+

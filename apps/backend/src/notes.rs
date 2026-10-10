@@ -337,57 +337,6 @@ async fn get_or_enqueue_archive_submission(
 ///
 /// 冷却只影响“新建 Notes conversation”。已经拿到 CID 的 generating、以及 GitHub publishing
 /// 仍会正常推进，因此限流不会把整个 Phase 3 状态机冻结。
-fn cooldown_until_is_active(
-    cooldown_until: Option<chrono::DateTime<Utc>>,
-    now: chrono::DateTime<Utc>,
-) -> bool {
-    cooldown_until.is_some_and(|until| now < until)
-}
-
-async fn notes_submission_cooldown_active(state: &AppState) -> bool {
-    let now = Utc::now();
-    let mut cooldown_until = state.notes_submit_cooldown_until.lock().await;
-    if cooldown_until_is_active(*cooldown_until, now) {
-        return true;
-    }
-    if cooldown_until.is_some() {
-        // 到期后主动清空，避免后续日志/调试误以为仍处于 cooldown。
-        *cooldown_until = None;
-    }
-    false
-}
-
-/// Archive 明确返回 429 时设置**全局**冷却。
-///
-/// 不能只给当前 job 加等待：429 是 actor/账号级资源状态，如果把当前 job 的 updated_at
-/// 后移再换下一堂提交，就会让所有 pending 在几分钟内轮流撞同一个限流。
-async fn start_notes_429_cooldown(state: &AppState, response_body: &str) {
-    let seconds = state.config.notes_429_cooldown_secs.max(60);
-    let configured_until = Utc::now() + chrono::Duration::seconds(seconds as i64);
-    let archive_until = parse_archive_cooldown_until(response_body);
-    let until = archive_until
-        .filter(|value| *value > configured_until)
-        .unwrap_or(configured_until);
-
-    *state.notes_submit_cooldown_until.lock().await = Some(until);
-    warn!(
-        "Archive 返回 429，Notes/标题新提交进入全局冷却: 截止 {}{}",
-        until,
-        archive_until
-            .map(|value| format!("（Archive 明示 {}）", value))
-            .unwrap_or_default()
-    );
-}
-
-fn parse_archive_cooldown_until(response_body: &str) -> Option<chrono::DateTime<Utc>> {
-    let payload: Value = serde_json::from_str(response_body).ok()?;
-    let message = payload.get("error")?.as_str()?;
-    let (_, raw_until) = message.rsplit_once(" until ")?;
-    chrono::DateTime::parse_from_rfc3339(raw_until.trim())
-        .ok()
-        .map(|value| value.with_timezone(&Utc))
-}
-
 async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
     if job.recovery_kind.as_deref() == Some("submission_unknown") {
         // 历史兼容：旧版 ClassFlow 在没有幂等 submission 时留下的未知提交仍按旧证据链核对。
@@ -1764,32 +1713,6 @@ mod tests {
     }
 
     #[test]
-    fn should_parse_archive_explicit_cooldown_deadline() {
-        let parsed = parse_archive_cooldown_until(
-            r#"{"error":"ChatGPT actor blocked by active API cooldown until 2026-10-10T19:27:38.462Z"}"#,
-        )
-        .expect("应能解析 Archive 明示的 cooldown 截止时间");
-        assert_eq!(
-            parsed.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "2026-10-10T19:27:38.462Z"
-        );
-    }
-
-    #[test]
-    fn notes_429_cooldown_should_only_be_active_before_deadline() {
-        let now = Utc::now();
-        assert!(cooldown_until_is_active(
-            Some(now + chrono::Duration::seconds(60)),
-            now
-        ));
-        assert!(!cooldown_until_is_active(
-            Some(now - chrono::Duration::seconds(1)),
-            now
-        ));
-        assert!(!cooldown_until_is_active(None, now));
-    }
-
-    #[test]
     fn path_component_removes_windows_and_github_hostile_chars() {
         assert_eq!(
             sanitize_path_component("肾病/肿瘤:总论?", "笔记"),
@@ -1797,6 +1720,7 @@ mod tests {
         );
     }
 }
+
 
 
 
