@@ -375,6 +375,8 @@ fn parse_archive_cooldown_until(response_body: &str) -> Option<chrono::DateTime<
 
 async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
     if job.recovery_kind.as_deref() == Some("submission_unknown") {
+        // 历史兼容：旧版 ClassFlow 在没有幂等 submission 时留下的未知提交仍按旧证据链核对。
+        // 新提交路径不再创建 submission_unknown。
         reconcile_unknown_submission(state, job).await?;
         return Ok(());
     }
@@ -391,131 +393,94 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
         .get_lecture_group(&job.course_key, &job.lecture_key)
         .await?;
     let source_markdown = build_lecture_asr_markdown(&lecture)
-        .ok_or_else(|| AppError::BadRequest("Notes 提交时完整课堂 ASR 已不再可用".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest("Notes 提交时完整课堂 ASR 已不可用".to_string()))?;
     let client = bridge_client(state)?;
-    let url = format!(
-        "{}/v1/turns",
-        state.config.archive_bridge_base_url.trim_end_matches('/')
-    );
-    let request = apply_bridge_auth(
-        client.post(url).json(&json!({
+    let base = state.config.archive_bridge_base_url.trim_end_matches('/');
+    let idempotency_key = format!("classflow:lecture:{}:notes", job.lecture_key);
+    let outcome = get_or_enqueue_archive_submission(
+        state,
+        &client,
+        base,
+        &idempotency_key,
+        json!({
             "mode": "new",
             "targetMode": "guardian",
             "projectName": state.config.notes_project_name,
-            // 和课程库下载的完整 lecture ASR 使用完全相同的 Markdown。
-            // 不再为了给 ChatGPT 发送而另造一份“抽掉元数据”的正文，避免后续两套格式漂移。
+            "idempotencyKey": idempotency_key,
             "text": source_markdown,
-        })),
-        state,
-    );
+        }),
+    )
+    .await;
 
-    let response = match request.send().await {
-        Ok(response) => response,
-        Err(error) if error.is_connect() => {
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err((status, message)) => {
+            let fatal_client_error = status.is_some_and(|value| {
+                value.is_client_error() && value != StatusCode::TOO_MANY_REQUESTS
+            });
+            if fatal_client_error {
+                state
+                    .repo
+                    .mark_lecture_notes_failed_with_kind(
+                        &job.lecture_key,
+                        &message,
+                        "manual_review",
+                    )
+                    .await?;
+            } else {
+                state
+                    .repo
+                    .mark_lecture_notes_pending_error(&job.lecture_key, &message)
+                    .await?;
+            }
+            return Ok(());
+        }
+    };
+
+    match outcome {
+        ArchiveSubmissionOutcome::Queued {
+            status,
+            next_attempt_at,
+            last_error,
+        } => {
+            let retry = next_attempt_at
+                .map(|value| format!("，nextAttemptAt={value}"))
+                .unwrap_or_default();
+            let detail = last_error
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("，{value}"))
+                .unwrap_or_default();
             state
                 .repo
                 .mark_lecture_notes_pending_error(
                     &job.lecture_key,
-                    &format!("Archive Bridge 暂不可达: {error}"),
+                    &format!("Archive 已接管 Notes submission：{status}{retry}{detail}"),
                 )
                 .await?;
-            return Ok(());
         }
-        Err(error) => {
+        ArchiveSubmissionOutcome::Accepted { conversation_id } => {
             state
                 .repo
-                .mark_lecture_notes_submission_unknown(
-                    &job.lecture_key,
-                    &format!("Archive 提交结果未知，正在异步核对已有 conversation: {error}"),
-                )
+                .mark_lecture_notes_generating(&job.lecture_key, &conversation_id)
                 .await?;
-            return Ok(());
+            info!(
+                "Phase 3 Notes submission 已由 Archive 接受: lecture_key={}, conversation_id={}",
+                job.lecture_key, conversation_id
+            );
         }
-    };
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if status.as_u16() == 429 {
-        start_notes_429_cooldown(state, &body).await;
-        state
-            .repo
-            .mark_lecture_notes_pending_error(
-                &job.lecture_key,
-                &format!(
-                    "Archive 暂不可用: HTTP {status} {}；已触发全局提交冷却",
-                    truncate(&body, 180)
-                ),
-            )
-            .await?;
-        return Ok(());
-    }
-    if matches!(status.as_u16(), 502..=504) {
-        state
-            .repo
-            .mark_lecture_notes_submission_unknown(
-                &job.lecture_key,
-                &format!(
-                    "Archive/代理返回 {status}，不能证明提交是否已到达；正在异步核对已有 conversation: {}",
-                    truncate(&body, 180)
-                ),
-            )
-            .await?;
-        return Ok(());
-    }
-    if !status.is_success() {
-        if status == StatusCode::CONFLICT && body.contains("DOM drift detected before navigation") {
+        ArchiveSubmissionOutcome::Failed { error } => {
             state
                 .repo
                 .mark_lecture_notes_failed_with_kind(
                     &job.lecture_key,
-                    &format!(
-                        "Archive 明确在导航前拒绝提交，可安全重新提交: {}",
-                        truncate(&body, 240)
-                    ),
-                    "safe_resubmit",
+                    &format!("Archive submission 终止: {error}"),
+                    "manual_review",
                 )
                 .await?;
-            return Ok(());
         }
-        state
-            .repo
-            .mark_lecture_notes_failed_with_kind(
-                &job.lecture_key,
-                &format!("Archive 提交失败: HTTP {status} {}", truncate(&body, 240)),
-                "manual_review",
-            )
-            .await?;
-        return Ok(());
     }
-
-    let payload: Value = serde_json::from_str(&body)
-        .map_err(|error| AppError::Internal(format!("解析 Archive submit 响应失败: {error}")))?;
-    let conversation_id = payload
-        .pointer("/result/conversationId")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-    let Some(conversation_id) = conversation_id else {
-        state
-            .repo
-            .mark_lecture_notes_submission_unknown(
-                &job.lecture_key,
-                "Archive 返回成功但缺少 conversationId；正在异步核对已有 conversation",
-            )
-            .await?;
-        return Ok(());
-    };
-    state
-        .repo
-        .mark_lecture_notes_generating(&job.lecture_key, &conversation_id)
-        .await?;
-    info!(
-        "Phase 3 Notes 已提交: lecture_key={}, conversation_id={}",
-        job.lecture_key, conversation_id
-    );
     Ok(())
 }
-
 async fn reconcile_unknown_submission(state: &AppState, job: &LectureNotesRecord) -> AppResult<()> {
     let client = bridge_client(state)?;
     let base = state.config.archive_bridge_base_url.trim_end_matches('/');
@@ -1715,3 +1680,4 @@ mod tests {
         );
     }
 }
+
