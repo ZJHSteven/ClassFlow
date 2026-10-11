@@ -1,5 +1,12 @@
 # 2026-10-11 ClassFlow 分享站正式域名与根路由修复 ExecPlan
 
+## 完成状态
+- 已完成：`classflow-share.zjhstudio.com` Custom Domain 已绑定到 `classflow-notes-share`。
+- 已完成：`workers_dev=false`、`preview_urls=false`，旧 `workers.dev` 入口已关闭。
+- 已完成：`run_worker_first=true`，根路径稳定 302 到 `/share`。
+- 已完成：GitHub 公共 tree/Markdown 增加瞬时故障短重试与成功响应边缘缓存。
+- 验证：web lint、30/30 tests、production build、Wrangler dry-run 全绿；生产 Version `d17a9c82-8b7a-438f-b78c-0a61e201e962`；20 轮线上 smoke 0 失败，随机 Notes Markdown=200，私有管理 API=404。
+
 ## 目标
 - 修复分享 Worker 根路径 `/` 被 Static Assets 抢先命中、错误显示管理控制台的问题。
 - 把公开分享站生产入口迁到 `https://classflow-share.zjhstudio.com`，不再使用 `workers.dev` 作为公开入口。
