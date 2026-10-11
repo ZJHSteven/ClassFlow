@@ -735,6 +735,64 @@ mod tests {
     }
 
     #[test]
+    fn permanent_source_gap_should_allow_partial_lecture_transcript() {
+        let good = demo_task(
+            "13:30",
+            "14:15",
+            TaskStatus::Succeeded,
+            Some("第一段真实课堂内容"),
+        );
+        let mut missing = demo_task("14:25", "15:10", TaskStatus::Failed, None);
+        missing.stage = TaskStage::Downloading;
+        missing.last_error = Some("aria2 下载视频失败: 资源不存在".into());
+
+        let lectures = group_tasks_into_lectures(&[good, missing]);
+        let lecture = &lectures[0];
+        assert!(lecture.transcript_ready());
+        assert_eq!(lecture.permanently_missing_segment_count(), 1);
+
+        let combined = lecture.combined_transcript().expect("永久缺源应允许残片转写");
+        assert!(combined.contains("第一段真实课堂内容"));
+        assert!(combined.contains("本段源录像永久缺失"));
+
+        let markdown = build_lecture_asr_markdown(lecture).expect("永久缺源应允许生成残片 ASR");
+        assert!(markdown.contains("成功转写片段数：1"));
+        assert!(markdown.contains("永久缺失片段数：1"));
+        assert!(markdown.contains("不得推断、补写"));
+    }
+
+    #[test]
+    fn recoverable_failed_segment_should_still_block_notes() {
+        let good = demo_task(
+            "13:30",
+            "14:15",
+            TaskStatus::Succeeded,
+            Some("第一段真实课堂内容"),
+        );
+        let mut failed_asr = demo_task("14:25", "15:10", TaskStatus::Failed, None);
+        failed_asr.stage = TaskStage::Transcribing;
+        failed_asr.last_error = Some("ASR 服务暂时失败".into());
+
+        let lectures = group_tasks_into_lectures(&[good, failed_asr]);
+        assert!(!lectures[0].transcript_ready());
+        assert!(lectures[0].combined_transcript().is_none());
+    }
+
+    #[test]
+    fn all_segments_permanently_missing_should_not_create_empty_notes() {
+        let mut first = demo_task("13:30", "14:15", TaskStatus::Failed, None);
+        first.stage = TaskStage::Downloading;
+        first.last_error = Some("资源不存在".into());
+        let mut second = demo_task("14:25", "15:10", TaskStatus::Failed, None);
+        second.stage = TaskStage::Downloading;
+        second.last_error = Some("HTTP=404".into());
+
+        let lectures = group_tasks_into_lectures(&[first, second]);
+        assert!(!lectures[0].transcript_ready());
+        assert!(build_lecture_asr_markdown(&lectures[0]).is_none());
+    }
+
+    #[test]
     fn lecture_key_should_stay_stable_when_later_segment_is_appended() {
         let first_two = vec![
             demo_task("13:30", "14:15", TaskStatus::Succeeded, Some("1")),
