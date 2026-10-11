@@ -179,9 +179,14 @@ pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
     } else {
         "完整课堂：全部录像分段均已成功转写。".to_string()
     };
+    let heading = if missing_segment_count > 0 {
+        "# 课堂 ASR（残片）"
+    } else {
+        "# 完整课堂 ASR"
+    };
 
     Some(format!(
-        "# 完整课堂 ASR\n\n\
+        "{}\n\n\
         - 学期：{}\n\
         - 课程：{}\n\
         - 老师：{}\n\
@@ -193,6 +198,7 @@ pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
         - 数据完整性：{}\n\
         - Lecture Key：{}\n\n\
         ## 转写正文\n\n{}\n",
+        heading,
         lecture.semester,
         lecture.course_name,
         lecture.teacher_name,
