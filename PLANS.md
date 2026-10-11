@@ -11,6 +11,7 @@
 3. 执行 web lint/test/build 与 Wrangler dry-run，确认配置和 bundle 均有效。
 4. 部署 `classflow-notes-share`，核对 Cloudflare Custom Domain 绑定和 `workers.dev` 状态。
 5. 线上 smoke：根路径 302→`/share`；`/share` 200；`/public/notes/tree` 200；`/api/v1/tasks` 404；旧 `workers.dev` 不再作为可访问生产入口。
+6. 若公开 GitHub 读取出现瞬时 429/5xx，则增加短退避重试与 Cloudflare Cache API 成功响应缓存，再重复多轮 smoke，避免朋友打开页面时偶发空白。
 
 # 2026-10-11 永久缺段课堂继续生成残片 Notes
 

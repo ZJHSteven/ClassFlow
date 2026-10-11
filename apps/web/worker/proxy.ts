@@ -291,6 +291,8 @@ interface GithubTreeResponse {
 }
 
 const DEFAULT_PUBLIC_NOTES_REPO = 'ZJHSteven/med-notes-2026-fall-y3'
+const PUBLIC_NOTES_FETCH_ATTEMPTS = 3
+const PUBLIC_NOTES_RETRY_DELAYS_MS = [80, 200]
 
 function publicNotesRepo(env: PublicNotesEnv): string {
   return env.NOTES_PUBLIC_REPO?.trim() || DEFAULT_PUBLIC_NOTES_REPO
@@ -304,6 +306,76 @@ function githubPublicHeaders(): Headers {
   return headers
 }
 
+/**
+ * GitHub 公共接口偶尔会从边缘节点返回 429/5xx，公开分享页不能因为一次瞬时失败就直接变成空白。
+ * 这里只重试明确属于瞬时故障的状态；404 等确定性结果必须立即返回。
+ */
+async function fetchPublicGithubWithRetry(
+  input: string,
+  init: RequestInit,
+): Promise<Response | null> {
+  let lastTransientResponse: Response | null = null
+
+  for (let attempt = 0; attempt < PUBLIC_NOTES_FETCH_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(input, init)
+      const transientFailure = response.status === 429 || response.status >= 500
+      if (!transientFailure) {
+        return response
+      }
+      lastTransientResponse = response
+    } catch {
+      // 网络异常没有可复用 Response；继续进入同一套短退避重试。
+    }
+
+    const delayMs = PUBLIC_NOTES_RETRY_DELAYS_MS[attempt]
+    if (delayMs !== undefined) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+
+  return lastTransientResponse
+}
+
+/**
+ * 显式使用 Cloudflare Cache API 缓存成功的公开 tree/Markdown，减少每次页面打开都回源 GitHub。
+ * Vitest 等非 Cloudflare 环境没有 `caches.default` 时自动退化为无缓存。
+ */
+function publicNotesCache(): Cache | null {
+  if (typeof caches === 'undefined') {
+    return null
+  }
+  const cloudflareCaches = caches as CacheStorage & { default?: Cache }
+  return cloudflareCaches.default ?? null
+}
+
+async function readPublicNotesCache(request: Request): Promise<Response | null> {
+  const cache = publicNotesCache()
+  if (!cache) {
+    return null
+  }
+  try {
+    return (await cache.match(request)) ?? null
+  } catch {
+    return null
+  }
+}
+
+async function writePublicNotesCache(request: Request, response: Response): Promise<void> {
+  if (response.status !== 200) {
+    return
+  }
+  const cache = publicNotesCache()
+  if (!cache) {
+    return
+  }
+  try {
+    await cache.put(request, response.clone())
+  } catch {
+    // 缓存只是可靠性优化；缓存写入失败不能影响用户读取公开资料。
+  }
+}
+
 export async function handlePublicNotesRequest(request: Request, env: PublicNotesEnv): Promise<Response | null> {
   if (request.method !== 'GET') {
     return null
@@ -313,10 +385,15 @@ export async function handlePublicNotesRequest(request: Request, env: PublicNote
   const repo = publicNotesRepo(env)
 
   if (url.pathname === '/public/notes/tree') {
-    const response = await fetch('https://api.github.com/repos/' + repo + '/git/trees/main?recursive=1', {
+    const cached = await readPublicNotesCache(request)
+    if (cached) {
+      return cached
+    }
+
+    const response = await fetchPublicGithubWithRetry('https://api.github.com/repos/' + repo + '/git/trees/main?recursive=1', {
       headers: githubPublicHeaders(),
     })
-    if (!response.ok) {
+    if (!response?.ok) {
       return jsonResponse(502, '公开笔记仓库目录读取失败。')
     }
 
@@ -330,13 +407,15 @@ export async function handlePublicNotesRequest(request: Request, env: PublicNote
         return { path, course, kind, name }
       })
 
-    return new Response(JSON.stringify({ repo, files }), {
+    const result = new Response(JSON.stringify({ repo, files }), {
       status: 200,
       headers: {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'public, max-age=60',
       },
     })
+    await writePublicNotesCache(request, result)
+    return result
   }
 
   if (url.pathname === '/public/notes/file') {
@@ -345,24 +424,31 @@ export async function handlePublicNotesRequest(request: Request, env: PublicNote
       return jsonResponse(400, '公开 Markdown 路径不合法。')
     }
 
+    const cached = await readPublicNotesCache(request)
+    if (cached) {
+      return cached
+    }
+
     const encodedPath = path.split('/').map((part) => encodeURIComponent(part)).join('/')
-    const response = await fetch('https://raw.githubusercontent.com/' + repo + '/main/' + encodedPath, {
+    const response = await fetchPublicGithubWithRetry('https://raw.githubusercontent.com/' + repo + '/main/' + encodedPath, {
       headers: { 'User-Agent': 'ClassFlow-Public-Notes' },
     })
-    if (response.status === 404) {
+    if (response?.status === 404) {
       return jsonResponse(404, '共享资料不存在。')
     }
-    if (!response.ok) {
+    if (!response?.ok) {
       return jsonResponse(502, '共享 Markdown 读取失败。')
     }
 
-    return new Response(await response.text(), {
+    const result = new Response(await response.text(), {
       status: 200,
       headers: {
         'content-type': 'text/markdown; charset=utf-8',
         'cache-control': 'public, max-age=60',
       },
     })
+    await writePublicNotesCache(request, result)
+    return result
   }
 
   return null

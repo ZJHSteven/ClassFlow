@@ -164,6 +164,33 @@ describe('worker proxy', () => {
     expect(String(fetchMock.mock.calls[0]?.[0] ?? '')).toContain('/git/trees/main?recursive=1')
   })
 
+  it('公开 GitHub tree 瞬时 5xx 时应该短退避重试后恢复', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('temporary upstream error', { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            tree: [{ path: '医学统计学/Notes/1-统计流程与数据分类.md', type: 'blob' }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await handleWorkerRequest(
+      new Request('https://worker.example.com/public/notes/tree'),
+      defaultEnv,
+    )
+
+    expect(response.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const body = (await response.json()) as { files: Array<{ path: string }> }
+    expect(body.files.map((file) => file.path)).toEqual([
+      '医学统计学/Notes/1-统计流程与数据分类.md',
+    ])
+  })
+
   it('应该拒绝公开 Markdown 路径穿越', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

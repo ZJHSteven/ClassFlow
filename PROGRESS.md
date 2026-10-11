@@ -1,4 +1,5 @@
 - 2026-10-11 开始修复 ClassFlow 分享站根路由并迁正式域名：目标 `classflow-share.zjhstudio.com`；配置将显式 `run_worker_first=true`、`workers_dev=false`、`preview_urls=false`，部署后做根路径/分享页/公开 Notes API/私有 API smoke。
+- 2026-10-11 首轮正式域名连续 smoke 发现 `/public/notes/tree` 仍有间歇性 GitHub 上游 502（5 次中出现 2 次），已追加公共 GitHub GET 的 429/5xx/网络异常三次短退避重试，并用 `caches.default` 缓存成功的 tree/Markdown 响应；缓存不可用或写失败时自动退化，不影响主读取链。
 - 2026-10-11 永久缺段残片 Notes 已生产上线：ARM64 backend SHA256=`fbe3ec220eac06eed9fa3f6b0aabfc500945c6feb48d6f3954c9c0384ebf2fa1`，N1 `classflow-backend.service` active，`/api/v1/health`=ok。9/8 综合素养课程5/谢娟已从“无 Notes job”进入 sequence=2 的 Notes 流程；9/10 安宁疗护随历史插入从序号2安全迁到序号3并重新发布，正文未重生成。9/8 当前 pending 的唯一原因是 Archive 账户级 429 cooldown（submission=retry_waiting），不再是永久缺段判定或 DOM drift 阻塞。- 2026-10-11 残片课堂后端完整回归通过：cargo fmt --check PASS，backend 67/67 unit + 11/11 API PASS，Clippy -D warnings PASS。
 - 2026-10-11 残片课堂改动已按 rustfmt 规范化，仅格式变化，无行为变化。
 - 2026-10-11 残片课堂 ASR 标题改为 `# 课堂 ASR（残片）`，完整课堂继续保持 `# 完整课堂 ASR`，避免模型从标题误判材料完整性。
