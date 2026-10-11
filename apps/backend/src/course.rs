@@ -12,7 +12,8 @@ use chrono::{NaiveTime, Timelike, Utc};
 use serde_json::json;
 
 use crate::models::{
-    CourseSummaryResponse, LectureSummaryResponse, NormalizedTranscript, TaskRecord, TaskStatus,
+    CourseSummaryResponse, LectureSummaryResponse, NormalizedTranscript, TaskRecord, TaskStage,
+    TaskStatus,
 };
 
 /// 无课表先验时，Notes worker 在课程最后一个录像结束后继续等待的保守时间。
@@ -47,14 +48,27 @@ impl LectureGroup {
 
     /// 只有所有源片段都成功且拥有非空 ASR 时，才允许送进 Notes route。
     pub fn transcript_ready(&self) -> bool {
-        !self.tasks.is_empty()
-            && self.tasks.iter().all(|task| {
-                task.status == TaskStatus::Succeeded
-                    && task
-                        .transcript_text
-                        .as_deref()
-                        .is_some_and(|text| !text.trim().is_empty())
-            })
+        let successful_transcripts = self
+            .tasks
+            .iter()
+            .filter(|task| task_has_usable_transcript(task))
+            .count();
+
+        successful_transcripts > 0
+            && self
+                .tasks
+                .iter()
+                .all(|task| task_has_usable_transcript(task) || task_source_permanently_missing(task))
+    }
+
+    /// 已明确永久缺少源录像的分段数量。
+    ///
+    /// 该数量只用于 Notes/ASR 完整性提示，不会把普通下载失败或 ASR 失败误当成“永远拿不到”。
+    pub fn permanently_missing_segment_count(&self) -> usize {
+        self.tasks
+            .iter()
+            .filter(|task| task_source_permanently_missing(task))
+            .count()
     }
 
     /// 生成发送给 ChatGPT Project 的**完整课堂转写**。
@@ -70,8 +84,16 @@ impl LectureGroup {
                 .iter()
                 .enumerate()
                 .map(|(index, task)| {
+                    if task_source_permanently_missing(task) {
+                        return format!(
+                            "【第{}节 {}-{}】\n[本段源录像永久缺失，未生成 ASR；不得推断或补写本时段内容]",
+                            index + 1,
+                            task.start_time,
+                            task.end_time,
+                        );
+                    }
                     format!(
-                        "【第{}节 {}-{}】\n{}",
+                        "����{}�� {}-{}��\n{}",
                         index + 1,
                         task.start_time,
                         task.end_time,
@@ -82,6 +104,30 @@ impl LectureGroup {
                 .join("\n\n"),
         )
     }
+}
+
+fn task_has_usable_transcript(task: &TaskRecord) -> bool {
+    task.status == TaskStatus::Succeeded
+        && task
+            .transcript_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+}
+
+/// 判断失败分段是否已经明确属于“源录像永久不存在”。
+///
+/// 只接受下载阶段的强证据，避免把 ASR 失败、临时网络错误等可恢复问题误判成永久缺失。
+/// aria2 exit code 3 会落成“资源不存在”；同时兼容以后 downloader 直接暴露 HTTP 404/410。
+pub fn task_source_permanently_missing(task: &TaskRecord) -> bool {
+    if task.status != TaskStatus::Failed || task.stage != TaskStage::Downloading {
+        return false;
+    }
+    let message = task.last_error.as_deref().unwrap_or_default().to_lowercase();
+    message.contains("资源不存在")
+        || message.contains("http=404")
+        || message.contains("http 404")
+        || message.contains("http=410")
+        || message.contains("http 410")
 }
 
 pub fn summarize_lecture(lecture: &LectureGroup) -> LectureSummaryResponse {
