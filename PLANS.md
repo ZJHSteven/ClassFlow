@@ -1,3 +1,17 @@
+# 2026-10-11 ClassFlow 分享站正式域名与根路由修复 ExecPlan
+
+## 目标
+- 修复分享 Worker 根路径 `/` 被 Static Assets 抢先命中、错误显示管理控制台的问题。
+- 把公开分享站生产入口迁到 `https://classflow-share.zjhstudio.com`，不再使用 `workers.dev` 作为公开入口。
+- 保持分享站只读安全边界：仅开放静态前端与 `/public/notes/*`，管理 API `/api/*` 和私有产物入口继续返回 404。
+
+## 实施步骤
+1. 在 `wrangler.share.toml` 显式启用 `assets.run_worker_first = true`，确保 `/` 先进入 `share.ts` 并 302 到 `/share`。
+2. 在 Wrangler 配置中声明 `classflow-share.zjhstudio.com` Custom Domain，并显式关闭 `workers_dev` 与 `preview_urls`。
+3. 执行 web lint/test/build 与 Wrangler dry-run，确认配置和 bundle 均有效。
+4. 部署 `classflow-notes-share`，核对 Cloudflare Custom Domain 绑定和 `workers.dev` 状态。
+5. 线上 smoke：根路径 302→`/share`；`/share` 200；`/public/notes/tree` 200；`/api/v1/tasks` 404；旧 `workers.dev` 不再作为可访问生产入口。
+
 # 2026-10-11 永久缺段课堂继续生成残片 Notes
 
 目标：区分“可恢复失败”和“永久源缺失”。下载中断、临时网络、ASR 失败仍阻塞课堂 Notes；明确资源不存在（aria2 exit 3 / HTTP 404 / HTTP 410 / 资源不存在）且同堂已有至少一个成功 ASR 分段时，将该课堂视为可生成残片 Notes。
