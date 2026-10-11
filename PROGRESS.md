@@ -1,4 +1,4 @@
-- 2026-10-11 残片课堂后端完整回归通过：cargo fmt --check PASS，backend 67/67 unit + 11/11 API PASS，Clippy -D warnings PASS。
+- 2026-10-11 永久缺段残片 Notes 已生产上线：ARM64 backend SHA256=`fbe3ec220eac06eed9fa3f6b0aabfc500945c6feb48d6f3954c9c0384ebf2fa1`，N1 `classflow-backend.service` active，`/api/v1/health`=ok。9/8 综合素养课程5/谢娟已从“无 Notes job”进入 sequence=2 的 Notes 流程；9/10 安宁疗护随历史插入从序号2安全迁到序号3并重新发布，正文未重生成。9/8 当前 pending 的唯一原因是 Archive 账户级 429 cooldown（submission=retry_waiting），不再是永久缺段判定或 DOM drift 阻塞。- 2026-10-11 残片课堂后端完整回归通过：cargo fmt --check PASS，backend 67/67 unit + 11/11 API PASS，Clippy -D warnings PASS。
 - 2026-10-11 残片课堂改动已按 rustfmt 规范化，仅格式变化，无行为变化。
 - 2026-10-11 残片课堂 ASR 标题改为 `# 课堂 ASR（残片）`，完整课堂继续保持 `# 完整课堂 ASR`，避免模型从标题误判材料完整性。
 - 2026-10-11 残片课堂边界测试已补：1 成功 + 1 永久缺源可生成并带缺失警告；ASR/可恢复失败继续阻塞；全部分段永久缺源且没有任何 ASR 时仍不创建空 Notes。
@@ -570,6 +570,7 @@
 - 浏览器桥已从临时前台调试会话切换为 Windows 隐藏常驻进程（PID `32964`）；Windows -> N100 反向 SSH 隧道继续由隐藏 `ssh.exe`（PID `34660`）维持，N100 本地仍通过 `127.0.0.1:8790` 访问桥。
 - 常驻化后再次从 N100 实测课程列表：`authenticated=true`、`TotalCount=21`、第一页 12 条，说明隐藏桥 + 反向 SSH 并未破坏登录链路。
 - 真实流水线继续推进：最先 4 个 SmartClass 任务已从 `running/downloading` 进入 `running/transcribing`，其余 17 个仍 `pending/queued`；本地 Qwen sidecar 已对 `audio.m4a` 开始实际转写并持续产出文本。
+
 
 
 
