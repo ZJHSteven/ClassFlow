@@ -46,7 +46,10 @@ impl LectureGroup {
         self.tasks.len()
     }
 
-    /// 只有所有源片段都成功且拥有非空 ASR 时，才允许送进 Notes route。
+    /// 课堂来源达到最终可处理状态后，才允许送进 Notes route。
+    ///
+    /// 正常情况下所有分段都应成功；若某些分段已经明确永久缺源，则允许用剩余成功 ASR
+    /// 生成残片 Notes。普通下载/ASR 失败仍然会阻塞这里，等待恢复后再继续。
     pub fn transcript_ready(&self) -> bool {
         let successful_transcripts = self
             .tasks
@@ -93,7 +96,7 @@ impl LectureGroup {
                         );
                     }
                     format!(
-                        "����{}�� {}-{}��\n{}",
+                        "【第{}节 {}-{}】\n{}",
                         index + 1,
                         task.start_time,
                         task.end_time,
