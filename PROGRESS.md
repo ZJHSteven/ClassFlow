@@ -1,3 +1,4 @@
+- 2026-10-11 决策修正：明确“资源不存在/404/410”属于永久源缺失，不再无限等待不存在的录像；若同堂已有成功 ASR 分段，应生成残片 Notes 并显式标注缺段。下载中断、ASR 失败等可恢复故障仍继续阻塞 Notes，避免把可修复的数据损失固化进笔记。
 - 2026-10-11 Archive 职责回收版 backend 已部署 N1：ARM64 binary SHA256=9cea82304ff49b56205510da4f70fea3d0200666820a7b260c2bd35dabdaf60c，classflow-backend.service active，/api/v1/health=ok。首次复杂部署命令因 PowerShell 提前展开远端 $() 导致新文件未 chmod、systemd 203/EXEC，自动 rollback 到旧版成功；随后按上传→hash→chmod→原子替换→restart 分步重新部署成功。
 - 2026-10-11 生产 backfill 从部署前 4 succeeded / 1 generating / 16 pending 推进到 7 succeeded / 12 generating / 2 pending；旧版在 Archive 重启窗口留下的 9/14 思政 manual_review 已通过正式 resume_existing API 恢复，并成功发布为《新时代思想创立与体系》。部署后未产生新的 manual_review/submission_unknown/safe_resubmit/本地全局429冷却。
 - 2026-10-11 ClassFlow Archive 职责回收完整门禁通过：backend lib 64/64 PASS，API integration 11/11 PASS，Clippy --all-targets -D warnings PASS；本地 429 cooldown 已删除，Notes/title 新提交使用 Archive 幂等 submission，历史 recovery_kind 仅保留旧数据兼容。

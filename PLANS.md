@@ -1,3 +1,14 @@
+# 2026-10-11 永久缺段课堂继续生成残片 Notes
+
+目标：区分“可恢复失败”和“永久源缺失”。下载中断、临时网络、ASR 失败仍阻塞课堂 Notes；明确资源不存在（aria2 exit 3 / HTTP 404 / HTTP 410 / 资源不存在）且同堂已有至少一个成功 ASR 分段时，将该课堂视为可生成残片 Notes。
+
+实现要点：
+1. LectureGroup 增加永久缺失分段判定与 partial transcript ready 语义，不改现有 course_key/lecture_key。
+2. build_lecture_asr_markdown 对永久缺段课堂输出“残片课堂 ASR”元数据，列出成功分段与永久缺失分段，明确要求只基于现有转写整理、不得臆造缺失内容。
+3. Notes discovery/pending/publishing 统一使用同一可生成判定，避免状态机中途再次被“必须全成功”卡住。
+4. 为 2 成功 + 2 永久缺失、可恢复失败阻塞、全部永久缺失仍不生成等边界补测试。
+5. 部署后让 2026-09-08 综合素养课程5/谢娟按现有两段进入 Notes 流程。
+
 # 2026-10-11 Phase 3 Archive 职责回收 ExecPlan
 
 目标：让 ClassFlow 只表达“为 lecture 生成 Notes/标题”这一业务意图，不再自行理解 Archive 的 429、Guardian、DOM、transport unknown 等内部状态。
