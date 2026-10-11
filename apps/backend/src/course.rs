@@ -58,10 +58,9 @@ impl LectureGroup {
             .count();
 
         successful_transcripts > 0
-            && self
-                .tasks
-                .iter()
-                .all(|task| task_has_usable_transcript(task) || task_source_permanently_missing(task))
+            && self.tasks.iter().all(|task| {
+                task_has_usable_transcript(task) || task_source_permanently_missing(task)
+            })
     }
 
     /// 已明确永久缺少源录像的分段数量。
@@ -125,7 +124,11 @@ pub fn task_source_permanently_missing(task: &TaskRecord) -> bool {
     if task.status != TaskStatus::Failed || task.stage != TaskStage::Downloading {
         return false;
     }
-    let message = task.last_error.as_deref().unwrap_or_default().to_lowercase();
+    let message = task
+        .last_error
+        .as_deref()
+        .unwrap_or_default()
+        .to_lowercase();
     message.contains("资源不存在")
         || message.contains("http=404")
         || message.contains("http 404")
@@ -173,8 +176,7 @@ pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
     let integrity_note = if missing_segment_count > 0 {
         format!(
             "残片课堂：{} 个分段成功转写，{} 个分段源录像永久缺失。以下内容只能依据现有 ASR 整理；不得推断、补写或假装知道缺失时段讲授内容。",
-            successful_segment_count,
-            missing_segment_count,
+            successful_segment_count, missing_segment_count,
         )
     } else {
         "完整课堂：全部录像分段均已成功转写。".to_string()
@@ -757,7 +759,9 @@ mod tests {
         assert!(lecture.transcript_ready());
         assert_eq!(lecture.permanently_missing_segment_count(), 1);
 
-        let combined = lecture.combined_transcript().expect("永久缺源应允许残片转写");
+        let combined = lecture
+            .combined_transcript()
+            .expect("永久缺源应允许残片转写");
         assert!(combined.contains("第一段真实课堂内容"));
         assert!(combined.contains("本段源录像永久缺失"));
 
