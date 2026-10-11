@@ -164,6 +164,22 @@ pub fn summarize_lecture(lecture: &LectureGroup) -> LectureSummaryResponse {
 /// 在 Archive 本地索引中安全认领已经创建的 conversation。
 pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
     let combined = lecture.combined_transcript()?;
+    let successful_segment_count = lecture
+        .tasks
+        .iter()
+        .filter(|task| task_has_usable_transcript(task))
+        .count();
+    let missing_segment_count = lecture.permanently_missing_segment_count();
+    let integrity_note = if missing_segment_count > 0 {
+        format!(
+            "残片课堂：{} 个分段成功转写，{} 个分段源录像永久缺失。以下内容只能依据现有 ASR 整理；不得推断、补写或假装知道缺失时段讲授内容。",
+            successful_segment_count,
+            missing_segment_count,
+        )
+    } else {
+        "完整课堂：全部录像分段均已成功转写。".to_string()
+    };
+
     Some(format!(
         "# 完整课堂 ASR\n\n\
         - 学期：{}\n\
@@ -172,6 +188,9 @@ pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
         - 日期：{}\n\
         - 时间：{} - {}\n\
         - 录像片段数：{}\n\
+        - 成功转写片段数：{}\n\
+        - 永久缺失片段数：{}\n\
+        - 数据完整性：{}\n\
         - Lecture Key：{}\n\n\
         ## 转写正文\n\n{}\n",
         lecture.semester,
@@ -181,6 +200,9 @@ pub fn build_lecture_asr_markdown(lecture: &LectureGroup) -> Option<String> {
         lecture.start_time,
         lecture.end_time,
         lecture.segment_count(),
+        successful_segment_count,
+        missing_segment_count,
+        integrity_note,
         lecture.lecture_key,
         combined,
     ))
