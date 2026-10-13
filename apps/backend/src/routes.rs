@@ -152,7 +152,7 @@ async fn list_tasks(
     State(state): State<AppState>,
     Query(query): Query<TaskListQuery>,
 ) -> AppResult<impl IntoResponse> {
-    let tasks = state.repo.list_tasks(&query).await?;
+    let tasks = state.repo.list_task_overviews(&query).await?;
     Ok(Json(
         tasks
             .iter()
@@ -321,7 +321,7 @@ async fn delete_failed_task(
 }
 
 async fn build_task_snapshot_event(state: &AppState, query: &TaskListQuery) -> Event {
-    match state.repo.list_tasks(query).await {
+    match state.repo.list_task_overviews(query).await {
         Ok(tasks) => {
             let payload = json!({
                 "tasks": tasks

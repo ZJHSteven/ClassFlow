@@ -76,6 +76,24 @@ uploaded_source_url_saved_at, dashscope_task_id, dashscope_task_id_saved_at,
 remote_capswriter_job_id, remote_capswriter_job_id_saved_at
 "#;
 
+// 列表/SSE/课程概览只需要任务元数据，不应该为了 100~200 KiB 的摘要响应把每条
+// ASR 的完整 transcript_text / transcript_json 从 SQLite 搬进内存再立即丢弃。
+//
+// 这里仍然返回 TaskRecord，目的是复用既有过滤、排序、课程聚合逻辑；两个大字段用
+// NULL 占位，使 map_task_row() 的语义保持稳定。真正需要正文的 get_task()、
+// list_tasks_by_course_key() 等路径继续使用 TASK_SELECT_COLUMNS。
+const TASK_OVERVIEW_SELECT_COLUMNS: &str = r#"
+id, batch_id, segment_key, source, status, stage, semester, course_key,
+course_name, teacher_name, date, start_time, end_time, page_url, mp4_url,
+new_id, raw_title, attempt_count, last_error, uploaded_source_url,
+segment_markdown_path, segment_json_path, course_manifest_path, merged_markdown_path,
+NULL AS transcript_text, NULL AS transcript_json,
+started_at, completed_at, created_at, updated_at,
+progress_percent, transferred_bytes, total_bytes, rate_bytes_per_sec, eta_seconds,
+uploaded_source_url_saved_at, dashscope_task_id, dashscope_task_id_saved_at,
+remote_capswriter_job_id, remote_capswriter_job_id_saved_at
+"#;
+
 impl Repository {
     pub async fn connect(db_url: &str) -> AppResult<Self> {
         // ClassFlow 会同时有下载进度、ASR 进度、SSE/页面读取和 Collector 写入。
@@ -536,8 +554,12 @@ impl Repository {
         }
     }
 
-    pub async fn list_tasks(&self, query: &TaskListQuery) -> AppResult<Vec<TaskRecord>> {
-        let mut sql = format!("SELECT {TASK_SELECT_COLUMNS} FROM tasks WHERE 1=1");
+    async fn list_tasks_with_columns(
+        &self,
+        query: &TaskListQuery,
+        select_columns: &str,
+    ) -> AppResult<Vec<TaskRecord>> {
+        let mut sql = format!("SELECT {select_columns} FROM tasks WHERE 1=1");
         let mut binds = Vec::new();
 
         if let Some(status) = &query.status {
@@ -561,6 +583,21 @@ impl Repository {
 
         let rows = built.fetch_all(&self.pool).await?;
         rows.into_iter().map(|row| map_task_row(&row)).collect()
+    }
+
+    /// 完整任务记录查询。
+    ///
+    /// 该方法保留 transcript 正文与原始 JSON，供确实需要完整任务状态的内部流程使用。
+    pub async fn list_tasks(&self, query: &TaskListQuery) -> AppResult<Vec<TaskRecord>> {
+        self.list_tasks_with_columns(query, TASK_SELECT_COLUMNS).await
+    }
+
+    /// 任务台 SSE / HTTP 列表和课程列表共用的轻量任务概览。
+    ///
+    /// 返回结构仍是 TaskRecord，但 transcript_* 恒为 None；调用方不得把它当正文来源。
+    pub async fn list_task_overviews(&self, query: &TaskListQuery) -> AppResult<Vec<TaskRecord>> {
+        self.list_tasks_with_columns(query, TASK_OVERVIEW_SELECT_COLUMNS)
+            .await
     }
 
     pub async fn get_task_detail(&self, task_id: &str) -> AppResult<TaskDetailResponse> {
@@ -1213,7 +1250,7 @@ impl Repository {
         query: &CourseListQuery,
     ) -> AppResult<Vec<CourseSummaryResponse>> {
         let tasks = self
-            .list_tasks(&TaskListQuery {
+            .list_task_overviews(&TaskListQuery {
                 status: None,
                 date: query.date.clone(),
                 course_name: query.course_name.clone(),
@@ -2088,6 +2125,48 @@ mod tests {
             .expect("查询任务应该成功");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].status, TaskStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn task_overview_should_skip_transcript_blobs_but_full_query_keeps_them() {
+        let repo = repo().await;
+        let response = repo
+            .create_batch_with_tasks(&demo_request(), "2025-2026-2")
+            .await
+            .expect("写入任务应该成功");
+        let task_id = &response.task_ids[0];
+        let transcript_json = serde_json::json!({
+            "text": "large transcript payload",
+            "tokens": ["a", "b", "c"]
+        });
+
+        sqlx::query(
+            "UPDATE tasks SET transcript_text = ?, transcript_json = ? WHERE id = ?",
+        )
+        .bind("完整课堂转写正文")
+        .bind(transcript_json.to_string())
+        .bind(task_id)
+        .execute(&repo.pool)
+        .await
+        .expect("应能写入 transcript 测试数据");
+
+        let query = TaskListQuery {
+            status: None,
+            date: None,
+            course_name: None,
+        };
+        let overview = repo
+            .list_task_overviews(&query)
+            .await
+            .expect("轻量任务概览查询应该成功");
+        assert_eq!(overview.len(), 1);
+        assert_eq!(overview[0].id, *task_id);
+        assert!(overview[0].transcript_text.is_none());
+        assert!(overview[0].transcript_json.is_none());
+
+        let full = repo.list_tasks(&query).await.expect("完整任务查询应该成功");
+        assert_eq!(full[0].transcript_text.as_deref(), Some("完整课堂转写正文"));
+        assert_eq!(full[0].transcript_json.as_ref(), Some(&transcript_json));
     }
 
     #[tokio::test]
