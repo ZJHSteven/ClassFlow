@@ -1,3 +1,26 @@
+# 2026-10-13 ClassFlow 首屏 SSE / 列表性能修复 ExecPlan
+
+## 已确认的生产证据
+- N1 本机直连 `127.0.0.1:8787` 时，`GET /api/v1/tasks` 仍需约 2.5～4.9 秒，排除 Cloudflare/公网链路是主因。
+- 当前仅 251 条任务，但 `list_tasks()` 使用完整 `TASK_SELECT_COLUMNS`，每次列表查询会额外读取约 35.53 MiB `transcript_json` 与 2.57 MiB `transcript_text`；最终任务摘要 HTTP 响应只有约 157 KiB。
+- `GET /api/v1/courses` 复用同一个 `list_tasks()`，因此同样承受无意义的大字段读取，N1 本机实测约 2.7～5.4 秒。
+- 任务台 SSE 首帧兜底阈值为 4500 ms；后端初始 SSE 会立即构造整份任务摘要快照，因此后端列表查询本身就足以撞上前端超时并触发 HTTP fallback。
+- SmartClass 状态接口不是纯本地 OK：它会用 `page_size=1` 请求真实 SmartClass API 校验 Session；N1 本机实测约 0.1～0.8 秒，属于另一条较小的外部依赖延迟。
+
+## 目标
+- 让任务台和课程库的列表路径只读取列表真正需要的轻量字段，不再搬运 ASR 正文/原始 JSON。
+- 保持任务详情、课程合并、Notes/ASR 等确实需要 transcript 的路径继续使用完整记录，避免功能回归。
+- 在修复后重新测量 N1 本机与生产入口的 tasks/courses/SSE 首帧；只有在后端已恢复到毫秒级后，才决定是否还需要调整 4.5 秒 SSE fallback 阈值或改为增量事件。
+- 将 ClassFlow Cloudflare Access 的 GitHub 会话时长与 LifeOps 的 336h（14 天）对齐，减少无意义的每日重登。
+
+## 实施步骤
+1. 为 repository 增加“列表轻量投影”列集合：保留现有 `TaskRecord` 结构与列表排序，但在列表查询中不读取 `transcript_text` / `transcript_json` 大字段。
+2. 补回归测试，确保列表返回摘要/课程聚合所需字段仍完整，同时证明列表查询不会加载 transcript 正文。
+3. 运行 backend fmt、unit/API tests、Clippy；构建 ARM64 生产 binary 并按既有 N1 原子替换流程部署。
+4. 部署后重复 5 轮本机 tasks/courses/auth timing，并实测 SSE 首帧；再通过 ClassFlow 前端做真实首屏 smoke。
+5. 若修复后 SSE 首帧稳定远低于 4.5 秒，则保留 fallback 作为故障兜底；若仍有独立链路问题，再单独优化 Worker/Tunnel/SSE，而不是靠盲目延长 timeout 掩盖。
+6. Cloudflare Access：将复用 GitHub 登录策略从 24h 调整到 336h，并核对 ClassFlow 实际签发策略；不改 Service Auth 的机器凭据语义。
+
 # 2026-10-11 ClassFlow 分享站正式域名与根路由修复 ExecPlan
 
 ## 完成状态
