@@ -589,7 +589,8 @@ impl Repository {
     ///
     /// 该方法保留 transcript 正文与原始 JSON，供确实需要完整任务状态的内部流程使用。
     pub async fn list_tasks(&self, query: &TaskListQuery) -> AppResult<Vec<TaskRecord>> {
-        self.list_tasks_with_columns(query, TASK_SELECT_COLUMNS).await
+        self.list_tasks_with_columns(query, TASK_SELECT_COLUMNS)
+            .await
     }
 
     /// 任务台 SSE / HTTP 列表和课程列表共用的轻量任务概览。
@@ -2140,15 +2141,13 @@ mod tests {
             "tokens": ["a", "b", "c"]
         });
 
-        sqlx::query(
-            "UPDATE tasks SET transcript_text = ?, transcript_json = ? WHERE id = ?",
-        )
-        .bind("完整课堂转写正文")
-        .bind(transcript_json.to_string())
-        .bind(task_id)
-        .execute(&repo.pool)
-        .await
-        .expect("应能写入 transcript 测试数据");
+        sqlx::query("UPDATE tasks SET transcript_text = ?, transcript_json = ? WHERE id = ?")
+            .bind("完整课堂转写正文")
+            .bind(transcript_json.to_string())
+            .bind(task_id)
+            .execute(&repo.pool)
+            .await
+            .expect("应能写入 transcript 测试数据");
 
         let query = TaskListQuery {
             status: None,
