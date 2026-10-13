@@ -1,5 +1,14 @@
 # 2026-10-13 ClassFlow 首屏 SSE / 列表性能修复 ExecPlan
 
+## 完成状态
+- 已完成：任务 HTTP/SSE 与课程列表改用轻量任务投影，不再读取 `transcript_text` / `transcript_json`；详情、课程聚合正文与 Notes 路径继续使用完整记录。
+- 已完成：68/68 backend unit、11/11 API integration、fmt、Clippy -D warnings 全绿。
+- 已完成：ARM64 release 部署 N1，SHA256=`f0efcbb2aff059a643f743183cec68f1fb6e126bc98146371cf09a3a2a1e4c50`，服务 active、health=ok。
+- 已完成：N1 热态 `/tasks` 从 2.5～4.9s 降到约 0.16～0.20s，`/courses` 从 2.7～5.4s 降到约 0.16～0.19s；SSE tasks_snapshot 完整 data line 约 0.17～0.28s。
+- 已完成：已登录生产浏览器真实 smoke 中，公网 `/tasks/stream` 建连约 0.78s，任务列表直接出现，未再触发 4.5s SSE 首帧 fallback。
+- 已完成：ClassFlow/PocketTTY 共用 GitHub Access policy 从 24h 调到 336h（14 天），与 LifeOps 对齐；Service Auth 保持原状。
+- 决策：暂不扩大 4.5s SSE fallback 阈值，也暂不重写为增量 patch；当前 251 条任务的完整摘要约 157 KiB，修掉大字段数据库读取后首帧已远低于阈值。若任务量继续增长，再单独做分页/增量 SSE。
+
 ## 已确认的生产证据
 - N1 本机直连 `127.0.0.1:8787` 时，`GET /api/v1/tasks` 仍需约 2.5～4.9 秒，排除 Cloudflare/公网链路是主因。
 - 当前仅 251 条任务，但 `list_tasks()` 使用完整 `TASK_SELECT_COLUMNS`，每次列表查询会额外读取约 35.53 MiB `transcript_json` 与 2.57 MiB `transcript_text`；最终任务摘要 HTTP 响应只有约 157 KiB。
