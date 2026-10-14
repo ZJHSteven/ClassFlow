@@ -1,6 +1,27 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleWorkerRequest, proxyApiRequest, type WorkerEnv } from './proxy'
 
+class MemoryEmailBinding {
+  public readonly sent: Array<{
+    to: string
+    from: string
+    subject: string
+    text: string
+    html: string
+  }> = []
+
+  async send(message: {
+    to: string
+    from: string
+    subject: string
+    text: string
+    html: string
+  }) {
+    this.sent.push(message)
+    return { messageId: 'mail-demo-1' }
+  }
+}
+
 class MemoryR2Object {
   constructor(
     private readonly bytes: Uint8Array,
@@ -132,6 +153,70 @@ describe('worker proxy', () => {
       defaultEnv,
     )
     expect(response.status).toBe(401)
+  })
+
+  it('应该只允许 backend token 调用课堂摘要邮件接口并转交 Email Service', async () => {
+    const email = new MemoryEmailBinding()
+    const env: WorkerEnv = {
+      ...defaultEnv,
+      SUMMARY_EMAIL: email,
+      SUMMARY_EMAIL_TO: 'verified@example.com',
+    }
+    const response = await handleWorkerRequest(
+      new Request('https://worker.example.com/__classflow/email-summary', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer secret-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          lecture_key: 'lecture-demo',
+          course_name: '流行病学',
+          teacher_name: '赵老师',
+          date: '2026-10-15',
+          start_time: '15:30',
+          end_time: '17:10',
+          title: '筛检试验评价',
+          summary: '## 本堂讲了什么\\n灵敏度与特异度。\\n\\n## 通知与待办\\n下周小测。',
+        }),
+      }),
+      env,
+    )
+    expect(response.status).toBe(200)
+    expect(email.sent).toHaveLength(1)
+    expect(email.sent[0]?.from).toBe('classflow@zjhstudio.com')
+    expect(email.sent[0]?.subject).toContain('流行病学')
+    expect(email.sent[0]?.text).toContain('下周小测')
+    expect(email.sent[0]?.html).toContain('下周小测')
+    expect(await response.json()).toEqual({ ok: true, message_id: 'mail-demo-1' })
+  })
+
+  it('应该拒绝未授权或字段不完整的课堂摘要邮件请求', async () => {
+    const email = new MemoryEmailBinding()
+    const env: WorkerEnv = {
+      ...defaultEnv,
+      SUMMARY_EMAIL: email,
+      SUMMARY_EMAIL_TO: 'verified@example.com',
+    }
+    const unauthorized = await handleWorkerRequest(
+      new Request('https://worker.example.com/__classflow/email-summary', {
+        method: 'POST',
+        body: '{}',
+      }),
+      env,
+    )
+    expect(unauthorized.status).toBe(401)
+
+    const invalid = await handleWorkerRequest(
+      new Request('https://worker.example.com/__classflow/email-summary', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer secret-token' },
+        body: JSON.stringify({ summary: '只有摘要' }),
+      }),
+      env,
+    )
+    expect(invalid.status).toBe(400)
+    expect(email.sent).toHaveLength(0)
   })
 
   it('应该从公开 GitHub tree 只暴露 Audio 与 Notes Markdown', async () => {
