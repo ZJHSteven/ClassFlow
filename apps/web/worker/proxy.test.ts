@@ -177,7 +177,7 @@ describe('worker proxy', () => {
           start_time: '15:30',
           end_time: '17:10',
           title: '筛检试验评价',
-          summary: '## 本堂讲了什么\\n灵敏度与特异度。\\n\\n## 通知与待办\\n下周小测。',
+          summary: '## 本堂讲了什么\n灵敏度与特异度。\n\n## 通知与待办\n下周小测。',
         }),
       }),
       env,

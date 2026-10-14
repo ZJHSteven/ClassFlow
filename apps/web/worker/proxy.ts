@@ -135,7 +135,7 @@ function validateSummaryEmailPayload(value: unknown): SummaryEmailPayload | null
 }
 
 function stripHeaderNewlines(value: string): string {
-  return value.replace(/[\\r\\n]+/g, ' ').trim()
+  return value.replace(/[\r\n]+/g, ' ').trim()
 }
 
 function escapeHtml(value: string): string {
@@ -153,11 +153,11 @@ function summaryEmailText(payload: SummaryEmailPayload): string {
     payload.date + ' ' + payload.start_time + '-' + payload.end_time + '｜' + payload.teacher_name,
     '',
     payload.summary.trim(),
-  ].join('\\n')
+  ].join('\n')
 }
 
 function summaryEmailHtml(payload: SummaryEmailPayload): string {
-  const summary = escapeHtml(payload.summary.trim()).replaceAll('\\n', '<br>')
+  const summary = escapeHtml(payload.summary.trim()).replaceAll('\n', '<br>')
   return [
     '<main style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.65;max-width:760px;margin:auto">',
     '<h2>' + escapeHtml(payload.course_name) + '｜' + escapeHtml(payload.title) + '</h2>',
@@ -171,7 +171,7 @@ async function handleSummaryEmailRequest(request: Request, env: WorkerEnv): Prom
   if (request.method !== 'POST') {
     return jsonResponse(405, '课堂摘要邮件接口只接受 POST。')
   }
-  const token = request.headers.get('Authorization')?.replace(/^Bearer\\s+/i, '').trim() ?? ''
+  const token = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '').trim() ?? ''
   if (!env.BACKEND_TOKEN || token !== env.BACKEND_TOKEN) {
     return jsonResponse(401, '未通过 ClassFlow backend 鉴权。')
   }
