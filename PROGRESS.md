@@ -87,16 +87,6 @@
 - `LECTURE_MAX_GAP_MINUTES=30` 仅保留为“无课表时，最后录像结束后多久允许启动 Notes”的 fallback grace，不再参与分组。
 - 回归已通过 backend 58/58 unit、11/11 API integration、cargo fmt、Clippy -D warnings。
 - 当前历史补跑事实：tasks 中 234 条 succeeded、10 条 failed；本学期 9/7 至 10/10 已成功 ASR 的 course 聚合约 22 堂，而 lecture_notes 目前只有 3 条且全部 succeeded，因此约 19 堂历史课程尚未进入 Notes 状态机，后续将从 2026-09-01 起逐步 backfill。
-# 2026-10-10 Pi/Codex Notes 旁路实验已启动
-
-- Life Ops 已把 ClassFlow 新规划拆成独立子项：精细失败判定与重试路由、N1 Pi/Codex 原生搜索 Notes 对照实验、代理 fail-closed、全阶段通知、Notes 二次摘要推送、朋友 ASR/Notes 分享页；ClassFlow 根项下一步已改为“生产主线收口 + 旁路实验并行”。
-- N1 实机核验为 aarch64 / Armbian trixie，Mihomo 处于 rule mode，TUN 使用 gvisor + auto-route。
-- 发现并修复真实网络 Block：原 /etc/mihomo/config.yaml 的 ChatGPT 与 Codex selector 都只有 DIRECT。现已收紧为 替补-美东1 / 美东-纯净 / 替补-美东2，完全移除 DIRECT；Mihomo 重启后普通用户真实请求 chatgpt.com 成功，日志明确为 using ChatGPT[替补-美东1]。
-- root 与 uid=1000 的 TUN 行为不同，因此正式实验 wrapper 将拒绝 root，并在每次调用前验证运行时 selector 与连通性。
-- N1 用户态已安装并校验 Node.js 22.19.0 ARM64、Pi 1.1.0 与 pi-codex-search。Pi 已进入 openai-codex headless device-code OAuth，当前等待用户在 OpenAI 官方页面确认。
-- 正式实验工具面固定为禁用 Pi 内建工具、只开放 codex_search、每次 --no-session。OAuth 后依次进行 auth readiness、真实模型目录、搜索 smoke、Mihomo 路由复核，再跑 2 样本 × 4 模型矩阵。
-- 重试语义同步修正：客户端没收到反馈只代表 transport unknown，不等于服务端没接受；已有 CID/job identity 时继续异步取回，unknown 状态优先通过 client request id / idempotency / Bridge audit 反查，只有明确 terminal retryable 才重建 conversation。
-
 # 2026-10-10 Phase 3 正式结项
 
 - Phase 3 生产主链已从“单堂 smoke”升级为连续三堂真实课全部 `succeeded`：
@@ -111,7 +101,7 @@
 - 前端已改为课程级“课程 ASR / Notes”双视图。45min SmartClass segment 只作为后台聚合信息，不再逐段暴露“查看/下载 ASR”；课程级保留课程 ASR、课程清单、Notes 下载，异常时按 `submission_unknown / safe_resubmit / manual_review` 显示不同恢复动作。
 - 本轮最终回归：backend 58/58 unit + 11/11 API、`cargo fmt --check`、Clippy `-D warnings` 全绿；web 23/23 Vitest + production build 全绿。
 - ARM64 production binary SHA256=`f67ddaa60317fcf52e10d9a7b0012a932c95a988806ea317194f9f3c4acf7fe9`，与 N1 当前运行文件完全一致；N1 15:36 启动日志明确加载 13 门课程课表先验。最新前端 Worker Version ID=`52bd1590-b3bb-4a96-8db2-165a8742be46`。
-- 结论：Phase 3（lecture -> ASR -> ChatGPT Project Notes -> title -> GitHub -> 课程库展示/恢复）正式结项。后续工作转入 Phase 2.5 课表驱动采集、Phase 3X Pi/Codex 旁路对照、全阶段通知和 Phase 5 摘要/分享，不再作为 Phase 3 阻塞项。
+- 结论：Phase 3（lecture -> ASR -> ChatGPT Project Notes -> title -> GitHub -> 课程库展示/恢复）正式结项。后续工作转入 Phase 2.5 课表驱动采集、全阶段通知和 Phase 5 摘要/分享，不再作为 Phase 3 阻塞项。Pi/Codex 模型与提示词实验独立在本机 Benchmark 中进行，不属于当前 ClassFlow 主线。
 
 # 2026-10-10 Phase 3 首堂生产 E2E 已闭环
 
