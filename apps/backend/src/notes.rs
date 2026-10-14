@@ -53,6 +53,7 @@ pub fn spawn_notes_worker(state: AppState) {
 pub async fn run_notes_cycle(state: AppState) -> AppResult<()> {
     discover_ready_lectures(&state).await?;
     let jobs = state.repo.list_active_lecture_notes(24).await?;
+    let has_active_jobs = !jobs.is_empty();
     // 历史 backfill 必须严格串行：只要已经有一堂处于 generating / publishing，
     // 本轮就不再打开新的 pending conversation。这样既保护 Archive/ChatGPT 的限流，
     // 也让每堂课的 title-only 与 GitHub 发布先完整收口，再进入下一堂。
@@ -63,6 +64,11 @@ pub async fn run_notes_cycle(state: AppState) -> AppResult<()> {
             LectureNotesStatus::Publishing => process_publishing(&state, &job).await?,
             LectureNotesStatus::Succeeded | LectureNotesStatus::Failed => {}
         }
+    }
+    // 历史摘要永远让位于正常课堂流水线；只有当前没有 pending/generating/publishing
+    // Notes 时才推进一条旧 succeeded 记录。真正的 POST 节流仍由 Archive queue 负责。
+    if !has_active_jobs {
+        process_historical_summary_backfill(&state).await?;
     }
     Ok(())
 }
@@ -195,6 +201,138 @@ enum ArchiveSubmissionOutcome {
     Failed {
         error: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SummaryStageMode {
+    Live,
+    HistoricalBackfill,
+}
+
+/// 低速补齐“摘要功能上线前”已经 succeeded 的历史课堂。
+///
+/// 这条路径最重要的约束是：绝不重做 Notes/标题，也绝不重新进入 GitHub publishing。
+/// 旧记录缺少 title_final_ordinal 时，先从原 conversation 的 canonical messages 中恢复
+/// 标题边界；随后仍复用正常 summary prompt、幂等 key 和 Archive durable queue。
+async fn process_historical_summary_backfill(state: &AppState) -> AppResult<()> {
+    if !state.config.summary_backfill_enabled {
+        return Ok(());
+    }
+    let Some(mut job) = state
+        .repo
+        .get_historical_summary_backfill_candidate(
+            &state.config.summary_backfill_since_date,
+            &state.config.summary_backfill_only_lecture_key,
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+
+    let Some(conversation_id) = job.conversation_id.clone() else {
+        return Ok(());
+    };
+    let client = bridge_client(state)?;
+    let base = state.config.archive_bridge_base_url.trim_end_matches('/');
+
+    if job.title_final_ordinal.is_none() {
+        let Some(notes_final_ordinal) = job.notes_final_ordinal else {
+            state
+                .repo
+                .mark_historical_summary_backfill_failed(
+                    &job.lecture_key,
+                    "历史摘要回填缺少 notes_final_ordinal，无法安全定位标题边界",
+                )
+                .await?;
+            return Ok(());
+        };
+        let Some(expected_title) = job
+            .notes_title
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            state
+                .repo
+                .mark_historical_summary_backfill_failed(
+                    &job.lecture_key,
+                    "历史摘要回填缺少已发布标题，无法安全恢复标题 final",
+                )
+                .await?;
+            return Ok(());
+        };
+
+        let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
+        let response = match apply_bridge_auth(client.get(messages_url), state)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                state
+                    .repo
+                    .update_lecture_notes_error(
+                        &job.lecture_key,
+                        &format!("历史摘要回填读取 canonical conversation 失败: {error}"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
+        if !response.status().is_success() {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!(
+                        "历史摘要回填读取 canonical conversation 失败: HTTP {}",
+                        response.status()
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
+
+        let payload: Value = response.json().await?;
+        let messages = payload
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let Some(title_final_ordinal) = recover_historical_title_final_ordinal(
+            &messages,
+            notes_final_ordinal,
+            expected_title,
+        ) else {
+            state
+                .repo
+                .mark_historical_summary_backfill_failed(
+                    &job.lecture_key,
+                    "历史摘要回填未能从 canonical messages 恢复已发布标题 final",
+                )
+                .await?;
+            return Ok(());
+        };
+
+        state
+            .repo
+            .mark_historical_summary_title_checkpoint(&job.lecture_key, title_final_ordinal)
+            .await?;
+        job.title_final_ordinal = Some(title_final_ordinal);
+        info!(
+            "历史摘要回填恢复标题 checkpoint: lecture_key={}, conversation_id={}, title_final_ordinal={}",
+            job.lecture_key, conversation_id, title_final_ordinal
+        );
+    }
+
+    process_summary_stage(
+        state,
+        &job,
+        &conversation_id,
+        &client,
+        base,
+        SummaryStageMode::HistoricalBackfill,
+    )
+    .await
 }
 
 fn parse_archive_submission_outcome(body: &str) -> AppResult<ArchiveSubmissionOutcome> {
