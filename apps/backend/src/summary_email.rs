@@ -107,7 +107,15 @@ async fn deliver_summary_email(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("课堂摘要");
 
-    let response = client
+    let access_client_id = state.config.artifact_proxy_access_client_id.trim();
+    let access_client_secret = state.config.artifact_proxy_access_client_secret.trim();
+    if access_client_id.is_empty() != access_client_secret.is_empty() {
+        return Err(AppError::Config(
+            "摘要邮件 webhook 的 Cloudflare Access Service Token 配置不完整".to_string(),
+        ));
+    }
+
+    let mut request = client
         .post(state.config.summary_email_webhook_url.trim())
         .bearer_auth(&state.config.bearer_token)
         .json(&json!({
@@ -119,9 +127,13 @@ async fn deliver_summary_email(
             "end_time": job.end_time,
             "title": title,
             "summary": summary,
-        }))
-        .send()
-        .await?;
+        }));
+    if !access_client_id.is_empty() {
+        request = request
+            .header("CF-Access-Client-Id", access_client_id)
+            .header("CF-Access-Client-Secret", access_client_secret);
+    }
+    let response = request.send().await?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
