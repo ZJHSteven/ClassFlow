@@ -1,3 +1,27 @@
+# 2026-10-15 ClassFlow 摘要 v2 · 通知优先 + 邮件 Markdown 渲染 ExecPlan
+
+## 问题
+- v1 摘要虽然保留了通知/特殊考勤，但模型通常按“本堂讲了什么 → 通知与待办 → 特殊互动”输出；课后快速查看时优先级反了。
+- Worker 的 HTML 邮件目前只是对 Markdown 做 HTML escape 再把换行替换成 `<br>`，所以 `##`、`**`、列表符号会原样出现在邮件正文，没有真正渲染。
+- 历史 backfill 已产生少量 v1 摘要/邮件；仅修改 prompt 会导致同一学期新旧格式并存，而且旧 idempotency key/canonical prompt 会阻止真正重跑。
+
+## 目标
+1. 摘要模板升级为 v2，固定实际存在章节的顺序：
+   - `## 通知与待办`
+   - `## 特殊签到与课堂互动`
+   - `## 本堂讲了什么`
+   通知/特殊互动不存在时直接省略，但“本堂讲了什么”始终放在最后。
+2. 为摘要增加持久化 `summary_prompt_version`。submission idempotency key 与 canonical prompt marker 都带版本，确保 v1 记录能够真正追加新的 v2 turn，而不会认领旧结果。
+3. 历史候选查询把“版本落后于当前版本”的 succeeded 记录重新纳入 backfill；开始 v2 时清空旧 summary/email checkpoint，但保留原 Notes、标题、CID、GitHub commit/path。
+4. 邮件 worker 只投递当前摘要版本；Worker 使用 `markdown-it`（`html:false`）把 summary Markdown 渲染成语义 HTML，再交给 Cloudflare Email Service。纯文本 alternative 仍保留原 Markdown。
+5. 先保持生产历史 backfill 关闭；完成 backend/web 全门禁后，单条 canary 重新生成 v2 摘要并发送渲染后的邮件，确认无 `##`/`**` 源码、旧 GitHub 数据不变，再从学期头重新低速回填。
+
+## 验收
+- backend：摘要 prompt/version/candidate/retry 单测 + 全量 unit/API/fmt/clippy。
+- Worker：邮件测试断言 headings/strong/list 被转换为 HTML，且 raw HTML 输入在 `html:false` 下不会作为标签执行；lint/test/build/Wrangler dry-run。
+- 生产 canary：同一原 CID 新增 v2 summary turn；DB `summary_prompt_version=2`；邮件 Message-ID 更新；原 GitHub commit/path 不变。
+- 全量重跑：旧 v1 摘要（包括已发邮件）都由版本机制自然重新纳入，不直接重做 Notes/标题，不手工批量改 conversation。
+
 # 2026-10-15 ClassFlow 历史课堂摘要低速回填 ExecPlan
 
 ## 当前生产状态
