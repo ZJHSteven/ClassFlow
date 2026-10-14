@@ -500,10 +500,7 @@ impl AppConfig {
                 30.0,
             )?,
             summary_email_max_attempts: env_or_parse("CLASSFLOW_SUMMARY_EMAIL_MAX_ATTEMPTS", 8)?,
-            summary_backfill_enabled: env_or_parse(
-                "CLASSFLOW_SUMMARY_BACKFILL_ENABLED",
-                false,
-            )?,
+            summary_backfill_enabled: env_or_parse("CLASSFLOW_SUMMARY_BACKFILL_ENABLED", false)?,
             summary_backfill_since_date: env_or(
                 "CLASSFLOW_SUMMARY_BACKFILL_SINCE_DATE",
                 "9999-12-31",

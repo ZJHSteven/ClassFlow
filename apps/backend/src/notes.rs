@@ -298,11 +298,9 @@ async fn process_historical_summary_backfill(state: &AppState) -> AppResult<()> 
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let Some(title_final_ordinal) = recover_historical_title_final_ordinal(
-            &messages,
-            notes_final_ordinal,
-            expected_title,
-        ) else {
+        let Some(title_final_ordinal) =
+            recover_historical_title_final_ordinal(&messages, notes_final_ordinal, expected_title)
+        else {
             state
                 .repo
                 .mark_historical_summary_backfill_failed(
@@ -1348,7 +1346,13 @@ async fn process_summary_stage(
                 conversation_id: returned_cid,
             }) => {
                 if returned_cid != conversation_id {
-                    mark_summary_stage_failure(state, job, mode, "摘要 submission 没有继续原 conversation，停止自动处理").await?;
+                    mark_summary_stage_failure(
+                        state,
+                        job,
+                        mode,
+                        "摘要 submission 没有继续原 conversation，停止自动处理",
+                    )
+                    .await?;
                     return Ok(());
                 }
                 state
@@ -1357,7 +1361,13 @@ async fn process_summary_stage(
                     .await?;
             }
             Ok(ArchiveSubmissionOutcome::Failed { error }) => {
-                mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要 submission 终止: {error}")).await?;
+                mark_summary_stage_failure(
+                    state,
+                    job,
+                    mode,
+                    &format!("Archive 摘要 submission 终止: {error}"),
+                )
+                .await?;
             }
             Err((status, message)) => {
                 let fatal_client_error = status.is_some_and(|value| {
@@ -1399,13 +1409,25 @@ async fn process_summary_stage(
             return Ok(());
         }
         Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
-            mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要 submission 终止: {error}")).await?;
+            mark_summary_stage_failure(
+                state,
+                job,
+                mode,
+                &format!("Archive 摘要 submission 终止: {error}"),
+            )
+            .await?;
             return Ok(());
         }
         Ok(Some(ArchiveSubmissionOutcome::Accepted {
             conversation_id: returned_cid,
         })) if returned_cid != conversation_id => {
-            mark_summary_stage_failure(state, job, mode, "摘要 submission 返回了不同 conversationId").await?;
+            mark_summary_stage_failure(
+                state,
+                job,
+                mode,
+                "摘要 submission 返回了不同 conversationId",
+            )
+            .await?;
             return Ok(());
         }
         Ok(_) => {}
@@ -1493,7 +1515,13 @@ async fn process_summary_stage(
         if job.last_error.as_deref() == Some(marker.as_str()) {
             match get_archive_submission(state, client, base, &retry_submission_key).await {
                 Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
-                    mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要重做 submission 终止: {error}")).await?;
+                    mark_summary_stage_failure(
+                        state,
+                        job,
+                        mode,
+                        &format!("Archive 摘要重做 submission 终止: {error}"),
+                    )
+                    .await?;
                 }
                 Ok(_) => {}
                 Err((_status, message)) => {
@@ -1527,7 +1555,13 @@ async fn process_summary_stage(
                     .await?;
             }
             Ok(ArchiveSubmissionOutcome::Failed { error }) => {
-                mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要重做 submission 终止: {error}")).await?;
+                mark_summary_stage_failure(
+                    state,
+                    job,
+                    mode,
+                    &format!("Archive 摘要重做 submission 终止: {error}"),
+                )
+                .await?;
             }
             Err((_status, message)) => {
                 state
@@ -1552,7 +1586,12 @@ async fn mark_summary_stage_failure(
     error: &str,
 ) -> AppResult<()> {
     match mode {
-        SummaryStageMode::Live => state.repo.mark_lecture_notes_failed(&job.lecture_key, error).await,
+        SummaryStageMode::Live => {
+            state
+                .repo
+                .mark_lecture_notes_failed(&job.lecture_key, error)
+                .await
+        }
         SummaryStageMode::HistoricalBackfill => {
             state
                 .repo
@@ -1584,11 +1623,7 @@ async fn mark_summary_stage_ready(
         SummaryStageMode::HistoricalBackfill => {
             state
                 .repo
-                .mark_historical_summary_ready(
-                    &job.lecture_key,
-                    summary,
-                    summary_message_ordinal,
-                )
+                .mark_historical_summary_ready(&job.lecture_key, summary, summary_message_ordinal)
                 .await
         }
     }
@@ -2025,7 +2060,10 @@ fn recover_historical_title_final_ordinal(
                 return None;
             }
             let recovered = normalize_title_response(
-                message.get("text").and_then(Value::as_str).unwrap_or_default(),
+                message
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             );
             (recovered.trim() == expected_title.trim()).then_some(ordinal)
         })
