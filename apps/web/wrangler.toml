@@ -9,3 +9,9 @@ binding = "ASSETS"
 [[r2_buckets]]
 binding = "ARTIFACTS"
 bucket_name = "classflow-artifacts"
+
+# 课堂摘要只允许从固定的 ClassFlow 发件地址发送。收件 Gmail 不写入仓库，
+# 由生产 Worker secret SUMMARY_EMAIL_TO 提供。
+[[send_email]]
+name = "SUMMARY_EMAIL"
+allowed_sender_addresses = [ "classflow@zjhstudio.com" ]
