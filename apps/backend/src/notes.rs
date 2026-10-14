@@ -727,7 +727,15 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
             .as_deref()
             .is_none_or(|value| value.trim().is_empty())
         {
-            return process_summary_stage(state, job, conversation_id, &client, base).await;
+            return process_summary_stage(
+                state,
+                job,
+                conversation_id,
+                &client,
+                base,
+                SummaryStageMode::Live,
+            )
+            .await;
         }
         // 兼容极窄的崩溃窗口：摘要已落库但 status 仍意外保持 generating 时，
         // 下一轮直接把同一份摘要重新 checkpoint 为 publishing，不重发任何 ChatGPT turn。
@@ -1237,6 +1245,7 @@ async fn process_summary_stage(
     conversation_id: &str,
     client: &Client,
     base: &str,
+    mode: SummaryStageMode,
 ) -> AppResult<()> {
     let title_final_ordinal = job
         .title_final_ordinal
