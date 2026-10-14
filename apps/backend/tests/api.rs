@@ -293,6 +293,10 @@ async fn build_test_state(
         notification_webhook_token: String::new(),
         notification_poll_interval_secs: 15.0,
         notification_max_attempts: 8,
+        summary_email_enabled: false,
+        summary_email_webhook_url: String::new(),
+        summary_email_poll_interval_secs: 30.0,
+        summary_email_max_attempts: 8,
     };
 
     let repo = Repository::connect(&config.db_url)

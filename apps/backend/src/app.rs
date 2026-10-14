@@ -33,6 +33,7 @@ use crate::{
     schedule::CourseSchedule,
     smartclass::spawn_smartclass_collector,
     smartclass_session::SmartClassSessionManager,
+    summary_email::spawn_summary_email_worker,
     worker::{TaskQueue, cleanup_stale_temp_dirs, spawn_workers},
 };
 
@@ -114,6 +115,7 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
 
     spawn_smartclass_collector(state.clone());
     spawn_notes_worker(state.clone());
+    spawn_summary_email_worker(state.clone());
     spawn_notification_worker(state.clone());
 
     let listener = tokio::net::TcpListener::bind(state.config.bind_addr).await?;

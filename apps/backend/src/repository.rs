@@ -223,6 +223,11 @@ impl Repository {
                 summary_requested_at TEXT,
                 summary_markdown TEXT,
                 summary_final_ordinal INTEGER,
+                summary_email_sent_at TEXT,
+                summary_email_attempt_count INTEGER NOT NULL DEFAULT 0,
+                summary_email_last_error TEXT,
+                summary_email_next_attempt_at TEXT,
+                summary_email_message_id TEXT,
                 github_audio_path TEXT,
                 github_notes_path TEXT,
                 github_commit_sha TEXT,
@@ -275,6 +280,19 @@ impl Repository {
         self.ensure_optional_lecture_notes_column("summary_markdown", "TEXT")
             .await?;
         self.ensure_optional_lecture_notes_column("summary_final_ordinal", "INTEGER")
+            .await?;
+        self.ensure_optional_lecture_notes_column("summary_email_sent_at", "TEXT")
+            .await?;
+        self.ensure_optional_lecture_notes_column(
+            "summary_email_attempt_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_optional_lecture_notes_column("summary_email_last_error", "TEXT")
+            .await?;
+        self.ensure_optional_lecture_notes_column("summary_email_next_attempt_at", "TEXT")
+            .await?;
+        self.ensure_optional_lecture_notes_column("summary_email_message_id", "TEXT")
             .await?;
         self.ensure_optional_lecture_notes_column("recovery_kind", "TEXT")
             .await?;
@@ -1624,7 +1642,7 @@ impl Repository {
         notes_sha256: &str,
         final_ordinal: i64,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=NULL, notes_markdown=?, notes_sha256=?, notes_final_ordinal=?, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=NULL, notes_markdown=?, notes_sha256=?, notes_final_ordinal=?, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
             .bind(markdown)
             .bind(notes_sha256)
             .bind(final_ordinal)
@@ -1691,6 +1709,88 @@ impl Repository {
             .bind(lecture_key)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    /// 读取已经完整发布、且摘要邮件尚未成功投递的课堂。
+    ///
+    /// 邮件是 Notes 主链之外的副作用，所以只扫描 status=succeeded 的记录。即使邮件服务
+    /// 连续故障，GitHub 发布与课程库状态也不会回滚。达到最大尝试次数的记录通过
+    /// attempt_count 条件自然退出队列，保留 last_error 供人工排查。
+    pub async fn list_deliverable_summary_emails(
+        &self,
+        limit: usize,
+        max_attempts: u32,
+    ) -> AppResult<Vec<LectureNotesRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT *
+            FROM lecture_notes
+            WHERE status='succeeded'
+              AND summary_markdown IS NOT NULL
+              AND trim(summary_markdown) <> ''
+              AND summary_email_sent_at IS NULL
+              AND summary_email_attempt_count < ?
+              AND (summary_email_next_attempt_at IS NULL OR summary_email_next_attempt_at <= ?)
+            ORDER BY completed_at ASC, updated_at ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(max_attempts.max(1) as i64)
+        .bind(Utc::now().to_rfc3339())
+        .bind(limit.max(1) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(map_lecture_notes_row).collect()
+    }
+
+    pub async fn mark_summary_email_sent(
+        &self,
+        lecture_key: &str,
+        message_id: Option<&str>,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "UPDATE lecture_notes SET summary_email_sent_at=?, summary_email_message_id=?, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, updated_at=? WHERE lecture_key=?",
+        )
+        .bind(&now)
+        .bind(message_id)
+        .bind(&now)
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_summary_email_delivery_failed(
+        &self,
+        lecture_key: &str,
+        error: &str,
+        max_attempts: u32,
+    ) -> AppResult<()> {
+        let row = sqlx::query(
+            "SELECT summary_email_attempt_count FROM lecture_notes WHERE lecture_key=?",
+        )
+        .bind(lecture_key)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Notes 任务不存在: {lecture_key}")))?;
+        let next_attempt = row.get::<i64, _>("summary_email_attempt_count") + 1;
+        let terminal = next_attempt >= max_attempts.max(1) as i64;
+        let delay_secs = notification_retry_delay_secs(next_attempt as u32);
+        let now = Utc::now();
+        let next_at =
+            (!terminal).then(|| (now + chrono::Duration::seconds(delay_secs as i64)).to_rfc3339());
+        sqlx::query(
+            "UPDATE lecture_notes SET summary_email_attempt_count=?, summary_email_last_error=?, summary_email_next_attempt_at=?, updated_at=? WHERE lecture_key=?",
+        )
+        .bind(next_attempt)
+        .bind(error)
+        .bind(next_at)
+        .bind(now.to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -1791,9 +1891,9 @@ impl Repository {
             if existing.notes_markdown.as_deref().is_some_and(|value| !value.trim().is_empty())
                 && existing.conversation_id.as_deref().is_some_and(|value| !value.trim().is_empty())
             {
-                "UPDATE lecture_notes SET status='generating', notes_title=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, last_error=NULL, recovery_kind=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+                "UPDATE lecture_notes SET status='generating', notes_title=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, last_error=NULL, recovery_kind=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
             } else {
-                "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+                "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
             },
         )
         .bind(Utc::now().to_rfc3339())
@@ -1814,7 +1914,7 @@ impl Repository {
             ));
         }
         sqlx::query(
-            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
+            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
         )
         .bind(Utc::now().to_rfc3339())
         .bind(lecture_key)
@@ -2080,6 +2180,11 @@ fn map_lecture_notes_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<LectureNote
         summary_requested_at: row.get("summary_requested_at"),
         summary_markdown: row.get("summary_markdown"),
         summary_final_ordinal: row.get("summary_final_ordinal"),
+        summary_email_sent_at: row.get("summary_email_sent_at"),
+        summary_email_attempt_count: row.get("summary_email_attempt_count"),
+        summary_email_last_error: row.get("summary_email_last_error"),
+        summary_email_next_attempt_at: row.get("summary_email_next_attempt_at"),
+        summary_email_message_id: row.get("summary_email_message_id"),
         github_audio_path: row.get("github_audio_path"),
         github_notes_path: row.get("github_notes_path"),
         github_commit_sha: row.get("github_commit_sha"),

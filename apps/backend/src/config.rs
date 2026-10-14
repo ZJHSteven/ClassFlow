@@ -156,6 +156,10 @@ pub struct AppConfig {
     pub notification_webhook_token: String,
     pub notification_poll_interval_secs: f64,
     pub notification_max_attempts: u32,
+    pub summary_email_enabled: bool,
+    pub summary_email_webhook_url: String,
+    pub summary_email_poll_interval_secs: f64,
+    pub summary_email_max_attempts: u32,
 }
 
 impl AppConfig {
@@ -485,6 +489,17 @@ impl AppConfig {
                 15.0,
             )?,
             notification_max_attempts: env_or_parse("CLASSFLOW_NOTIFICATION_MAX_ATTEMPTS", 8)?,
+            summary_email_enabled: env_or_parse("CLASSFLOW_SUMMARY_EMAIL_ENABLED", false)?,
+            summary_email_webhook_url: env::var("CLASSFLOW_SUMMARY_EMAIL_WEBHOOK_URL")
+                .unwrap_or_default(),
+            summary_email_poll_interval_secs: env_or_parse(
+                "CLASSFLOW_SUMMARY_EMAIL_POLL_INTERVAL_SECS",
+                30.0,
+            )?,
+            summary_email_max_attempts: env_or_parse(
+                "CLASSFLOW_SUMMARY_EMAIL_MAX_ATTEMPTS",
+                8,
+            )?,
         })
     }
 }

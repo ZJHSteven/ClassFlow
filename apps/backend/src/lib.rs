@@ -34,6 +34,7 @@ pub mod routes;
 pub mod schedule;
 pub mod smartclass;
 pub mod smartclass_session;
+pub mod summary_email;
 pub mod worker;
 
 pub use app::{AppState, build_app, run_server};
