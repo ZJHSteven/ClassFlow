@@ -1,3 +1,5 @@
+import MarkdownIt from 'markdown-it'
+
 /**
  * Worker 代理的核心逻辑。
  *
@@ -147,6 +149,25 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;')
 }
 
+/**
+ * 把模型生成的摘要 Markdown 转成真正的邮件 HTML。
+ *
+ * 这里明确关闭原始 HTML：摘要虽然来自受控模型，但仍不应该把模型输出中的
+ * <script>、<iframe> 等字符串直接交给邮件客户端。markdown-it 在 html:false 下
+ * 仍会正常渲染标题、粗体、列表、引用、链接等常用 Markdown。
+ * 同时禁用图片，避免摘要里意外出现远程图片后形成邮件打开追踪或额外外链请求。
+ */
+const summaryMarkdownRenderer = new MarkdownIt({
+  html: false,
+  linkify: false,
+  typographer: false,
+  breaks: false,
+}).disable(['image'])
+
+function renderSummaryMarkdown(value: string): string {
+  return summaryMarkdownRenderer.render(value.trim())
+}
+
 function summaryEmailText(payload: SummaryEmailPayload): string {
   return [
     payload.course_name + '｜' + payload.title,
@@ -157,12 +178,12 @@ function summaryEmailText(payload: SummaryEmailPayload): string {
 }
 
 function summaryEmailHtml(payload: SummaryEmailPayload): string {
-  const summary = escapeHtml(payload.summary.trim()).replaceAll('\n', '<br>')
+  const summary = renderSummaryMarkdown(payload.summary)
   return [
     '<main style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.65;max-width:760px;margin:auto">',
     '<h2>' + escapeHtml(payload.course_name) + '｜' + escapeHtml(payload.title) + '</h2>',
     '<p style="color:#666">' + escapeHtml(payload.date) + ' ' + escapeHtml(payload.start_time) + '-' + escapeHtml(payload.end_time) + ' · ' + escapeHtml(payload.teacher_name) + '</p>',
-    '<div>' + summary + '</div>',
+    '<section>' + summary + '</section>',
     '</main>',
   ].join('')
 }
