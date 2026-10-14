@@ -1,3 +1,4 @@
+- 2026-10-15 摘要 v2 本地门禁已通过：backend 72/72 unit + 11/11 API + fmt + Clippy 全绿；web/Worker 32/32 tests + lint + production build + Wrangler dry-run 全绿。Worker bundle 已实际包含 markdown-it，dry-run 仍正确识别 SUMMARY_EMAIL/R2/Assets bindings。
 - 2026-10-15 摘要 v2 单元测试新增两条：固定验证通知→特殊签到→知识正文的章节顺序，并验证 canonical 恢复会忽略旧 v1 prompt、只认领带 v2 marker 的新 prompt。
 - 2026-10-15 Worker 邮件回归测试已增强：断言 Markdown h2/strong/list 真正渲染为 HTML、邮件 HTML 不再含 ##/** 源码，并验证 html:false 会把原始 <script> 转义而非执行。
 - 2026-10-15 Worker 邮件正文已改为真正 Markdown→HTML：使用 markdown-it，html:false，保留标题/粗体/列表等语义渲染并禁用 image；不再把 ##、** 当普通文本塞进 <br>。纯文本 alternative 仍保留原 Markdown。
