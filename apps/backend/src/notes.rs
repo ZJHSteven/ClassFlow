@@ -1986,6 +1986,52 @@ fn find_existing_title_prompt_ordinal(messages: &[Value], notes_final_ordinal: i
         .max()
 }
 
+/// 旧记录没有持久化 title_final_ordinal，因此从 canonical messages 中恢复。
+///
+/// 为避免把 Notes 正文或别的 assistant final 误认成标题，这里同时要求：
+/// 1. 先找到 notes final 之后最新的标题 prompt；
+/// 2. assistant 消息位于该 prompt 之后且确实是 final；
+/// 3. 经过与生产标题相同的 normalize 后，内容必须与数据库里已发布标题完全一致。
+fn recover_historical_title_final_ordinal(
+    messages: &[Value],
+    notes_final_ordinal: i64,
+    expected_title: &str,
+) -> Option<i64> {
+    let title_prompt_ordinal = find_existing_title_prompt_ordinal(messages, notes_final_ordinal)?;
+    messages
+        .iter()
+        .filter_map(|message| {
+            let ordinal = message.get("ordinal").and_then(Value::as_i64)?;
+            if ordinal <= title_prompt_ordinal
+                || message.get("role").and_then(Value::as_str) != Some("assistant")
+                || message
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(|text| text.trim().is_empty())
+                || message
+                    .get("reasoningRedacted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            {
+                return None;
+            }
+            let is_final = message
+                .get("endTurn")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || message.get("finishType").and_then(Value::as_str).is_some()
+                || message.get("channel").and_then(Value::as_str) == Some("final");
+            if !is_final {
+                return None;
+            }
+            let recovered = normalize_title_response(
+                message.get("text").and_then(Value::as_str).unwrap_or_default(),
+            );
+            (recovered.trim() == expected_title.trim()).then_some(ordinal)
+        })
+        .max()
+}
+
 fn find_existing_summary_prompt_ordinal(
     messages: &[Value],
     title_final_ordinal: i64,
@@ -2310,6 +2356,40 @@ mod tests {
 
         assert_eq!(find_existing_title_prompt_ordinal(&messages, 28), Some(29));
         assert_eq!(find_existing_title_prompt_ordinal(&messages, 29), None);
+    }
+
+    #[test]
+    fn should_recover_historical_title_final_ordinal_from_canonical_messages() {
+        let messages = vec![
+            json!({
+                "ordinal": 28,
+                "role": "assistant",
+                "channel": "final",
+                "text": "# 完整课堂笔记",
+                "endTurn": true
+            }),
+            json!({
+                "ordinal": 29,
+                "role": "user",
+                "text": format!("{}要求：只输出标题。", TITLE_PROMPT_PREFIX)
+            }),
+            json!({
+                "ordinal": 31,
+                "role": "assistant",
+                "channel": "final",
+                "text": "生育水平与影响因素",
+                "endTurn": true
+            }),
+        ];
+
+        assert_eq!(
+            recover_historical_title_final_ordinal(&messages, 28, "生育水平与影响因素"),
+            Some(31)
+        );
+        assert_eq!(
+            recover_historical_title_final_ordinal(&messages, 28, "其他标题"),
+            None
+        );
     }
 
     #[test]
