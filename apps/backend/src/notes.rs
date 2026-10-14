@@ -30,6 +30,9 @@ const SHANGHAI_OFFSET_SECS: i32 = 8 * 3600;
 const TITLE_MAX_CHARS: usize = 24;
 const TITLE_PROMPT_PREFIX: &str =
     "请只为你刚刚生成的整堂课堂笔记起一个简洁、具体、可区分的中文主题名。";
+const SUMMARY_MAX_CHARS: usize = 2_000;
+const SUMMARY_PROMPT_PREFIX: &str =
+    "请基于你刚刚生成的整堂课堂笔记，再给出一份用于课后邮件快速查看的中文摘要。";
 
 pub fn spawn_notes_worker(state: AppState) {
     if !state.config.notes_enabled {
@@ -574,7 +577,33 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
     {
-        return process_title_stage(state, job, conversation_id, &client, base).await;
+        if job
+            .notes_title
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return process_title_stage(state, job, conversation_id, &client, base).await;
+        }
+        if job
+            .summary_markdown
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return process_summary_stage(state, job, conversation_id, &client, base).await;
+        }
+        // 兼容极窄的崩溃窗口：摘要已落库但 status 仍意外保持 generating 时，
+        // 下一轮直接把同一份摘要重新 checkpoint 为 publishing，不重发任何 ChatGPT turn。
+        if let Some(summary_final_ordinal) = job.summary_final_ordinal {
+            state
+                .repo
+                .mark_lecture_notes_summary_ready(
+                    &job.lecture_key,
+                    job.summary_markdown.as_deref().unwrap_or_default(),
+                    summary_final_ordinal,
+                )
+                .await?;
+        }
+        return Ok(());
     }
 
     let detail_url = format!("{base}/v1/conversations/{conversation_id}");
@@ -1052,7 +1081,357 @@ async fn process_title_stage(
 
     state
         .repo
-        .mark_lecture_notes_publishing(&job.lecture_key, &title)
+        .mark_lecture_notes_title_ready(&job.lecture_key, &title, title_message_ordinal)
+        .await?;
+    Ok(())
+}
+
+/// 第三轮仍然继续原 conversation，让模型利用刚刚生成的完整 Notes 与标题生成邮件摘要。
+///
+/// 与标题阶段一样，提交和结果读取严格分开：
+/// - 发送使用 Archive durable submission queue + 稳定 idempotency key；
+/// - checkpoint 丢失时先查 canonical messages 自动认领已存在的 prompt；
+/// - 只接受标题 assistant final 之后的摘要 assistant final；
+/// - 超过 2000 字不会本地粗暴截断，而是继续同一 conversation 请求模型压缩重做。
+async fn process_summary_stage(
+    state: &AppState,
+    job: &LectureNotesRecord,
+    conversation_id: &str,
+    client: &Client,
+    base: &str,
+) -> AppResult<()> {
+    let title_final_ordinal = job
+        .title_final_ordinal
+        .ok_or_else(|| AppError::Internal("摘要阶段缺少 title_final_ordinal".to_string()))?;
+    let initial_submission_key = format!(
+        "classflow:lecture:{}:summary:{}:initial",
+        job.lecture_key, title_final_ordinal
+    );
+
+    if job.summary_requested_at.is_none() {
+        // 和标题阶段相同：先认领历史 canonical prompt，防止请求其实已经提交成功、
+        // 但 ClassFlow 在写 checkpoint 前退出时再次发送同一摘要请求。
+        let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
+        let response = match apply_bridge_auth(client.get(messages_url), state).send().await {
+            Ok(response) => response,
+            Err(error) => {
+                state
+                    .repo
+                    .update_lecture_notes_error(
+                        &job.lecture_key,
+                        &format!("摘要提交前读取 canonical conversation 失败: {error}"),
+                    )
+                    .await?;
+                return Ok(());
+            }
+        };
+        if !response.status().is_success() {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!(
+                        "摘要提交前读取 canonical conversation 失败: HTTP {}",
+                        response.status()
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
+        let payload: Value = response.json().await?;
+        let messages = payload
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if find_existing_summary_prompt_ordinal(&messages, title_final_ordinal).is_some() {
+            state
+                .repo
+                .mark_lecture_notes_summary_requested(&job.lecture_key)
+                .await?;
+            info!(
+                "Phase 3 Notes 已认领 canonical summary 请求: lecture_key={}, conversation_id={}",
+                job.lecture_key, conversation_id
+            );
+            return Ok(());
+        }
+
+        let outcome = get_or_enqueue_archive_submission(
+            state,
+            client,
+            base,
+            &initial_submission_key,
+            json!({
+                "mode": "continue",
+                "conversationId": conversation_id,
+                "idempotencyKey": initial_submission_key,
+                "text": build_summary_prompt(None),
+            }),
+        )
+        .await;
+        match outcome {
+            Ok(ArchiveSubmissionOutcome::Queued {
+                status,
+                next_attempt_at,
+                last_error,
+            }) => {
+                state
+                    .repo
+                    .mark_lecture_notes_summary_requested(&job.lecture_key)
+                    .await?;
+                let retry = next_attempt_at
+                    .map(|value| format!("，nextAttemptAt={value}"))
+                    .unwrap_or_default();
+                let detail = last_error
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| format!("，{value}"))
+                    .unwrap_or_default();
+                state
+                    .repo
+                    .update_lecture_notes_error(
+                        &job.lecture_key,
+                        &format!("Archive 已接管摘要 submission：{status}{retry}{detail}"),
+                    )
+                    .await?;
+            }
+            Ok(ArchiveSubmissionOutcome::Accepted {
+                conversation_id: returned_cid,
+            }) => {
+                if returned_cid != conversation_id {
+                    state
+                        .repo
+                        .mark_lecture_notes_failed(
+                            &job.lecture_key,
+                            "摘要 submission 没有继续原 conversation，停止自动处理",
+                        )
+                        .await?;
+                    return Ok(());
+                }
+                state
+                    .repo
+                    .mark_lecture_notes_summary_requested(&job.lecture_key)
+                    .await?;
+            }
+            Ok(ArchiveSubmissionOutcome::Failed { error }) => {
+                state
+                    .repo
+                    .mark_lecture_notes_failed(
+                        &job.lecture_key,
+                        &format!("Archive 摘要 submission 终止: {error}"),
+                    )
+                    .await?;
+            }
+            Err((status, message)) => {
+                let fatal_client_error = status.is_some_and(|value| {
+                    value.is_client_error() && value != StatusCode::TOO_MANY_REQUESTS
+                });
+                if fatal_client_error {
+                    state
+                        .repo
+                        .mark_lecture_notes_failed(&job.lecture_key, &message)
+                        .await?;
+                } else {
+                    state
+                        .repo
+                        .update_lecture_notes_error(&job.lecture_key, &message)
+                        .await?;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    match get_archive_submission(state, client, base, &initial_submission_key).await {
+        Ok(Some(ArchiveSubmissionOutcome::Queued {
+            status,
+            next_attempt_at,
+            last_error,
+        })) => {
+            let retry = next_attempt_at
+                .map(|value| format!("，nextAttemptAt={value}"))
+                .unwrap_or_default();
+            let detail = last_error
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("，{value}"))
+                .unwrap_or_default();
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!("Archive 摘要 submission 尚未正式发送：{status}{retry}{detail}"),
+                )
+                .await?;
+            return Ok(());
+        }
+        Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
+            state
+                .repo
+                .mark_lecture_notes_failed(
+                    &job.lecture_key,
+                    &format!("Archive 摘要 submission 终止: {error}"),
+                )
+                .await?;
+            return Ok(());
+        }
+        Ok(Some(ArchiveSubmissionOutcome::Accepted {
+            conversation_id: returned_cid,
+        })) if returned_cid != conversation_id => {
+            state
+                .repo
+                .mark_lecture_notes_failed(
+                    &job.lecture_key,
+                    "摘要 submission 返回了不同 conversationId",
+                )
+                .await?;
+            return Ok(());
+        }
+        Ok(_) => {}
+        Err((_status, message)) => {
+            state
+                .repo
+                .update_lecture_notes_error(&job.lecture_key, &message)
+                .await?;
+            return Ok(());
+        }
+    }
+
+    let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
+    let response = match apply_bridge_auth(client.get(messages_url), state).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    &format!("等待摘要 final 时 Archive 暂不可达: {error}"),
+                )
+                .await?;
+            return Ok(());
+        }
+    };
+    if !response.status().is_success() {
+        return Ok(());
+    }
+    let payload: Value = response.json().await?;
+    let messages = payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let summary_message = messages.iter().rev().find(|message| {
+        message
+            .get("ordinal")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            > title_final_ordinal
+            && message.get("role").and_then(Value::as_str) == Some("assistant")
+            && message
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty())
+            && !message
+                .get("reasoningRedacted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && (message
+                .get("endTurn")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || message.get("finishType").and_then(Value::as_str).is_some()
+                || message.get("channel").and_then(Value::as_str) == Some("final"))
+    });
+    let Some(summary_message) = summary_message else {
+        return Ok(());
+    };
+    let summary_message_ordinal = summary_message
+        .get("ordinal")
+        .and_then(Value::as_i64)
+        .unwrap_or(title_final_ordinal + 1);
+    let normalized = normalize_notes_markdown(
+        summary_message
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    let summary = normalized.markdown.trim();
+    if summary.is_empty() {
+        return Ok(());
+    }
+
+    if summary.chars().count() > SUMMARY_MAX_CHARS {
+        let marker = format!("摘要重做请求已托管: ordinal={summary_message_ordinal}");
+        let retry_submission_key = format!(
+            "classflow:lecture:{}:summary:{}:retry:{}",
+            job.lecture_key, title_final_ordinal, summary_message_ordinal
+        );
+        if job.last_error.as_deref() == Some(marker.as_str()) {
+            match get_archive_submission(state, client, base, &retry_submission_key).await {
+                Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
+                    state
+                        .repo
+                        .mark_lecture_notes_failed(
+                            &job.lecture_key,
+                            &format!("Archive 摘要重做 submission 终止: {error}"),
+                        )
+                        .await?;
+                }
+                Ok(_) => {}
+                Err((_status, message)) => {
+                    state
+                        .repo
+                        .update_lecture_notes_error(&job.lecture_key, &message)
+                        .await?;
+                }
+            }
+            return Ok(());
+        }
+        match get_or_enqueue_archive_submission(
+            state,
+            client,
+            base,
+            &retry_submission_key,
+            json!({
+                "mode": "continue",
+                "conversationId": conversation_id,
+                "idempotencyKey": retry_submission_key,
+                "text": build_summary_prompt(Some(summary.chars().count())),
+            }),
+        )
+        .await
+        {
+            Ok(ArchiveSubmissionOutcome::Queued { .. })
+            | Ok(ArchiveSubmissionOutcome::Accepted { .. }) => {
+                state
+                    .repo
+                    .update_lecture_notes_error(&job.lecture_key, &marker)
+                    .await?;
+            }
+            Ok(ArchiveSubmissionOutcome::Failed { error }) => {
+                state
+                    .repo
+                    .mark_lecture_notes_failed(
+                        &job.lecture_key,
+                        &format!("Archive 摘要重做 submission 终止: {error}"),
+                    )
+                    .await?;
+            }
+            Err((_status, message)) => {
+                state
+                    .repo
+                    .update_lecture_notes_error(&job.lecture_key, &message)
+                    .await?;
+            }
+        }
+        return Ok(());
+    }
+
+    state
+        .repo
+        .mark_lecture_notes_summary_ready(
+            &job.lecture_key,
+            summary,
+            summary_message_ordinal,
+        )
         .await?;
     Ok(())
 }
@@ -1446,6 +1825,44 @@ fn find_existing_title_prompt_ordinal(messages: &[Value], notes_final_ordinal: i
             is_title_prompt.then_some(ordinal)
         })
         .max()
+}
+
+fn find_existing_summary_prompt_ordinal(
+    messages: &[Value],
+    title_final_ordinal: i64,
+) -> Option<i64> {
+    messages
+        .iter()
+        .filter_map(|message| {
+            let ordinal = message.get("ordinal").and_then(Value::as_i64)?;
+            let is_summary_prompt = ordinal > title_final_ordinal
+                && message.get("role").and_then(Value::as_str) == Some("user")
+                && message
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.trim_start().starts_with(SUMMARY_PROMPT_PREFIX));
+            is_summary_prompt.then_some(ordinal)
+        })
+        .max()
+}
+
+fn build_summary_prompt(previous_chars: Option<usize>) -> String {
+    let retry = previous_chars
+        .map(|chars| {
+            format!(
+                "\n你上一版摘要约 {chars} 个字符，超过硬上限 {SUMMARY_MAX_CHARS}。请在不丢失通知、时间、范围、要求和特殊考勤细节的前提下进一步压缩。"
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "{SUMMARY_PROMPT_PREFIX}\
+要求：\
+1）目标长度约 500～1000 个汉字，任何情况下都不得超过 {SUMMARY_MAX_CHARS} 个字符；课堂知识只保留最重要的主线、概念、结论和老师特别强调的点，不要复述完整笔记。\
+2）如果课堂出现考试、小测、作业、截止时间、课程安排调整、材料提交、复习范围等通知，必须保留具体日期/时间/范围/要求，不能因为追求简短而概括掉关键细节。\
+3）如果出现常规系统签到之外的特殊考勤或互动，例如老师临时点名、随机提问、缺勤排查、额外签到或明确要求某些同学回应，也要单独保留；没有则不要凭空添加。\
+4）不得臆造笔记中没有的信息；没有通知或特殊考勤时直接省略对应部分，不要写‘无’或套模板。\
+5）输出简洁 Markdown，可按‘本堂讲了什么 / 通知与待办 / 特殊签到与课堂互动’组织，但只保留实际存在的部分；不要加邮件称呼、寒暄或结尾。{retry}"
+    )
 }
 
 fn build_title_prompt(existing_titles: &[String], rejected: Option<(&str, &str)>) -> String {
