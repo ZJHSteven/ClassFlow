@@ -1,3 +1,6 @@
+- 2026-10-15 摘要 v2 已生产上线并通过真实 Gmail 验收：10/14 医学人口学在原 CID 中追加 v2 turn，生成 957 字摘要，顺序严格为“通知与待办 → 特殊签到与课堂互动 → 本堂讲了什么”；summary_prompt_version=2/final ordinal=31，原 GitHub commit/path 不变。修正版邮件 Message-ID=`<SNPKMPhPvBCxHz4t8l6mswqtn4ccbe6tgNje@zjhstudio.com>`；Gmail raw MIME 的 text/html 已确认包含 h2/strong/ul 语义标签，##/** 仅保留于 text/plain alternative。
+- 2026-10-15 摘要 v2 生产版本：Cloudflare Worker Version=`4e490f2e-e8d3-4043-981a-2814c373fd91`；N1 ARM64 backend SHA256=`54620f59ea79768f1ab006359153f761c2cbd58dc8d3470922e29d9fdcb7b738`，service active+enabled、health=ok、SQLite summary_prompt_version 列迁移成功。
+- 2026-10-15 已重新开启本学期全量 v2 历史回填：旧 v1 摘要/已发邮件会因版本落后自然重新入选，不重做 Notes/标题/GitHub。最新生产快照为 v2 2/26 摘要完成、2/26 修正版邮件成功、1 条 in-flight、0 manual_review；9/7《科研素养与科研诚信》已完成 929 字 v2 摘要，9/8 正在 processing。
 - 2026-10-15 摘要 v2 本地门禁已通过：backend 72/72 unit + 11/11 API + fmt + Clippy 全绿；web/Worker 32/32 tests + lint + production build + Wrangler dry-run 全绿。Worker bundle 已实际包含 markdown-it，dry-run 仍正确识别 SUMMARY_EMAIL/R2/Assets bindings。
 - 2026-10-15 摘要 v2 单元测试新增两条：固定验证通知→特殊签到→知识正文的章节顺序，并验证 canonical 恢复会忽略旧 v1 prompt、只认领带 v2 marker 的新 prompt。
 - 2026-10-15 Worker 邮件回归测试已增强：断言 Markdown h2/strong/list 真正渲染为 HTML、邮件 HTML 不再含 ##/** 源码，并验证 html:false 会把原始 <script> 转义而非执行。
