@@ -31,8 +31,12 @@ const TITLE_MAX_CHARS: usize = 24;
 const TITLE_PROMPT_PREFIX: &str =
     "请只为你刚刚生成的整堂课堂笔记起一个简洁、具体、可区分的中文主题名。";
 const SUMMARY_MAX_CHARS: usize = 2_000;
-const SUMMARY_PROMPT_PREFIX: &str =
-    "请基于你刚刚生成的整堂课堂笔记，再给出一份用于课后邮件快速查看的中文摘要。";
+/// 摘要协议版本。
+///
+/// 这个值不仅用于 SQLite 标记，还写进 Archive idempotency key 和 prompt marker。
+/// 因此模板升级后，旧摘要可以真正追加一个新的 turn，而不会被旧 submission 误认领。
+pub const SUMMARY_PROMPT_VERSION: i64 = 2;
+const SUMMARY_PROMPT_PREFIX: &str = "【ClassFlow 摘要模板 v2】请基于你刚刚生成的整堂课堂笔记，再给出一份用于课后邮件快速查看的中文摘要。";
 
 pub fn spawn_notes_worker(state: AppState) {
     if !state.config.notes_enabled {
@@ -223,6 +227,7 @@ async fn process_historical_summary_backfill(state: &AppState) -> AppResult<()> 
         .get_historical_summary_backfill_candidate(
             &state.config.summary_backfill_since_date,
             &state.config.summary_backfill_only_lecture_key,
+            SUMMARY_PROMPT_VERSION,
         )
         .await?
     else {
@@ -1248,12 +1253,22 @@ async fn process_summary_stage(
     let title_final_ordinal = job
         .title_final_ordinal
         .ok_or_else(|| AppError::Internal("摘要阶段缺少 title_final_ordinal".to_string()))?;
+    let version_matches = job.summary_prompt_version == Some(SUMMARY_PROMPT_VERSION);
+    if !version_matches {
+        // v1 -> v2 只清理摘要与邮件 checkpoint；Notes、标题、CID、GitHub 均保持原样。
+        // 当前 job 仍是升级前快照，因此下面不能继续读取它的旧 summary_requested_at。
+        state
+            .repo
+            .prepare_summary_prompt_version(&job.lecture_key, SUMMARY_PROMPT_VERSION)
+            .await?;
+    }
+    let summary_requested = version_matches && job.summary_requested_at.is_some();
     let initial_submission_key = format!(
-        "classflow:lecture:{}:summary:{}:initial",
-        job.lecture_key, title_final_ordinal
+        "classflow:lecture:{}:summary:v{}:{}:initial",
+        job.lecture_key, SUMMARY_PROMPT_VERSION, title_final_ordinal
     );
 
-    if job.summary_requested_at.is_none() {
+    if !summary_requested {
         // 和标题阶段相同：先认领历史 canonical prompt，防止请求其实已经提交成功、
         // 但 ClassFlow 在写 checkpoint 前退出时再次发送同一摘要请求。
         let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
@@ -1295,7 +1310,7 @@ async fn process_summary_stage(
         if find_existing_summary_prompt_ordinal(&messages, title_final_ordinal).is_some() {
             state
                 .repo
-                .mark_lecture_notes_summary_requested(&job.lecture_key)
+                .mark_lecture_notes_summary_requested(&job.lecture_key, SUMMARY_PROMPT_VERSION)
                 .await?;
             info!(
                 "Phase 3 Notes 已认领 canonical summary 请求: lecture_key={}, conversation_id={}",
@@ -1325,7 +1340,7 @@ async fn process_summary_stage(
             }) => {
                 state
                     .repo
-                    .mark_lecture_notes_summary_requested(&job.lecture_key)
+                    .mark_lecture_notes_summary_requested(&job.lecture_key, SUMMARY_PROMPT_VERSION)
                     .await?;
                 let retry = next_attempt_at
                     .map(|value| format!("，nextAttemptAt={value}"))
@@ -1357,7 +1372,7 @@ async fn process_summary_stage(
                 }
                 state
                     .repo
-                    .mark_lecture_notes_summary_requested(&job.lecture_key)
+                    .mark_lecture_notes_summary_requested(&job.lecture_key, SUMMARY_PROMPT_VERSION)
                     .await?;
             }
             Ok(ArchiveSubmissionOutcome::Failed { error }) => {
@@ -1466,12 +1481,19 @@ async fn process_summary_stage(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    // v2 重跑时，旧 v1 summary 同样位于 title final 之后。
+    // 所以必须以“当前版本 summary prompt”而不是标题作为结果边界。
+    let Some(summary_prompt_ordinal) =
+        find_existing_summary_prompt_ordinal(&messages, title_final_ordinal)
+    else {
+        return Ok(());
+    };
     let summary_message = messages.iter().rev().find(|message| {
         message
             .get("ordinal")
             .and_then(Value::as_i64)
             .unwrap_or_default()
-            > title_final_ordinal
+            > summary_prompt_ordinal
             && message.get("role").and_then(Value::as_str) == Some("assistant")
             && message
                 .get("text")
@@ -1494,7 +1516,7 @@ async fn process_summary_stage(
     let summary_message_ordinal = summary_message
         .get("ordinal")
         .and_then(Value::as_i64)
-        .unwrap_or(title_final_ordinal + 1);
+        .unwrap_or(summary_prompt_ordinal + 1);
     let normalized = normalize_notes_markdown(
         summary_message
             .get("text")
@@ -1509,8 +1531,8 @@ async fn process_summary_stage(
     if summary.chars().count() > SUMMARY_MAX_CHARS {
         let marker = format!("摘要重做请求已托管: ordinal={summary_message_ordinal}");
         let retry_submission_key = format!(
-            "classflow:lecture:{}:summary:{}:retry:{}",
-            job.lecture_key, title_final_ordinal, summary_message_ordinal
+            "classflow:lecture:{}:summary:v{}:{}:retry:{}",
+            job.lecture_key, SUMMARY_PROMPT_VERSION, title_final_ordinal, summary_message_ordinal
         );
         if job.last_error.as_deref() == Some(marker.as_str()) {
             match get_archive_submission(state, client, base, &retry_submission_key).await {
@@ -2104,7 +2126,7 @@ fn build_summary_prompt(previous_chars: Option<usize>) -> String {
 2）如果课堂出现考试、小测、作业、截止时间、课程安排调整、材料提交、复习范围等通知，必须保留具体日期/时间/范围/要求，不能因为追求简短而概括掉关键细节。\
 3）如果出现常规系统签到之外的特殊考勤或互动，例如老师临时点名、随机提问、缺勤排查、额外签到或明确要求某些同学回应，也要单独保留；没有则不要凭空添加。\
 4）不得臆造笔记中没有的信息；没有通知或特殊考勤时直接省略对应部分，不要写‘无’或套模板。\
-5）输出简洁 Markdown，可按‘本堂讲了什么 / 通知与待办 / 特殊签到与课堂互动’组织，但只保留实际存在的部分；不要加邮件称呼、寒暄或结尾。{retry}"
+5）输出简洁 Markdown，章节顺序必须严格固定：①如果有通知与待办，先写 `## 通知与待办`；②如果有特殊签到或课堂互动，再写 `## 特殊签到与课堂互动`；③最后写 `## 本堂讲了什么`，这一节必须存在且必须是最后一节。前两节不存在时直接省略；无论是否存在前两节，都不得把“本堂讲了什么”放到通知或特殊考勤之前。6）不要加邮件称呼、寒暄或结尾。{retry}"
     )
 }
 
