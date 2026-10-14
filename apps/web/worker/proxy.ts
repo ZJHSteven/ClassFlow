@@ -38,6 +38,17 @@ export interface PublicNotesEnv {
   NOTES_PUBLIC_REPO?: string
 }
 
+/** Cloudflare Email Service send_email binding 的最小能力面。 */
+export interface SendEmailBindingLike {
+  send(message: {
+    to: string
+    from: string
+    subject: string
+    text: string
+    html: string
+  }): Promise<{ messageId?: string }>
+}
+
 export interface WorkerEnv extends PublicNotesEnv {
   BACKEND_BASE_URL: string
   BACKEND_TOKEN: string
@@ -45,6 +56,8 @@ export interface WorkerEnv extends PublicNotesEnv {
   CF_ACCESS_CLIENT_SECRET?: string
   ARTIFACT_PROXY_TOKEN?: string
   ARTIFACTS?: R2BucketLike
+  SUMMARY_EMAIL?: SendEmailBindingLike
+  SUMMARY_EMAIL_TO?: string
   ASSETS: AssetBindingLike
 }
 
@@ -80,6 +93,137 @@ function textResponse(status: number, contentType: string, body: string) {
 
 function unauthorizedArtifactResponse() {
   return jsonResponse(401, '未通过 Worker 产物接口鉴权。')
+}
+
+interface SummaryEmailPayload {
+  lecture_key: string
+  course_name: string
+  teacher_name: string
+  date: string
+  start_time: string
+  end_time: string
+  title: string
+  summary: string
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function validateSummaryEmailPayload(value: unknown): SummaryEmailPayload | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const payload = value as Partial<SummaryEmailPayload>
+  const keys: Array<keyof SummaryEmailPayload> = [
+    'lecture_key',
+    'course_name',
+    'teacher_name',
+    'date',
+    'start_time',
+    'end_time',
+    'title',
+    'summary',
+  ]
+  if (!keys.every((key) => isNonEmptyString(payload[key]))) {
+    return null
+  }
+  if (payload.summary!.length > 8_000) {
+    return null
+  }
+  return payload as SummaryEmailPayload
+}
+
+function stripHeaderNewlines(value: string): string {
+  return value.replace(/[\\r\\n]+/g, ' ').trim()
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function summaryEmailText(payload: SummaryEmailPayload): string {
+  return [
+    payload.course_name + '｜' + payload.title,
+    payload.date + ' ' + payload.start_time + '-' + payload.end_time + '｜' + payload.teacher_name,
+    '',
+    payload.summary.trim(),
+  ].join('\\n')
+}
+
+function summaryEmailHtml(payload: SummaryEmailPayload): string {
+  const summary = escapeHtml(payload.summary.trim()).replaceAll('\\n', '<br>')
+  return [
+    '<main style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;line-height:1.65;max-width:760px;margin:auto">',
+    '<h2>' + escapeHtml(payload.course_name) + '｜' + escapeHtml(payload.title) + '</h2>',
+    '<p style="color:#666">' + escapeHtml(payload.date) + ' ' + escapeHtml(payload.start_time) + '-' + escapeHtml(payload.end_time) + ' · ' + escapeHtml(payload.teacher_name) + '</p>',
+    '<div>' + summary + '</div>',
+    '</main>',
+  ].join('')
+}
+
+async function handleSummaryEmailRequest(request: Request, env: WorkerEnv): Promise<Response> {
+  if (request.method !== 'POST') {
+    return jsonResponse(405, '课堂摘要邮件接口只接受 POST。')
+  }
+  const token = request.headers.get('Authorization')?.replace(/^Bearer\\s+/i, '').trim() ?? ''
+  if (!env.BACKEND_TOKEN || token !== env.BACKEND_TOKEN) {
+    return jsonResponse(401, '未通过 ClassFlow backend 鉴权。')
+  }
+  if (!env.SUMMARY_EMAIL || !env.SUMMARY_EMAIL_TO?.trim()) {
+    return jsonResponse(500, 'Worker 尚未配置 SUMMARY_EMAIL 或 SUMMARY_EMAIL_TO。')
+  }
+
+  const contentLength = Number(request.headers.get('content-length') ?? '0')
+  if (Number.isFinite(contentLength) && contentLength > 32_000) {
+    return jsonResponse(413, '课堂摘要邮件请求过大。')
+  }
+  let raw: string
+  try {
+    raw = await request.text()
+  } catch {
+    return jsonResponse(400, '无法读取课堂摘要邮件请求。')
+  }
+  if (raw.length > 32_000) {
+    return jsonResponse(413, '课堂摘要邮件请求过大。')
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return jsonResponse(400, '课堂摘要邮件请求不是合法 JSON。')
+  }
+  const payload = validateSummaryEmailPayload(parsed)
+  if (!payload) {
+    return jsonResponse(400, '课堂摘要邮件缺少必要字段或内容过长。')
+  }
+
+  const subject = stripHeaderNewlines('ClassFlow｜' + payload.course_name + '｜' + payload.title).slice(0, 180)
+  try {
+    const result = await env.SUMMARY_EMAIL.send({
+      to: env.SUMMARY_EMAIL_TO.trim(),
+      from: 'classflow@zjhstudio.com',
+      subject,
+      text: summaryEmailText(payload),
+      html: summaryEmailHtml(payload),
+    })
+    return new Response(JSON.stringify({ ok: true, message_id: result.messageId ?? null }), {
+      status: 200,
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    })
+  } catch (error) {
+    console.error('ClassFlow summary email send failed', {
+      lecture_key: payload.lecture_key,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return jsonResponse(502, 'Cloudflare Email Service 投递失败。')
+  }
 }
 
 /**
@@ -500,6 +644,9 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
   }
   if (url.pathname.startsWith('/__classflow/artifacts/')) {
     return handleArtifactRequest(request, env)
+  }
+  if (url.pathname === '/__classflow/email-summary') {
+    return handleSummaryEmailRequest(request, env)
   }
 
   const publicArtifactResponse = await tryHandlePublicArtifactRequest(request, env)
