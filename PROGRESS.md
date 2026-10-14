@@ -1,3 +1,4 @@
+- 2026-10-15 历史摘要的永久错误语义已隔离：summary submission 返回错误 conversation、终止或压缩重做终止时，Live 新课仍可进入 failed；HistoricalBackfill 只标记 summary_backfill_manual_review，绝不破坏原 succeeded Notes。
 - 2026-10-15 summary stage 的成功 checkpoint 已完成分流：Live 摘要继续进入 publishing；HistoricalBackfill 只写 summary_markdown/ordinal 并保持 succeeded，因此旧课程不会产生第二次 GitHub 发布。
 - 2026-10-15 第三轮 summary stage 已开始区分 Live 与 HistoricalBackfill 两种完成语义；正常新课仍按原链路进入 publishing，历史回填将使用独立的“保持 succeeded”完成路径。
 - 2026-10-15 历史摘要 backfill 已接入 Notes cycle：只有正常 pending/generating/publishing 队列为空时才会推进历史记录；旧记录会先从原 Archive canonical messages 恢复 title_final_ordinal，再复用原 conversation 进入第三轮摘要。当前实现仍保持单候选串行，不会与新课堂争抢 Archive。

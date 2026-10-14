@@ -1348,13 +1348,7 @@ async fn process_summary_stage(
                 conversation_id: returned_cid,
             }) => {
                 if returned_cid != conversation_id {
-                    state
-                        .repo
-                        .mark_lecture_notes_failed(
-                            &job.lecture_key,
-                            "摘要 submission 没有继续原 conversation，停止自动处理",
-                        )
-                        .await?;
+                    mark_summary_stage_failure(state, job, mode, "摘要 submission 没有继续原 conversation，停止自动处理").await?;
                     return Ok(());
                 }
                 state
@@ -1363,23 +1357,14 @@ async fn process_summary_stage(
                     .await?;
             }
             Ok(ArchiveSubmissionOutcome::Failed { error }) => {
-                state
-                    .repo
-                    .mark_lecture_notes_failed(
-                        &job.lecture_key,
-                        &format!("Archive 摘要 submission 终止: {error}"),
-                    )
-                    .await?;
+                mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要 submission 终止: {error}")).await?;
             }
             Err((status, message)) => {
                 let fatal_client_error = status.is_some_and(|value| {
                     value.is_client_error() && value != StatusCode::TOO_MANY_REQUESTS
                 });
                 if fatal_client_error {
-                    state
-                        .repo
-                        .mark_lecture_notes_failed(&job.lecture_key, &message)
-                        .await?;
+                    mark_summary_stage_failure(state, job, mode, &message).await?;
                 } else {
                     state
                         .repo
@@ -1414,25 +1399,13 @@ async fn process_summary_stage(
             return Ok(());
         }
         Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
-            state
-                .repo
-                .mark_lecture_notes_failed(
-                    &job.lecture_key,
-                    &format!("Archive 摘要 submission 终止: {error}"),
-                )
-                .await?;
+            mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要 submission 终止: {error}")).await?;
             return Ok(());
         }
         Ok(Some(ArchiveSubmissionOutcome::Accepted {
             conversation_id: returned_cid,
         })) if returned_cid != conversation_id => {
-            state
-                .repo
-                .mark_lecture_notes_failed(
-                    &job.lecture_key,
-                    "摘要 submission 返回了不同 conversationId",
-                )
-                .await?;
+            mark_summary_stage_failure(state, job, mode, "摘要 submission 返回了不同 conversationId").await?;
             return Ok(());
         }
         Ok(_) => {}
@@ -1520,13 +1493,7 @@ async fn process_summary_stage(
         if job.last_error.as_deref() == Some(marker.as_str()) {
             match get_archive_submission(state, client, base, &retry_submission_key).await {
                 Ok(Some(ArchiveSubmissionOutcome::Failed { error })) => {
-                    state
-                        .repo
-                        .mark_lecture_notes_failed(
-                            &job.lecture_key,
-                            &format!("Archive 摘要重做 submission 终止: {error}"),
-                        )
-                        .await?;
+                    mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要重做 submission 终止: {error}")).await?;
                 }
                 Ok(_) => {}
                 Err((_status, message)) => {
@@ -1560,13 +1527,7 @@ async fn process_summary_stage(
                     .await?;
             }
             Ok(ArchiveSubmissionOutcome::Failed { error }) => {
-                state
-                    .repo
-                    .mark_lecture_notes_failed(
-                        &job.lecture_key,
-                        &format!("Archive 摘要重做 submission 终止: {error}"),
-                    )
-                    .await?;
+                mark_summary_stage_failure(state, job, mode, &format!("Archive 摘要重做 submission 终止: {error}")).await?;
             }
             Err((_status, message)) => {
                 state
