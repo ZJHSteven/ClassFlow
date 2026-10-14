@@ -1,3 +1,4 @@
+- 2026-10-15 Worker 邮件回归测试已增强：断言 Markdown h2/strong/list 真正渲染为 HTML、邮件 HTML 不再含 ##/** 源码，并验证 html:false 会把原始 <script> 转义而非执行。
 - 2026-10-15 Worker 邮件正文已改为真正 Markdown→HTML：使用 markdown-it，html:false，保留标题/粗体/列表等语义渲染并禁用 image；不再把 ##、** 当普通文本塞进 <br>。纯文本 alternative 仍保留原 Markdown。
 - 2026-10-15 Repository 回归测试已升级为真实 v1→v2 场景：旧记录即使已有 v1 summary 且邮件已发送，只要 required version=2 仍会重新入选；prepare 后旧 summary/email checkpoint 被清空，但 succeeded、CID、GitHub commit/path 保持不变。
 - 2026-10-15 摘要邮件队列已加版本门：backend 只会把 `summary_prompt_version=2` 的 succeeded 摘要交给 Worker，升级窗口内即使数据库里还保留 v1 文本，也不会继续发送旧格式邮件。

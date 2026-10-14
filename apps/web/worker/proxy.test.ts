@@ -177,7 +177,7 @@ describe('worker proxy', () => {
           start_time: '15:30',
           end_time: '17:10',
           title: '筛检试验评价',
-          summary: '## 本堂讲了什么\n灵敏度与特异度。\n\n## 通知与待办\n下周小测。',
+          summary: '## 通知与待办\n**下周小测**。\n\n- 范围：筛检试验评价\n\n## 本堂讲了什么\n灵敏度与特异度。\n\n<script>alert(1)</script>',
         }),
       }),
       env,
@@ -186,8 +186,16 @@ describe('worker proxy', () => {
     expect(email.sent).toHaveLength(1)
     expect(email.sent[0]?.from).toBe('classflow@zjhstudio.com')
     expect(email.sent[0]?.subject).toContain('流行病学')
-    expect(email.sent[0]?.text).toContain('下周小测')
-    expect(email.sent[0]?.html).toContain('下周小测')
+    expect(email.sent[0]?.text).toContain('**下周小测**')
+    const html = email.sent[0]?.html ?? ''
+    expect(html).toContain('<h2>通知与待办</h2>')
+    expect(html).toContain('<strong>下周小测</strong>')
+    expect(html).toContain('<ul>')
+    expect(html).toContain('<h2>本堂讲了什么</h2>')
+    expect(html).not.toContain('## 通知与待办')
+    expect(html).not.toContain('**下周小测**')
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
     expect(await response.json()).toEqual({ ok: true, message_id: 'mail-demo-1' })
   })
 
