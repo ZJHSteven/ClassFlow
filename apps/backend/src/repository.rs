@@ -1544,6 +1544,48 @@ impl Repository {
         rows.iter().map(map_lecture_notes_row).collect()
     }
 
+    /// 取下一条需要补第三轮摘要的历史成功 Notes。
+    ///
+    /// 历史回填与正常 Notes 状态机完全分离：这里只挑已经 succeeded、已有原始
+    /// conversation/Notes/标题，但 summary 仍为空的记录。已提交过 summary prompt 的
+    /// 记录优先继续，从而保证同一时刻只推进一条。
+    pub async fn get_historical_summary_backfill_candidate(
+        &self,
+        since_date: &str,
+        only_lecture_key: &str,
+    ) -> AppResult<Option<LectureNotesRecord>> {
+        let only_lecture_key = only_lecture_key.trim();
+        let row = sqlx::query(
+            r#"
+            SELECT *
+            FROM lecture_notes
+            WHERE status='succeeded'
+              AND date >= ?
+              AND conversation_id IS NOT NULL
+              AND trim(conversation_id) <> ''
+              AND notes_markdown IS NOT NULL
+              AND trim(notes_markdown) <> ''
+              AND notes_title IS NOT NULL
+              AND trim(notes_title) <> ''
+              AND (summary_markdown IS NULL OR trim(summary_markdown) = '')
+              AND COALESCE(recovery_kind, '') <> 'summary_backfill_manual_review'
+              AND (? = '' OR lecture_key = ?)
+            ORDER BY
+              CASE WHEN summary_requested_at IS NOT NULL THEN 0 ELSE 1 END,
+              date ASC,
+              start_time ASC,
+              created_at ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(since_date)
+        .bind(only_lecture_key)
+        .bind(only_lecture_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(map_lecture_notes_row).transpose()
+    }
+
     pub async fn mark_lecture_notes_pending_error(
         &self,
         lecture_key: &str,
@@ -1684,6 +1726,23 @@ impl Repository {
         Ok(())
     }
 
+    /// 为旧 succeeded 记录补回标题 final ordinal，但不改变其成功状态或 GitHub 信息。
+    pub async fn mark_historical_summary_title_checkpoint(
+        &self,
+        lecture_key: &str,
+        title_final_ordinal: i64,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE lecture_notes SET title_final_ordinal=?, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=? AND status='succeeded'",
+        )
+        .bind(title_final_ordinal)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn mark_lecture_notes_summary_requested(&self, lecture_key: &str) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query("UPDATE lecture_notes SET summary_requested_at=?, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
@@ -1709,6 +1768,42 @@ impl Repository {
             .bind(lecture_key)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    /// 历史摘要回填完成：只补 summary checkpoint，保持原 succeeded 与既有 GitHub 发布不变。
+    pub async fn mark_historical_summary_ready(
+        &self,
+        lecture_key: &str,
+        summary_markdown: &str,
+        summary_final_ordinal: i64,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE lecture_notes SET summary_markdown=?, summary_final_ordinal=?, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=? AND status='succeeded'",
+        )
+        .bind(summary_markdown)
+        .bind(summary_final_ordinal)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// 历史摘要遇到永久错误时，只冻结 backfill，不把原成功 Notes 改成 failed。
+    pub async fn mark_historical_summary_backfill_failed(
+        &self,
+        lecture_key: &str,
+        error: &str,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE lecture_notes SET last_error=?, recovery_kind='summary_backfill_manual_review', updated_at=? WHERE lecture_key=? AND status='succeeded'",
+        )
+        .bind(error)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
