@@ -1578,12 +1578,61 @@ async fn process_summary_stage(
         return Ok(());
     }
 
-    state
-        .repo
-        .mark_lecture_notes_summary_ready(&job.lecture_key, summary, summary_message_ordinal)
-        .await?;
+    mark_summary_stage_ready(state, job, mode, summary, summary_message_ordinal).await?;
     Ok(())
 }
+
+/// 正常新课的摘要错误沿用原 Notes failed 语义；历史回填则只能冻结摘要补跑，
+/// 不能把已经成功发布的旧课堂改成 failed。
+async fn mark_summary_stage_failure(
+    state: &AppState,
+    job: &LectureNotesRecord,
+    mode: SummaryStageMode,
+    error: &str,
+) -> AppResult<()> {
+    match mode {
+        SummaryStageMode::Live => state.repo.mark_lecture_notes_failed(&job.lecture_key, error).await,
+        SummaryStageMode::HistoricalBackfill => {
+            state
+                .repo
+                .mark_historical_summary_backfill_failed(&job.lecture_key, error)
+                .await
+        }
+    }
+}
+
+/// 两种摘要链路共用生成逻辑，只在最终 checkpoint 的状态迁移上分叉。
+async fn mark_summary_stage_ready(
+    state: &AppState,
+    job: &LectureNotesRecord,
+    mode: SummaryStageMode,
+    summary: &str,
+    summary_message_ordinal: i64,
+) -> AppResult<()> {
+    match mode {
+        SummaryStageMode::Live => {
+            state
+                .repo
+                .mark_lecture_notes_summary_ready(
+                    &job.lecture_key,
+                    summary,
+                    summary_message_ordinal,
+                )
+                .await
+        }
+        SummaryStageMode::HistoricalBackfill => {
+            state
+                .repo
+                .mark_historical_summary_ready(
+                    &job.lecture_key,
+                    summary,
+                    summary_message_ordinal,
+                )
+                .await
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NormalizedNotes {
     markdown: String,

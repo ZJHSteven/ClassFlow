@@ -1,3 +1,4 @@
+- 2026-10-15 summary stage 的成功 checkpoint 已完成分流：Live 摘要继续进入 publishing；HistoricalBackfill 只写 summary_markdown/ordinal 并保持 succeeded，因此旧课程不会产生第二次 GitHub 发布。
 - 2026-10-15 第三轮 summary stage 已开始区分 Live 与 HistoricalBackfill 两种完成语义；正常新课仍按原链路进入 publishing，历史回填将使用独立的“保持 succeeded”完成路径。
 - 2026-10-15 历史摘要 backfill 已接入 Notes cycle：只有正常 pending/generating/publishing 队列为空时才会推进历史记录；旧记录会先从原 Archive canonical messages 恢复 title_final_ordinal，再复用原 conversation 进入第三轮摘要。当前实现仍保持单候选串行，不会与新课堂争抢 Archive。
 - 2026-10-15 历史摘要 backfill 的 SQLite 接口已补齐：候选查询只选择 succeeded+原 conversation/Notes/标题齐全+summary 为空的记录，并优先继续已请求摘要的同一条；可单条 lecture_key 锁定。新增“恢复 title_final_ordinal”“历史 summary ready 保持 succeeded”“永久错误只冻结 backfill 不回退原成功 Notes”三类更新接口。
