@@ -6,6 +6,7 @@
 - N1 已部署 backend SHA256=`520ef5775e24b3bae82f14fb0d61511a6ac49af0581d0fae4d6aa547f6b8baa3`，service active+enabled、health=ok。
 - 单条锁已经解除，生产配置现为 `SUMMARY_BACKFILL_ENABLED=true`、`SINCE_DATE=2026-09-01`、`ONLY_LECTURE_KEY=`；全量历史回填按实时 Notes 优先、历史单条串行方式运行。
 - 全量模式首条非 canary 记录（2026-09-07 综合素养课程5《科研素养与科研诚信》）已成功补出 1047 字摘要，证明全量候选切换正常；其余旧记录继续由同一生产 worker 逐条推进。
+- 后续生产快照进一步验证：已到 3/26 摘要、3/26 邮件，另有且仅有 1 条历史摘要 in-flight，manual_review=0；没有人为提高并发或绕过 Archive queue。
 
 ## 目标
 - 对本学期已经 `succeeded`、但在第三轮摘要功能上线前生成的历史 Notes 补齐 `summary_markdown`，继续使用每堂课原有的 Archive conversation，不重做完整 Notes 和标题。

@@ -1,3 +1,4 @@
+- 2026-10-15 全量历史摘要回填继续稳定推进：最新生产快照为 26 条 succeeded 中 3 条摘要完成、3 封邮件成功、1 条摘要 in-flight、0 条 summary_backfill_manual_review；当前正在处理 9/10 综合素养课程5《安宁疗护与临终选择》。监控终端已停止，生产 worker 本身继续按单条串行运行。
 - 2026-10-15 历史摘要生产 canary 通过：10/14 医学人口学在原 CID `6acf6db0-59b8-83e8-8a59-02155c5cc4ca` 中恢复 title_final_ordinal=25，并追加 920 字摘要 final ordinal=28；数据库 status 始终为 succeeded，GitHub commit 仍为 `c1803a34c72ffcbb8b3f9f45fc39c709c0826ffd`、路径未变化。摘要邮件成功，Message-ID=`<66JGNn8IIPiCdUWy2m57G7f8fjgRNmeg6ak4@zjhstudio.com>`，attempt_count=0。
 - 2026-10-15 历史摘要 backend 已部署 N1，SHA256=`520ef5775e24b3bae82f14fb0d61511a6ac49af0581d0fae4d6aa547f6b8baa3`，service active+enabled、local health=ok。生产已解除 canary ONLY key：`CLASSFLOW_SUMMARY_BACKFILL_ENABLED=true`、`SINCE_DATE=2026-09-01`、`ONLY_LECTURE_KEY=`，按正常 Notes 优先、历史单条串行运行。
 - 2026-10-15 全量历史回填已验证跨记录推进：9/7 综合素养课程5《科研素养与科研诚信》恢复标题 checkpoint 后成功补出 1047 字摘要；当时统计 26 succeeded 中已有 2 条摘要完成，证明不是 canary 特例，后续剩余记录会沿同一 durable queue 逐条推进。
