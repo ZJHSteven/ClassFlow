@@ -5,7 +5,7 @@
 - Canary 原 GitHub Notes path 与 commit `c1803a34c72ffcbb8b3f9f45fc39c709c0826ffd` 未改变；修正版邮件成功，Message-ID=`<SNPKMPhPvBCxHz4t8l6mswqtn4ccbe6tgNje@zjhstudio.com>`。
 - 已通过 Gmail raw MIME 直接核验：正常 HTML part 中存在 `<h2>通知与待办</h2>`、`<strong>`、`<ul>` 等渲染结果；`##` / `**` 只存在于 text/plain alternative，不再作为 Gmail 正常正文源码显示。
 - Cloudflare Worker 生产 Version=`4e490f2e-e8d3-4043-981a-2814c373fd91`；N1 backend SHA256=`54620f59ea79768f1ab006359153f761c2cbd58dc8d3470922e29d9fdcb7b738`，service active+enabled、health=ok。
-- 已解除 canary 锁重新开启全量 v2 backfill。最新快照：26 条 succeeded 中 v2 摘要 2 条完成、2 封 v2 邮件成功、1 条 in-flight、0 条 manual_review；9/7《科研素养与科研诚信》已完成 929 字 v2 摘要与修正版邮件，9/8 正在处理。
+- 已解除 canary 锁重新开启全量 v2 backfill。最新快照已推进到：26 条 succeeded 中 v2 摘要 3 条完成、3 封 v2 邮件成功、1 条 in-flight、0 条 manual_review；历史任务仍严格单条串行。
 
 ## 问题
 - v1 摘要虽然保留了通知/特殊考勤，但模型通常按“本堂讲了什么 → 通知与待办 → 特殊互动”输出；课后快速查看时优先级反了。
