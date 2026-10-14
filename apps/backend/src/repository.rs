@@ -220,6 +220,7 @@ impl Repository {
                 notes_final_ordinal INTEGER,
                 title_requested_at TEXT,
                 title_final_ordinal INTEGER,
+                summary_prompt_version INTEGER,
                 summary_requested_at TEXT,
                 summary_markdown TEXT,
                 summary_final_ordinal INTEGER,
@@ -274,6 +275,8 @@ impl Repository {
         self.ensure_optional_lecture_notes_column("title_requested_at", "TEXT")
             .await?;
         self.ensure_optional_lecture_notes_column("title_final_ordinal", "INTEGER")
+            .await?;
+        self.ensure_optional_lecture_notes_column("summary_prompt_version", "INTEGER")
             .await?;
         self.ensure_optional_lecture_notes_column("summary_requested_at", "TEXT")
             .await?;
@@ -1553,6 +1556,7 @@ impl Repository {
         &self,
         since_date: &str,
         only_lecture_key: &str,
+        required_summary_version: i64,
     ) -> AppResult<Option<LectureNotesRecord>> {
         let only_lecture_key = only_lecture_key.trim();
         let row = sqlx::query(
@@ -1567,11 +1571,24 @@ impl Repository {
               AND trim(notes_markdown) <> ''
               AND notes_title IS NOT NULL
               AND trim(notes_title) <> ''
-              AND (summary_markdown IS NULL OR trim(summary_markdown) = '')
-              AND COALESCE(recovery_kind, '') <> 'summary_backfill_manual_review'
+              AND (
+                COALESCE(summary_prompt_version, 0) < ?
+                OR summary_markdown IS NULL
+                OR trim(summary_markdown) = ''
+              )
+              AND NOT (
+                COALESCE(summary_prompt_version, 0) = ?
+                AND COALESCE(recovery_kind, '') = 'summary_backfill_manual_review'
+              )
               AND (? = '' OR lecture_key = ?)
             ORDER BY
-              CASE WHEN summary_requested_at IS NOT NULL THEN 0 ELSE 1 END,
+              CASE
+                WHEN COALESCE(summary_prompt_version, 0) = ?
+                  AND summary_requested_at IS NOT NULL
+                  AND (summary_markdown IS NULL OR trim(summary_markdown) = '')
+                THEN 0
+                ELSE 1
+              END,
               date ASC,
               start_time ASC,
               created_at ASC
@@ -1579,8 +1596,11 @@ impl Repository {
             "#,
         )
         .bind(since_date)
+        .bind(required_summary_version)
+        .bind(required_summary_version)
         .bind(only_lecture_key)
         .bind(only_lecture_key)
+        .bind(required_summary_version)
         .fetch_optional(&self.pool)
         .await?;
         row.as_ref().map(map_lecture_notes_row).transpose()
@@ -1684,7 +1704,7 @@ impl Repository {
         notes_sha256: &str,
         final_ordinal: i64,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=NULL, notes_markdown=?, notes_sha256=?, notes_final_ordinal=?, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=NULL, notes_markdown=?, notes_sha256=?, notes_final_ordinal=?, title_requested_at=NULL, title_final_ordinal=NULL, summary_prompt_version=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
             .bind(markdown)
             .bind(notes_sha256)
             .bind(final_ordinal)
@@ -1716,7 +1736,7 @@ impl Repository {
         title: &str,
         title_final_ordinal: i64,
     ) -> AppResult<()> {
-        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=?, title_final_ordinal=?, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET status='generating', notes_title=?, title_final_ordinal=?, summary_prompt_version=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
             .bind(title)
             .bind(title_final_ordinal)
             .bind(Utc::now().to_rfc3339())
@@ -1743,14 +1763,43 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn mark_lecture_notes_summary_requested(&self, lecture_key: &str) -> AppResult<()> {
+    /// 标记某个明确版本的摘要已经进入 Archive。
+    ///
+    /// version 是摘要协议的一部分：以后模板升级时，旧版本记录可以被安全地重新纳入回填，
+    /// 而不需要依靠时间戳或人工猜测。
+    pub async fn mark_lecture_notes_summary_requested(
+        &self,
+        lecture_key: &str,
+        summary_prompt_version: i64,
+    ) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE lecture_notes SET summary_requested_at=?, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
+        sqlx::query("UPDATE lecture_notes SET summary_prompt_version=?, summary_requested_at=?, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?")
+            .bind(summary_prompt_version)
             .bind(&now)
             .bind(&now)
             .bind(lecture_key)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    /// 在真正提交新版本摘要前，清理旧版本摘要和邮件 checkpoint。
+    ///
+    /// 这里刻意不触碰 Notes、标题、conversation、GitHub path/commit，也不改变 status。
+    /// 因此历史 v1 → v2 只会产生一个新的 summary turn 和一封修正版邮件。
+    pub async fn prepare_summary_prompt_version(
+        &self,
+        lecture_key: &str,
+        summary_prompt_version: i64,
+    ) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE lecture_notes SET summary_prompt_version=?, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, last_error=NULL, recovery_kind=NULL, updated_at=? WHERE lecture_key=?",
+        )
+        .bind(summary_prompt_version)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -1816,12 +1865,14 @@ impl Repository {
         &self,
         limit: usize,
         max_attempts: u32,
+        required_summary_version: i64,
     ) -> AppResult<Vec<LectureNotesRecord>> {
         let rows = sqlx::query(
             r#"
             SELECT *
             FROM lecture_notes
             WHERE status='succeeded'
+              AND summary_prompt_version = ?
               AND summary_markdown IS NOT NULL
               AND trim(summary_markdown) <> ''
               AND summary_email_sent_at IS NULL
@@ -1831,6 +1882,7 @@ impl Repository {
             LIMIT ?
             "#,
         )
+        .bind(required_summary_version)
         .bind(max_attempts.max(1) as i64)
         .bind(Utc::now().to_rfc3339())
         .bind(limit.max(1) as i64)
@@ -1986,9 +2038,9 @@ impl Repository {
             if existing.notes_markdown.as_deref().is_some_and(|value| !value.trim().is_empty())
                 && existing.conversation_id.as_deref().is_some_and(|value| !value.trim().is_empty())
             {
-                "UPDATE lecture_notes SET status='generating', notes_title=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, last_error=NULL, recovery_kind=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+                "UPDATE lecture_notes SET status='generating', notes_title=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_prompt_version=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, last_error=NULL, recovery_kind=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
             } else {
-                "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
+                "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_prompt_version=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?"
             },
         )
         .bind(Utc::now().to_rfc3339())
@@ -2009,7 +2061,7 @@ impl Repository {
             ));
         }
         sqlx::query(
-            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
+            "UPDATE lecture_notes SET status='pending', conversation_id=NULL, notes_title=NULL, notes_markdown=NULL, notes_sha256=NULL, notes_final_ordinal=NULL, title_requested_at=NULL, title_final_ordinal=NULL, summary_prompt_version=NULL, summary_requested_at=NULL, summary_markdown=NULL, summary_final_ordinal=NULL, summary_email_sent_at=NULL, summary_email_attempt_count=0, summary_email_last_error=NULL, summary_email_next_attempt_at=NULL, summary_email_message_id=NULL, github_audio_path=NULL, github_notes_path=NULL, github_commit_sha=NULL, last_error=NULL, recovery_kind=NULL, submitted_at=NULL, completed_at=NULL, updated_at=? WHERE lecture_key=?",
         )
         .bind(Utc::now().to_rfc3339())
         .bind(lecture_key)
@@ -2272,6 +2324,7 @@ fn map_lecture_notes_row(row: &sqlx::sqlite::SqliteRow) -> AppResult<LectureNote
         notes_final_ordinal: row.get("notes_final_ordinal"),
         title_requested_at: row.get("title_requested_at"),
         title_final_ordinal: row.get("title_final_ordinal"),
+        summary_prompt_version: row.get("summary_prompt_version"),
         summary_requested_at: row.get("summary_requested_at"),
         summary_markdown: row.get("summary_markdown"),
         summary_final_ordinal: row.get("summary_final_ordinal"),

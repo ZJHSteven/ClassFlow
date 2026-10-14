@@ -357,6 +357,7 @@ pub struct LectureNotesRecord {
     pub notes_final_ordinal: Option<i64>,
     pub title_requested_at: Option<String>,
     pub title_final_ordinal: Option<i64>,
+    pub summary_prompt_version: Option<i64>,
     pub summary_requested_at: Option<String>,
     pub summary_markdown: Option<String>,
     pub summary_final_ordinal: Option<i64>,
