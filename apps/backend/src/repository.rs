@@ -2611,12 +2611,17 @@ mod tests {
                 lecture_key, course_key, semester, course_name, teacher_name, date,
                 start_time, end_time, sequence_no, status, transcript_sha256,
                 conversation_id, notes_title, notes_markdown, notes_final_ordinal,
+                summary_prompt_version, summary_requested_at, summary_markdown,
+                summary_final_ordinal, summary_email_sent_at, summary_email_message_id,
                 github_audio_path, github_notes_path, github_commit_sha,
                 completed_at, created_at, updated_at
             ) VALUES(
                 'history-summary', 'course-history-summary', '2026-2027-1', '医学人口学', '韩钰',
                 '2026-10-14', '18:00', '19:40', 4, 'succeeded', 'hash',
                 'cid-history', '生育水平与影响因素', '# notes', 28,
+                1, '2026-10-14T00:00:00Z', '## 本堂讲了什么
+旧版摘要',
+                34, '2026-10-14T00:01:00Z', '<old-mail@example.com>',
                 'audio.md', 'notes.md', 'commit-before',
                 ?, ?, ?
             )
@@ -2629,22 +2634,44 @@ mod tests {
         .await
         .expect("应能写入历史 succeeded Notes");
 
+        // 即便 v1 已经有摘要且发过邮件，只要 required version 升到 2，就必须重新入选。
         let candidate = repo
-            .get_historical_summary_backfill_candidate("2026-09-01", "history-summary")
+            .get_historical_summary_backfill_candidate("2026-09-01", "history-summary", 2)
             .await
             .expect("应能查询历史摘要候选")
-            .expect("应选中缺摘要记录");
+            .expect("旧版本摘要应重新成为候选");
         assert_eq!(candidate.lecture_key, "history-summary");
+        assert_eq!(candidate.summary_prompt_version, Some(1));
+
+        repo.prepare_summary_prompt_version("history-summary", 2)
+            .await
+            .expect("版本升级应能清空旧摘要和旧邮件 checkpoint");
+        let prepared = repo
+            .get_lecture_notes("history-summary")
+            .await
+            .expect("应能读取准备后的 Notes")
+            .expect("历史 Notes 应存在");
+        assert_eq!(prepared.status, LectureNotesStatus::Succeeded);
+        assert_eq!(prepared.summary_prompt_version, Some(2));
+        assert!(prepared.summary_requested_at.is_none());
+        assert!(prepared.summary_markdown.is_none());
+        assert!(prepared.summary_email_sent_at.is_none());
+        assert!(prepared.summary_email_message_id.is_none());
+        assert_eq!(prepared.github_commit_sha.as_deref(), Some("commit-before"));
 
         repo.mark_historical_summary_title_checkpoint("history-summary", 31)
             .await
             .expect("应能补标题 ordinal");
-        repo.mark_lecture_notes_summary_requested("history-summary")
+        repo.mark_lecture_notes_summary_requested("history-summary", 2)
             .await
-            .expect("应能记录摘要已请求");
-        repo.mark_historical_summary_ready("history-summary", "## 本堂讲了什么\n摘要", 34)
-            .await
-            .expect("应能补摘要且保持 succeeded");
+            .expect("应能记录 v2 摘要已请求");
+        repo.mark_historical_summary_ready(
+            "history-summary",
+            "## 通知与待办\n小测\n\n## 本堂讲了什么\n摘要",
+            38,
+        )
+        .await
+        .expect("应能补 v2 摘要且保持 succeeded");
 
         let saved = repo
             .get_lecture_notes("history-summary")
@@ -2653,18 +2680,19 @@ mod tests {
             .expect("历史 Notes 应存在");
         assert_eq!(saved.status, LectureNotesStatus::Succeeded);
         assert_eq!(saved.title_final_ordinal, Some(31));
-        assert_eq!(saved.summary_final_ordinal, Some(34));
+        assert_eq!(saved.summary_prompt_version, Some(2));
+        assert_eq!(saved.summary_final_ordinal, Some(38));
         assert_eq!(
             saved.summary_markdown.as_deref(),
-            Some("## 本堂讲了什么\n摘要")
+            Some("## 通知与待办\n小测\n\n## 本堂讲了什么\n摘要")
         );
         assert_eq!(saved.github_commit_sha.as_deref(), Some("commit-before"));
         assert_eq!(saved.github_notes_path.as_deref(), Some("notes.md"));
 
         let no_longer_candidate = repo
-            .get_historical_summary_backfill_candidate("2026-09-01", "history-summary")
+            .get_historical_summary_backfill_candidate("2026-09-01", "history-summary", 2)
             .await
-            .expect("补完摘要后候选查询仍应成功");
+            .expect("补完 v2 摘要后候选查询仍应成功");
         assert!(no_longer_candidate.is_none());
     }
 

@@ -1,3 +1,4 @@
+- 2026-10-15 Repository 回归测试已升级为真实 v1→v2 场景：旧记录即使已有 v1 summary 且邮件已发送，只要 required version=2 仍会重新入选；prepare 后旧 summary/email checkpoint 被清空，但 succeeded、CID、GitHub commit/path 保持不变。
 - 2026-10-15 摘要邮件队列已加版本门：backend 只会把 `summary_prompt_version=2` 的 succeeded 摘要交给 Worker，升级窗口内即使数据库里还保留 v1 文本，也不会继续发送旧格式邮件。
 - 2026-10-15 摘要协议已升级为 v2：Archive prompt marker 与 idempotency key 都显式带 v2；提取 summary final 时必须位于当前版本 summary prompt 之后，避免重跑误认旧 v1 摘要。v2 prompt 固定章节顺序为“通知与待办 → 特殊签到与课堂互动 → 本堂讲了什么”，知识正文始终最后。
 - 2026-10-15 摘要 v2 开始版本化：SQLite/模型新增 `summary_prompt_version`，历史候选可按 required version 重新纳入；新增 `prepare_summary_prompt_version`，升级时只清空旧 summary/email checkpoint，保留 Notes/标题/CID/GitHub。邮件候选也将只投递当前摘要版本，避免旧版摘要在升级窗口继续发送。
