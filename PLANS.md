@@ -1,3 +1,31 @@
+# 2026-10-15 ClassFlow 第三轮课堂摘要 + 邮件投递 ExecPlan
+
+## 目标
+- 把现有 ChatGPT Project 流程从“完整 Notes -> 同 conversation 标题”延长为“完整 Notes -> 标题 -> 同 conversation 摘要”，不新建 conversation。
+- 摘要面向课后快速查看：目标约 500～1000 个汉字，硬上限 2000 个汉字；知识内容高度压缩，但考试/小测/作业/课程安排等通知，以及临时点名、课堂提问、额外签到/缺勤排查等特殊考勤信息必须保留关键细节。
+- 摘要生成成功后不阻塞 GitHub Notes 发布；邮件投递独立持久化重试，避免 Cloudflare/Gmail 瞬时故障导致 Notes 主链回滚。
+- 邮件由 ClassFlow Worker 使用 Cloudflare Email Service `send_email` binding 发出，From 使用 `classflow@zjhstudio.com`，目标为账户中已经验证的 Gmail destination。
+
+## 状态机与恢复设计
+1. Notes final 落库后继续现有 title-only turn；标题合格后记录 `notes_title + title_final_ordinal`，仍保持 `generating`。
+2. 下一轮用同一 `conversation_id` 发送稳定幂等的 summary prompt；提交由 Archive submission queue 托管，ClassFlow 只认 canonical messages。
+3. summary prompt 使用独立前缀和稳定 idempotency key；canonical 中已经存在时自动认领，避免 backend/Archive 重启造成重复 turn。
+4. 摘要超过 2000 个汉字时不直接截断，而是继续同一 conversation 请求压缩重做；合格后保存 `summary_markdown + summary_final_ordinal` 并进入 `publishing`。
+5. GitHub 发布成功后 Notes 状态照常进入 `succeeded`；独立 summary-email worker 扫描“已成功、已有摘要、尚未发信”的记录并重试邮件，不重复发布 GitHub。
+
+## 邮件链路
+1. 在现有 `classflow-web` Worker 增加仅机器可调用的 `/__classflow/email-summary`，使用现有 `BACKEND_TOKEN` 做 Bearer 鉴权。
+2. Worker 增加 Cloudflare Email Service `SUMMARY_EMAIL` binding；收件地址放 Worker secret，不写入仓库。
+3. N1 backend 通过 `CLASSFLOW_SUMMARY_EMAIL_WEBHOOK_URL` 调用该端点；请求可复用现有 Cloudflare Access Service Token 配置，但生产优先使用 Worker 自身稳定 URL，避免依赖浏览器会话。
+4. 邮件标题采用“ClassFlow｜课程名｜课堂主题”，正文包含课程/教师/时间元信息和 AI 摘要；HTML 与纯文本同时发送。
+
+## 验收
+1. backend：fmt、全量 unit、API integration、Clippy -D warnings。
+2. web Worker：lint、tests、build、Wrangler dry-run。
+3. Cloudflare：确认 zjhstudio.com 与 Gmail destination 状态；部署 send_email binding 和收件 secret。
+4. 真实 smoke：调用私有 email-summary endpoint，确认 Gmail 收到 From=classflow@zjhstudio.com 的测试邮件。
+5. N1：部署 ARM64 backend，迁移 SQLite 列，health=ok；用一条既有/测试 Notes 记录验证 summary 状态与邮件 retry 不会重复 GitHub 发布。
+
 # 2026-10-13 ClassFlow 首屏 SSE / 列表性能修复 ExecPlan
 
 ## 完成状态
