@@ -1112,7 +1112,10 @@ async fn process_summary_stage(
         // 和标题阶段相同：先认领历史 canonical prompt，防止请求其实已经提交成功、
         // 但 ClassFlow 在写 checkpoint 前退出时再次发送同一摘要请求。
         let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
-        let response = match apply_bridge_auth(client.get(messages_url), state).send().await {
+        let response = match apply_bridge_auth(client.get(messages_url), state)
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(error) => {
                 state
@@ -1296,7 +1299,10 @@ async fn process_summary_stage(
     }
 
     let messages_url = format!("{base}/v1/conversations/{conversation_id}/messages?limit=200");
-    let response = match apply_bridge_auth(client.get(messages_url), state).send().await {
+    let response = match apply_bridge_auth(client.get(messages_url), state)
+        .send()
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             state
@@ -1427,11 +1433,7 @@ async fn process_summary_stage(
 
     state
         .repo
-        .mark_lecture_notes_summary_ready(
-            &job.lecture_key,
-            summary,
-            summary_message_ordinal,
-        )
+        .mark_lecture_notes_summary_ready(&job.lecture_key, summary, summary_message_ordinal)
         .await?;
     Ok(())
 }
