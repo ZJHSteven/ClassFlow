@@ -1,3 +1,4 @@
+- 2026-10-15 Repository 回归测试覆盖历史摘要关键不变量：补 title ordinal、标记 summary requested、写 summary final 后，记录仍必须是 succeeded，原 github_commit_sha/github_notes_path 保持不变，并从 backfill 候选中消失。
 - 2026-10-15 旧记录 title_final_ordinal 恢复规则已实现并加单元测试：只接受“最新标题 prompt 之后”的 assistant final，且 normalize 后必须与数据库中已经发布的 notes_title 完全一致，避免把其他 assistant 输出误认成标题边界。
 - 2026-10-15 历史摘要的永久错误语义已隔离：summary submission 返回错误 conversation、终止或压缩重做终止时，Live 新课仍可进入 failed；HistoricalBackfill 只标记 summary_backfill_manual_review，绝不破坏原 succeeded Notes。
 - 2026-10-15 summary stage 的成功 checkpoint 已完成分流：Live 摘要继续进入 publishing；HistoricalBackfill 只写 summary_markdown/ordinal 并保持 succeeded，因此旧课程不会产生第二次 GitHub 发布。

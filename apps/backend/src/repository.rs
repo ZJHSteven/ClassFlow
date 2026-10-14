@@ -2549,6 +2549,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn historical_summary_backfill_should_preserve_succeeded_publish_state() {
+        let repo = repo().await;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"
+            INSERT INTO lecture_notes(
+                lecture_key, course_key, semester, course_name, teacher_name, date,
+                start_time, end_time, sequence_no, status, transcript_sha256,
+                conversation_id, notes_title, notes_markdown, notes_final_ordinal,
+                github_audio_path, github_notes_path, github_commit_sha,
+                completed_at, created_at, updated_at
+            ) VALUES(
+                'history-summary', 'course-history-summary', '2026-2027-1', '医学人口学', '韩钰',
+                '2026-10-14', '18:00', '19:40', 4, 'succeeded', 'hash',
+                'cid-history', '生育水平与影响因素', '# notes', 28,
+                'audio.md', 'notes.md', 'commit-before',
+                ?, ?, ?
+            )
+            "#,
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(&repo.pool)
+        .await
+        .expect("应能写入历史 succeeded Notes");
+
+        let candidate = repo
+            .get_historical_summary_backfill_candidate("2026-09-01", "history-summary")
+            .await
+            .expect("应能查询历史摘要候选")
+            .expect("应选中缺摘要记录");
+        assert_eq!(candidate.lecture_key, "history-summary");
+
+        repo.mark_historical_summary_title_checkpoint("history-summary", 31)
+            .await
+            .expect("应能补标题 ordinal");
+        repo.mark_lecture_notes_summary_requested("history-summary")
+            .await
+            .expect("应能记录摘要已请求");
+        repo.mark_historical_summary_ready("history-summary", "## 本堂讲了什么\n摘要", 34)
+            .await
+            .expect("应能补摘要且保持 succeeded");
+
+        let saved = repo
+            .get_lecture_notes("history-summary")
+            .await
+            .expect("应能读取历史 Notes")
+            .expect("历史 Notes 应存在");
+        assert_eq!(saved.status, LectureNotesStatus::Succeeded);
+        assert_eq!(saved.title_final_ordinal, Some(31));
+        assert_eq!(saved.summary_final_ordinal, Some(34));
+        assert_eq!(
+            saved.summary_markdown.as_deref(),
+            Some("## 本堂讲了什么\n摘要")
+        );
+        assert_eq!(saved.github_commit_sha.as_deref(), Some("commit-before"));
+        assert_eq!(saved.github_notes_path.as_deref(), Some("notes.md"));
+
+        let no_longer_candidate = repo
+            .get_historical_summary_backfill_candidate("2026-09-01", "history-summary")
+            .await
+            .expect("补完摘要后候选查询仍应成功");
+        assert!(no_longer_candidate.is_none());
+    }
+
+    #[tokio::test]
     async fn should_retry_failed_task() {
         let repo = repo().await;
         let response = repo
