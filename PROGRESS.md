@@ -1,3 +1,6 @@
+- 2026-10-15 历史摘要生产 canary 通过：10/14 医学人口学在原 CID `6acf6db0-59b8-83e8-8a59-02155c5cc4ca` 中恢复 title_final_ordinal=25，并追加 920 字摘要 final ordinal=28；数据库 status 始终为 succeeded，GitHub commit 仍为 `c1803a34c72ffcbb8b3f9f45fc39c709c0826ffd`、路径未变化。摘要邮件成功，Message-ID=`<66JGNn8IIPiCdUWy2m57G7f8fjgRNmeg6ak4@zjhstudio.com>`，attempt_count=0。
+- 2026-10-15 历史摘要 backend 已部署 N1，SHA256=`520ef5775e24b3bae82f14fb0d61511a6ac49af0581d0fae4d6aa547f6b8baa3`，service active+enabled、local health=ok。生产已解除 canary ONLY key：`CLASSFLOW_SUMMARY_BACKFILL_ENABLED=true`、`SINCE_DATE=2026-09-01`、`ONLY_LECTURE_KEY=`，按正常 Notes 优先、历史单条串行运行。
+- 2026-10-15 全量历史回填已验证跨记录推进：9/7 综合素养课程5《科研素养与科研诚信》恢复标题 checkpoint 后成功补出 1047 字摘要；当时统计 26 succeeded 中已有 2 条摘要完成，证明不是 canary 特例，后续剩余记录会沿同一 durable queue 逐条推进。
 - 2026-10-15 历史摘要 backfill 本地门禁通过：backend unit 70/70、API integration 11/11、cargo fmt --check PASS、Clippy --all-targets -D warnings PASS。下一步进入 ARM64 构建与 N1 单条 canary 部署。
 - 2026-10-15 历史摘要 backfill 实现已通过 focused tests：notes 15/15、repository 14/14；rustfmt 仅报告格式差异，现已统一格式化。
 - 2026-10-15 Repository 回归测试覆盖历史摘要关键不变量：补 title ordinal、标记 summary requested、写 summary final 后，记录仍必须是 succeeded，原 github_commit_sha/github_notes_path 保持不变，并从 backfill 候选中消失。

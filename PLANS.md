@@ -1,5 +1,12 @@
 # 2026-10-15 ClassFlow 历史课堂摘要低速回填 ExecPlan
 
+## 当前生产状态
+- Canary 已通过：2026-10-14 医学人口学原 conversation `6acf6db0-59b8-83e8-8a59-02155c5cc4ca` 恢复 `title_final_ordinal=25`，追加摘要 final `ordinal=28`，摘要 920 字；记录始终保持 `succeeded`，原 GitHub commit `c1803a34c72ffcbb8b3f9f45fc39c709c0826ffd` 与路径未改变。
+- Canary 邮件已成功投递，Message-ID=`<66JGNn8IIPiCdUWy2m57G7f8fjgRNmeg6ak4@zjhstudio.com>`，attempt_count=0。
+- N1 已部署 backend SHA256=`520ef5775e24b3bae82f14fb0d61511a6ac49af0581d0fae4d6aa547f6b8baa3`，service active+enabled、health=ok。
+- 单条锁已经解除，生产配置现为 `SUMMARY_BACKFILL_ENABLED=true`、`SINCE_DATE=2026-09-01`、`ONLY_LECTURE_KEY=`；全量历史回填按实时 Notes 优先、历史单条串行方式运行。
+- 全量模式首条非 canary 记录（2026-09-07 综合素养课程5《科研素养与科研诚信》）已成功补出 1047 字摘要，证明全量候选切换正常；其余旧记录继续由同一生产 worker 逐条推进。
+
 ## 目标
 - 对本学期已经 `succeeded`、但在第三轮摘要功能上线前生成的历史 Notes 补齐 `summary_markdown`，继续使用每堂课原有的 Archive conversation，不重做完整 Notes 和标题。
 - 历史记录缺少新版 `title_final_ordinal` checkpoint 时，从 canonical messages 中恢复“标题 prompt → 标题 assistant final”的边界，并把恢复出的 ordinal 持久化后再提交摘要。
