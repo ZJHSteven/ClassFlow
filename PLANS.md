@@ -1,3 +1,25 @@
+# 2026-10-15 ClassFlow 历史课堂摘要低速回填 ExecPlan
+
+## 目标
+- 对本学期已经 `succeeded`、但在第三轮摘要功能上线前生成的历史 Notes 补齐 `summary_markdown`，继续使用每堂课原有的 Archive conversation，不重做完整 Notes 和标题。
+- 历史记录缺少新版 `title_final_ordinal` checkpoint 时，从 canonical messages 中恢复“标题 prompt → 标题 assistant final”的边界，并把恢复出的 ordinal 持久化后再提交摘要。
+- 回填链路保持低速、严格串行：同一时刻只允许 1 条历史记录处于摘要回填中，Archive durable submission queue 继续负责真正的 POST 节流、429 cooldown 与幂等去重。
+- 历史回填成功后保持原 Notes `succeeded` 状态，不重新进入 GitHub publishing，也不改写既有 Notes 文件；摘要邮件仍走现有独立 email worker。
+
+## 验收策略
+1. 先盘点生产库历史缺口，当前基线应记录 succeeded 总数、缺摘要数量和已有邮件数量。
+2. 新增显式单条 canary 入口；先选 1 条真实历史课堂，只追加摘要 turn。
+3. Canary 必须验证：原 conversation 未变、旧 Notes/标题未重生成、摘要长度/内容合格、数据库成功落 `summary_markdown + summary_final_ordinal`、邮件成功发送、GitHub commit/path 不发生重写。
+4. Canary 通过后再开启后台历史回填；每轮最多推进 1 条，并优先继续已有 `summary_requested_at` 的记录，完成后才挑下一条。
+5. 全量回填完成后确认本学期所有 succeeded 记录均有摘要；邮件失败只由邮件 retry 自己恢复，不影响 Notes 成功状态。
+
+## 实现要点
+- Repository 增加历史摘要候选查询、标题 ordinal checkpoint 恢复和“保持 succeeded 的摘要完成”更新方法。
+- Summary stage 区分正常新课与历史 backfill：正常链路摘要完成后进入 publishing；历史链路摘要完成后直接保持 succeeded。
+- 历史链路遇到摘要 submission 的永久错误时不得把原成功 Notes 改成 failed，只记录回填错误并保留可重试状态。
+- 增加配置开关，默认关闭自动历史回填；canary 通过后才在 N1 打开生产开关。
+- 增加针对旧记录缺 `title_final_ordinal`、单条串行、幂等恢复、历史成功状态不回退和邮件投递资格的回归测试。
+
 # 2026-10-15 ClassFlow 第三轮课堂摘要 + 邮件投递 ExecPlan
 
 ## 完成状态
