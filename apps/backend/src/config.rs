@@ -160,6 +160,9 @@ pub struct AppConfig {
     pub summary_email_webhook_url: String,
     pub summary_email_poll_interval_secs: f64,
     pub summary_email_max_attempts: u32,
+    pub summary_backfill_enabled: bool,
+    pub summary_backfill_since_date: String,
+    pub summary_backfill_only_lecture_key: String,
 }
 
 impl AppConfig {
@@ -497,6 +500,18 @@ impl AppConfig {
                 30.0,
             )?,
             summary_email_max_attempts: env_or_parse("CLASSFLOW_SUMMARY_EMAIL_MAX_ATTEMPTS", 8)?,
+            summary_backfill_enabled: env_or_parse(
+                "CLASSFLOW_SUMMARY_BACKFILL_ENABLED",
+                false,
+            )?,
+            summary_backfill_since_date: env_or(
+                "CLASSFLOW_SUMMARY_BACKFILL_SINCE_DATE",
+                "9999-12-31",
+            ),
+            summary_backfill_only_lecture_key: env::var(
+                "CLASSFLOW_SUMMARY_BACKFILL_ONLY_LECTURE_KEY",
+            )
+            .unwrap_or_default(),
         })
     }
 }

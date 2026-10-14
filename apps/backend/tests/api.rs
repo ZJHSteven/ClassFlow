@@ -297,6 +297,9 @@ async fn build_test_state(
         summary_email_webhook_url: String::new(),
         summary_email_poll_interval_secs: 30.0,
         summary_email_max_attempts: 8,
+        summary_backfill_enabled: false,
+        summary_backfill_since_date: "9999-12-31".to_string(),
+        summary_backfill_only_lecture_key: String::new(),
     };
 
     let repo = Repository::connect(&config.db_url)
