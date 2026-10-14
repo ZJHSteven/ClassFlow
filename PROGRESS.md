@@ -1,3 +1,4 @@
+- 2026-10-15 摘要邮件队列已加版本门：backend 只会把 `summary_prompt_version=2` 的 succeeded 摘要交给 Worker，升级窗口内即使数据库里还保留 v1 文本，也不会继续发送旧格式邮件。
 - 2026-10-15 摘要协议已升级为 v2：Archive prompt marker 与 idempotency key 都显式带 v2；提取 summary final 时必须位于当前版本 summary prompt 之后，避免重跑误认旧 v1 摘要。v2 prompt 固定章节顺序为“通知与待办 → 特殊签到与课堂互动 → 本堂讲了什么”，知识正文始终最后。
 - 2026-10-15 摘要 v2 开始版本化：SQLite/模型新增 `summary_prompt_version`，历史候选可按 required version 重新纳入；新增 `prepare_summary_prompt_version`，升级时只清空旧 summary/email checkpoint，保留 Notes/标题/CID/GitHub。邮件候选也将只投递当前摘要版本，避免旧版摘要在升级窗口继续发送。
 - 2026-10-15 全量历史摘要回填继续稳定推进：最新生产快照为 26 条 succeeded 中 3 条摘要完成、3 封邮件成功、1 条摘要 in-flight、0 条 summary_backfill_manual_review；当前正在处理 9/10 综合素养课程5《安宁疗护与临终选择》。监控终端已停止，生产 worker 本身继续按单条串行运行。

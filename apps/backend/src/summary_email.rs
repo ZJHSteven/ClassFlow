@@ -20,6 +20,7 @@ use crate::{
     app::AppState,
     error::{AppError, AppResult},
     models::LectureNotesRecord,
+    notes::SUMMARY_PROMPT_VERSION,
 };
 
 pub fn spawn_summary_email_worker(state: AppState) {
@@ -47,7 +48,11 @@ pub fn spawn_summary_email_worker(state: AppState) {
 pub async fn run_summary_email_cycle(state: &AppState) -> AppResult<()> {
     let jobs = state
         .repo
-        .list_deliverable_summary_emails(10, state.config.summary_email_max_attempts)
+        .list_deliverable_summary_emails(
+            10,
+            state.config.summary_email_max_attempts,
+            SUMMARY_PROMPT_VERSION,
+        )
         .await?;
     if jobs.is_empty() {
         return Ok(());
