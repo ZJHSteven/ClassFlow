@@ -1,5 +1,14 @@
 # 2026-10-15 ClassFlow 第三轮课堂摘要 + 邮件投递 ExecPlan
 
+## 完成状态
+- 已完成：Notes 状态机正式扩为完整 Notes → 标题 → 同 conversation 摘要；摘要使用独立稳定幂等键、canonical prompt 认领、final ordinal checkpoint 与超 2000 字自动压缩重做。
+- 已完成：摘要邮件独立于 Notes/GitHub 主状态，只有 `status=succeeded` 且摘要存在的记录才进入邮件队列；失败按独立 retry checkpoint 退避，不会重新发布 GitHub。
+- 已完成：`classflow-web` 生产 Worker 已部署 Cloudflare Email Service binding 与私有 `/__classflow/email-summary`；N1 真实请求通过正式域名 + Access Service Token 发信成功。
+- 已完成：ARM64 backend SHA256=`1613d18f95e809caf3c06fa6ef19e2b89823ccff6486a5a1ffa67ce02f3dd964` 已部署 N1，服务 active+enabled，SQLite 新列迁移成功，生产配置已启用摘要邮件。
+- 已完成：backend 68/68 unit、11/11 API、fmt、Clippy 全绿；web/Worker 32/32 tests、lint、build、Wrangler dry-run 全绿。
+- 工具链收口：最终构建只使用全局 `D:\\App\\Zig\\zig.exe` 0.15.2 与全局 Rust/Cargo 工具目录；本轮曾临时创建的项目内 Zig 已删除。
+- 验收取舍：没有为了测试向生产 SQLite 人工插入 synthetic lecture；邮件链已有 N1 真实 smoke，第三轮摘要的自然课堂端到端结果留给下一堂真实 Notes 自动触发时观察，不再为此改写历史成功记录。
+
 ## 目标
 - 把现有 ChatGPT Project 流程从“完整 Notes -> 同 conversation 标题”延长为“完整 Notes -> 标题 -> 同 conversation 摘要”，不新建 conversation。
 - 摘要面向课后快速查看：目标约 500～1000 个汉字，硬上限 2000 个汉字；知识内容高度压缩，但考试/小测/作业/课程安排等通知，以及临时点名、课堂提问、额外签到/缺勤排查等特殊考勤信息必须保留关键细节。
