@@ -2453,6 +2453,62 @@ mod tests {
     }
 
     #[test]
+    fn summary_v2_prompt_should_put_notifications_before_knowledge_body() {
+        let prompt = build_summary_prompt(None);
+        assert!(prompt.starts_with(SUMMARY_PROMPT_PREFIX));
+        let notice = prompt.find("## 通知与待办").expect("应包含通知标题");
+        let attendance = prompt
+            .find("## 特殊签到与课堂互动")
+            .expect("应包含特殊考勤标题");
+        let knowledge = prompt.find("## 本堂讲了什么").expect("应包含知识正文标题");
+        assert!(notice < attendance);
+        assert!(attendance < knowledge);
+        assert!(prompt.contains("这一节必须存在且必须是最后一节"));
+    }
+
+    #[test]
+    fn summary_v2_should_ignore_v1_prompt_when_recovering_canonical_turn() {
+        let messages = vec![
+            json!({
+                "ordinal": 25,
+                "role": "assistant",
+                "channel": "final",
+                "text": "生育水平与影响因素",
+                "endTurn": true
+            }),
+            json!({
+                "ordinal": 26,
+                "role": "user",
+                "text": "请基于你刚刚生成的整堂课堂笔记，再给出一份用于课后邮件快速查看的中文摘要。"
+            }),
+            json!({
+                "ordinal": 28,
+                "role": "assistant",
+                "channel": "final",
+                "text": "旧版摘要",
+                "endTurn": true
+            }),
+            json!({
+                "ordinal": 29,
+                "role": "user",
+                "text": build_summary_prompt(None)
+            }),
+            json!({
+                "ordinal": 31,
+                "role": "assistant",
+                "channel": "final",
+                "text": "新版摘要",
+                "endTurn": true
+            }),
+        ];
+
+        assert_eq!(
+            find_existing_summary_prompt_ordinal(&messages, 25),
+            Some(29)
+        );
+    }
+
+    #[test]
     fn title_prompt_should_prefer_short_distinct_names() {
         let prompt = build_title_prompt(&["肾功能不全".to_string()], None);
         assert!(prompt.contains("优先 4～9 个汉字"));
