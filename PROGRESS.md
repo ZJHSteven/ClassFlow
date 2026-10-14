@@ -1,3 +1,4 @@
+- 2026-10-15 历史摘要 backfill 本地门禁通过：backend unit 70/70、API integration 11/11、cargo fmt --check PASS、Clippy --all-targets -D warnings PASS。下一步进入 ARM64 构建与 N1 单条 canary 部署。
 - 2026-10-15 历史摘要 backfill 实现已通过 focused tests：notes 15/15、repository 14/14；rustfmt 仅报告格式差异，现已统一格式化。
 - 2026-10-15 Repository 回归测试覆盖历史摘要关键不变量：补 title ordinal、标记 summary requested、写 summary final 后，记录仍必须是 succeeded，原 github_commit_sha/github_notes_path 保持不变，并从 backfill 候选中消失。
 - 2026-10-15 旧记录 title_final_ordinal 恢复规则已实现并加单元测试：只接受“最新标题 prompt 之后”的 assistant final，且 normalize 后必须与数据库中已经发布的 notes_title 完全一致，避免把其他 assistant 输出误认成标题边界。
