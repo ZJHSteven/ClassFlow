@@ -137,4 +137,3 @@ async fn deliver_summary_email(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned))
 }
-

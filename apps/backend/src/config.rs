@@ -496,10 +496,7 @@ impl AppConfig {
                 "CLASSFLOW_SUMMARY_EMAIL_POLL_INTERVAL_SECS",
                 30.0,
             )?,
-            summary_email_max_attempts: env_or_parse(
-                "CLASSFLOW_SUMMARY_EMAIL_MAX_ATTEMPTS",
-                8,
-            )?,
+            summary_email_max_attempts: env_or_parse("CLASSFLOW_SUMMARY_EMAIL_MAX_ATTEMPTS", 8)?,
         })
     }
 }
