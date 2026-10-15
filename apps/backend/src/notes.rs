@@ -2062,11 +2062,27 @@ fn recover_historical_title_final_ordinal(
     expected_title: &str,
 ) -> Option<i64> {
     let title_prompt_ordinal = find_existing_title_prompt_ordinal(messages, notes_final_ordinal)?;
+    // 历史记录可能曾因为旧版重试逻辑而留下多个 title prompt。
+    // 数据库里的 notes_title 可能来自较早一次成功响应，而 canonical conversation
+    // 最后又出现了一次标题重试。回填摘要真正需要的是“标题阶段已经结束”的安全边界，
+    // 因此优先锁定最新 title prompt 后、下一个 user turn 之前的 assistant final。
+    // 如果内容仍等于已发布标题当然最好；若标题文本不同但仍是一个合法短标题，也可以
+    // 只使用其 ordinal 作为边界，绝不改写数据库里已经发布的 notes_title。
+    let next_user_ordinal = messages
+        .iter()
+        .filter_map(|message| {
+            let ordinal = message.get("ordinal").and_then(Value::as_i64)?;
+            (ordinal > title_prompt_ordinal
+                && message.get("role").and_then(Value::as_str) == Some("user"))
+            .then_some(ordinal)
+        })
+        .min();
     messages
         .iter()
         .filter_map(|message| {
             let ordinal = message.get("ordinal").and_then(Value::as_i64)?;
             if ordinal <= title_prompt_ordinal
+                || next_user_ordinal.is_some_and(|next| ordinal >= next)
                 || message.get("role").and_then(Value::as_str) != Some("assistant")
                 || message
                     .get("text")
@@ -2094,9 +2110,12 @@ fn recover_historical_title_final_ordinal(
                     .and_then(Value::as_str)
                     .unwrap_or_default(),
             );
-            (recovered.trim() == expected_title.trim()).then_some(ordinal)
+            let matches_published = recovered.trim() == expected_title.trim();
+            let valid_boundary_title =
+                title_rejection_reason(&recovered, &[]).is_none();
+            (matches_published || valid_boundary_title).then_some(ordinal)
         })
-        .max()
+        .min()
 }
 
 fn find_existing_summary_prompt_ordinal(
