@@ -16,6 +16,12 @@
 - 重新构建 ARM64 并部署 N1；随后清理医学统计学旧的 manual_review checkpoint，让它按新算法自己恢复并继续 v2 摘要。
 - 确认队列跨过医学统计学并继续后续课程，再更新最终进度。
 
+## 生产结果
+- 已部署 N1 backend SHA256=`0cc6fa51773c81184869484c7bd4df5c2e2d2172db868eb181d5f4c42da6ce51`，active+enabled、health=ok。
+- 旧 manual_review 已解除；流行病学已完成并发信，医学统计学已恢复 title_final_ordinal=32 并进入 v2 summary queue。
+- 最新快照：7/26 v2 摘要、7/26 v2 邮件、1 in-flight、0 manual_review。
+- Gmail 侧当前 11 封摘要邮件折叠为 7 个 thread，证明 UI 合并是“看起来少”的次要因素；真正的主因是之前回填队列被 manual_review 记录卡死。
+
 # 2026-10-15 ClassFlow 摘要 v2 · 通知优先 + 邮件 Markdown 渲染 ExecPlan
 
 ## 当前生产状态
