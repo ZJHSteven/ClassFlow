@@ -1577,8 +1577,11 @@ impl Repository {
                 OR trim(summary_markdown) = ''
               )
               AND NOT (
-                COALESCE(summary_prompt_version, 0) = ?
-                AND COALESCE(recovery_kind, '') = 'summary_backfill_manual_review'
+                COALESCE(recovery_kind, '') = 'summary_backfill_manual_review'
+                AND (
+                  summary_prompt_version IS NULL
+                  OR summary_prompt_version >= ?
+                )
               )
               AND (? = '' OR lecture_key = ?)
             ORDER BY
@@ -1843,11 +1846,13 @@ impl Repository {
     pub async fn mark_historical_summary_backfill_failed(
         &self,
         lecture_key: &str,
+        summary_prompt_version: i64,
         error: &str,
     ) -> AppResult<()> {
         sqlx::query(
-            "UPDATE lecture_notes SET last_error=?, recovery_kind='summary_backfill_manual_review', updated_at=? WHERE lecture_key=? AND status='succeeded'",
+            "UPDATE lecture_notes SET summary_prompt_version=?, last_error=?, recovery_kind='summary_backfill_manual_review', updated_at=? WHERE lecture_key=? AND status='succeeded'",
         )
+        .bind(summary_prompt_version)
         .bind(error)
         .bind(Utc::now().to_rfc3339())
         .bind(lecture_key)

@@ -246,6 +246,7 @@ async fn process_historical_summary_backfill(state: &AppState) -> AppResult<()> 
                 .repo
                 .mark_historical_summary_backfill_failed(
                     &job.lecture_key,
+                    SUMMARY_PROMPT_VERSION,
                     "历史摘要回填缺少 notes_final_ordinal，无法安全定位标题边界",
                 )
                 .await?;
@@ -260,6 +261,7 @@ async fn process_historical_summary_backfill(state: &AppState) -> AppResult<()> 
                 .repo
                 .mark_historical_summary_backfill_failed(
                     &job.lecture_key,
+                    SUMMARY_PROMPT_VERSION,
                     "历史摘要回填缺少已发布标题，无法安全恢复标题 final",
                 )
                 .await?;
@@ -310,6 +312,7 @@ async fn process_historical_summary_backfill(state: &AppState) -> AppResult<()> 
                 .repo
                 .mark_historical_summary_backfill_failed(
                     &job.lecture_key,
+                    SUMMARY_PROMPT_VERSION,
                     "历史摘要回填未能从 canonical messages 恢复已发布标题 final",
                 )
                 .await?;
@@ -1617,7 +1620,11 @@ async fn mark_summary_stage_failure(
         SummaryStageMode::HistoricalBackfill => {
             state
                 .repo
-                .mark_historical_summary_backfill_failed(&job.lecture_key, error)
+                .mark_historical_summary_backfill_failed(
+                    &job.lecture_key,
+                    SUMMARY_PROMPT_VERSION,
+                    error,
+                )
                 .await
         }
     }
