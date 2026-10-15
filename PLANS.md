@@ -1,3 +1,21 @@
+# 2026-10-15 ClassFlow 摘要 v2 回填卡死修复
+
+## 现象与根因
+- 2026-10-15 13:33 对账时，26 条 succeeded 仅 6 条完成 v2 摘要/邮件，0 条 in-flight，1 条 manual_review；并非只是 Gmail 线程折叠。
+- 卡点是 9/15 医学统计学：恢复历史标题 final 失败后形成 `summary_prompt_version=NULL + summary_backfill_manual_review`。旧候选 SQL 只排除 `version=2 + manual_review`，所以该条每轮被重新选中，永久挡住后续候选。
+- 该 conversation 还存在两次 title prompt：已发布标题来自第一次，最新标题响应不同。旧恢复逻辑要求“最新 prompt 后的标题必须等于已发布标题”，因此必然失败。
+
+## 修复
+- manual_review 过滤改为：版本为空或属于当前/更新版本时跳过；只有明确属于旧摘要版本的 manual_review 才在协议升级时重新入选。
+- 标记历史摘要永久失败时同步写入当前 `summary_prompt_version`。
+- 历史标题恢复改为使用最新 title prompt 后、下一个 user turn 前的 assistant final ordinal 作为边界；只使用 ordinal，不覆盖已发布标题。
+- 增加“manual_review 不阻塞后续候选”和“重复 title prompt 恢复最新边界”回归测试。
+
+## 验收与生产动作
+- 本地门禁：backend 74/74 unit、11/11 API、fmt、Clippy 全绿。
+- 重新构建 ARM64 并部署 N1；随后清理医学统计学旧的 manual_review checkpoint，让它按新算法自己恢复并继续 v2 摘要。
+- 确认队列跨过医学统计学并继续后续课程，再更新最终进度。
+
 # 2026-10-15 ClassFlow 摘要 v2 · 通知优先 + 邮件 Markdown 渲染 ExecPlan
 
 ## 当前生产状态
