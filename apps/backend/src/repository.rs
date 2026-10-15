@@ -2702,6 +2702,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn historical_summary_manual_review_should_not_block_later_candidates() {
+        let repo = repo().await;
+        let now = Utc::now().to_rfc3339();
+        for (lecture_key, date, course_name) in [
+            ("blocked-summary", "2026-09-15", "医学统计学"),
+            ("next-summary", "2026-09-15", "流行病学"),
+        ] {
+            sqlx::query(
+                r#"
+                INSERT INTO lecture_notes(
+                    lecture_key, course_key, semester, course_name, teacher_name, date,
+                    start_time, end_time, sequence_no, status, transcript_sha256,
+                    conversation_id, notes_title, notes_markdown, notes_final_ordinal,
+                    created_at, updated_at
+                ) VALUES(?, ?, '2026-2027-1', ?, '老师', ?, '13:30', '15:10', 1,
+                    'succeeded', 'hash', ?, '标题', '# notes', 20, ?, ?)
+                "#,
+            )
+            .bind(lecture_key)
+            .bind(format!("course-{lecture_key}"))
+            .bind(course_name)
+            .bind(date)
+            .bind(format!("cid-{lecture_key}"))
+            .bind(&now)
+            .bind(&now)
+            .execute(&repo.pool)
+            .await
+            .expect("应能写入历史摘要候选");
+        }
+
+        repo.mark_historical_summary_backfill_failed("blocked-summary", 2, "模拟当前版本永久失败")
+            .await
+            .expect("应能标记当前版本人工复核");
+
+        let blocked = repo
+            .get_lecture_notes("blocked-summary")
+            .await
+            .expect("应能读取 blocked 记录")
+            .expect("blocked 记录应存在");
+        assert_eq!(blocked.summary_prompt_version, Some(2));
+        assert_eq!(
+            blocked.recovery_kind.as_deref(),
+            Some("summary_backfill_manual_review")
+        );
+
+        let candidate = repo
+            .get_historical_summary_backfill_candidate("2026-09-01", "", 2)
+            .await
+            .expect("候选查询应成功")
+            .expect("后续候选不应被人工复核记录阻塞");
+        assert_eq!(candidate.lecture_key, "next-summary");
+    }
+
+    #[tokio::test]
     async fn should_retry_failed_task() {
         let repo = repo().await;
         let response = repo

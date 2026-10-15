@@ -2111,8 +2111,7 @@ fn recover_historical_title_final_ordinal(
                     .unwrap_or_default(),
             );
             let matches_published = recovered.trim() == expected_title.trim();
-            let valid_boundary_title =
-                title_rejection_reason(&recovered, &[]).is_none();
+            let valid_boundary_title = title_rejection_reason(&recovered, &[]).is_none();
             (matches_published || valid_boundary_title).then_some(ordinal)
         })
         .min()
@@ -2474,7 +2473,62 @@ mod tests {
         );
         assert_eq!(
             recover_historical_title_final_ordinal(&messages, 28, "其他标题"),
-            None
+            Some(31)
+        );
+    }
+
+    #[test]
+    fn should_recover_latest_title_retry_boundary_without_rewriting_published_title() {
+        let messages = vec![
+            json!({
+                "ordinal": 26,
+                "role": "assistant",
+                "channel": "final",
+                "text": "# 完整课堂笔记",
+                "endTurn": true
+            }),
+            json!({
+                "ordinal": 27,
+                "role": "user",
+                "text": format!("{}要求：只输出标题。", TITLE_PROMPT_PREFIX)
+            }),
+            json!({
+                "ordinal": 29,
+                "role": "assistant",
+                "channel": "final",
+                "text": "统计流程与数据分类",
+                "endTurn": true
+            }),
+            json!({
+                "ordinal": 30,
+                "role": "user",
+                "text": format!("{}要求：只输出标题。", TITLE_PROMPT_PREFIX)
+            }),
+            json!({
+                "ordinal": 32,
+                "role": "assistant",
+                "channel": "final",
+                "text": "统计流程与基本概念",
+                "endTurn": true
+            }),
+            json!({
+                "ordinal": 33,
+                "role": "user",
+                "text": "后续别的请求"
+            }),
+            json!({
+                "ordinal": 35,
+                "role": "assistant",
+                "channel": "final",
+                "text": "这不是标题",
+                "endTurn": true
+            }),
+        ];
+
+        // 数据库仍保留较早已发布标题，但摘要边界应使用最新标题重试的 final。
+        assert_eq!(
+            recover_historical_title_final_ordinal(&messages, 26, "统计流程与数据分类"),
+            Some(32)
         );
     }
 
