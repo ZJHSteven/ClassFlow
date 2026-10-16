@@ -1,3 +1,10 @@
+# 2026-10-16 CJK-friendly Markdown 解析修复
+- ClassFlow 邮件 renderer 已从原生 `markdown-it 14.3.2` 接入 `markdown-it-cjk-friendly 3.0.0`，不修改模型生成的 Markdown 源文、不插入中文可见空格；插件仅替换 inline delimiter 扫描规则，因此直接修复 CJK emphasis/strong，并同步修复 markdown-it 删除线在相同 CJK 边界下的识别。
+- 兼容性实测：使用 ClassFlow 当前依赖版本对 CommonMark 0.31.2 全部 652 个标准案例双跑，原版 markdown-it 与 CJK-friendly 输出差异为 0；今天真实故障“**利尿药（diuretics）**和**子宫平滑肌兴奋药（uterine stimulants）**”由错误的“裸 ** + 仅和加粗”恢复为两个正确 strong。中文句号/逗号/引号、日文、韩文均正常；英文 strong/emphasis、嵌套 emphasis、链接、代码保持一致。
+- ClassFlow web/Worker 回归已扩至 33/33 tests，全量 lint、production build、Wrangler dry-run 全绿。生产 Worker 已部署 Version=`f650b9f1-44c0-4eda-bff3-c2f95f403392`。
+- 已从 N1 携正式 Cloudflare Access Service Token + backend bearer 调用生产邮件端点，HTTP 200、Message-ID=`<7WMqsG4GC2VmppE4gPXm39k4eAHz9EsymjJs@zjhstudio.com>`；Gmail raw MIME 解码后确认 CJK strong、句号闭合、CJK strikethrough、英文嵌套 emphasis 四项全部为预期 HTML。
+- 下一步审计 Family AI 与 Workspace 其他 Markdown renderer；只对真实渲染入口接入对应 CJK-friendly 实现，并逐项目保留原有测试/构建门禁。
+
 - 2026-10-15 13:46 摘要回填卡死修复已部署生产：N1 backend SHA256=`0cc6fa51773c81184869484c7bd4df5c2e2d2172db868eb181d5f4c42da6ce51`，service active+enabled、health=ok。部署后队列立即跨过旧 manual_review，9/15 流行病学《绪论与研究方法》已完成 1090 字 v2 摘要并成功发信；9/15 医学统计学《统计流程与数据分类》按新算法恢复出 title_final_ordinal=32，已进入 v2 summary submission queue。最新数据库快照：7/26 v2 摘要完成、7/26 v2 邮件成功、1 条 in-flight、0 manual_review。
 - 2026-10-15 Gmail 对账确认线程折叠同时存在：当前 ClassFlow 摘要邮件实际有 11 封（不含 smoke test），Gmail 仅显示为 7 个 thread。综合素养课程5 的科研素养/健康行为/安宁疗护各自 v1+v2 两封被折叠进同一 thread；医学人口学 v1+v2 两封也在同一 thread；实验诊断学、思政、流行病学各为单封独立 thread。因此“看见的条目数”确实少于实际邮件数，但此前生产本身也确实只跑到 6/26，并非纯 UI 问题。
 - 2026-10-15 13:35 历史摘要 v2 回填停在 6/26 的根因已定位并修复：9/15 医学统计学在恢复旧标题 final 时进入 summary_backfill_manual_review，但当时 summary_prompt_version 尚为空；旧候选 SQL 只排除 version=2 的 manual_review，导致该条每轮重新成为最早候选并阻塞后续 20 条。现在 NULL/当前版本 manual_review 都会跳过，永久失败同时写入当前摘要版本；未来协议升级时仍允许明确属于旧版本的 manual_review 重试。
