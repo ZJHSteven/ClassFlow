@@ -1,3 +1,21 @@
+# 2026-10-16 CJK-friendly Markdown 解析器推广 ExecPlan
+
+## 目标
+- 修复 CommonMark 在中文/日文/韩文无空格文本中的 emphasis/strong 边界问题，同时尽量保持普通 Markdown 与现有 ClassFlow 行为不变。
+- 第一阶段先在 ClassFlow 邮件 Markdown renderer 上引入 `markdown-it-cjk-friendly`，不修改模型输出、不向中文源文插入空格。
+- 通过后再审计 Family AI 及 Workspace 其他 Markdown renderer，按各自生态选择同一项目族提供的 `markdown-it-cjk-friendly` / `remark-cjk-friendly` / `marked-cjk-friendly` 等实现。
+
+## 兼容性门禁
+- 先记录 ClassFlow 现状基线测试，再接入插件。
+- CJK 回归必须覆盖：中文全角括号/引号/句号/逗号后紧接汉字、今天真实的“**利尿药（diuretics）**和**子宫平滑肌兴奋药（uterine stimulants）**”。
+- 普通 Markdown 回归必须覆盖：英文 strong/emphasis、strong+emphasis 嵌套、链接、代码 span、列表、标题、引用、转义、下划线 emphasis、原始 HTML 禁用、图片禁用。
+- 现有 web/Worker tests、lint、production build、Wrangler dry-run 必须全部通过；若插件导致非 CJK 文档输出漂移，则停止推广并回退。
+
+## 推广原则
+- 不通过正则或可见空格污染 Markdown 源文。
+- 不自行分叉 CommonMark 规则，优先复用 `markdown-cjk-friendly` 项目的成熟实现。
+- 每个项目只在其 Markdown 渲染入口接入；不改数据库中的原始 Markdown，便于未来替换 renderer。
+
 # 2026-10-15 ClassFlow 摘要 v2 回填卡死修复
 
 ## 现象与根因
