@@ -199,6 +199,66 @@ describe('worker proxy', () => {
     expect(await response.json()).toEqual({ ok: true, message_id: 'mail-demo-1' })
   })
 
+  it('应该按 CJK 书写习惯解析紧邻中文标点的强调与删除线，同时保持普通 Markdown 正常', async () => {
+    const email = new MemoryEmailBinding()
+    const env: WorkerEnv = {
+      ...defaultEnv,
+      SUMMARY_EMAIL: email,
+      SUMMARY_EMAIL_TO: 'verified@example.com',
+    }
+    const response = await handleWorkerRequest(
+      new Request('https://worker.example.com/__classflow/email-summary', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer secret-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          lecture_key: 'lecture-cjk-markdown',
+          course_name: '泌尿生殖系统',
+          teacher_name: '任老师',
+          date: '2026-10-16',
+          start_time: '08:00',
+          end_time: '09:40',
+          title: '利尿药与子宫兴奋药',
+          summary: [
+            '本堂主要围绕**利尿药（diuretics）**和**子宫平滑肌兴奋药（uterine stimulants）**展开。',
+            '这是**非常重要的一句话。**然后继续说。',
+            '这是**「关键内容」**需要掌握。',
+            '中文~~删除。~~继续。',
+            'ordinary **English bold** text；**bold *nested italic* bold**。',
+            '[**bold link**](https://example.com)；`**not bold**`。',
+          ].join('\n\n'),
+        }),
+      }),
+      env,
+    )
+
+    expect(response.status).toBe(200)
+    expect(email.sent).toHaveLength(1)
+    const html = email.sent[0]?.html ?? ''
+
+    // 真实故障：原 CommonMark 会留下两端 **，并只把“和”加粗。
+    expect(html).toContain(
+      '<strong>利尿药（diuretics）</strong>和<strong>子宫平滑肌兴奋药（uterine stimulants）</strong>展开。',
+    )
+    expect(html).not.toContain('**利尿药')
+    expect(html).not.toContain('<strong>和</strong>')
+
+    // 中文全角句号/引号紧邻后文时仍应正常闭合。
+    expect(html).toContain('<strong>非常重要的一句话。</strong>然后继续说。')
+    expect(html).toContain('<strong>「关键内容」</strong>需要掌握。')
+
+    // markdown-it 的删除线同样使用 delimiter 扫描，CJK-friendly 应同步修正。
+    expect(html).toContain('中文<s>删除。</s>继续。')
+
+    // 非 CJK 常规 Markdown 行为不能被破坏。
+    expect(html).toContain('ordinary <strong>English bold</strong> text')
+    expect(html).toContain('<strong>bold <em>nested italic</em> bold</strong>')
+    expect(html).toContain('<a href="https://example.com"><strong>bold link</strong></a>')
+    expect(html).toContain('<code>**not bold**</code>')
+  })
+
   it('应该拒绝未授权或字段不完整的课堂摘要邮件请求', async () => {
     const email = new MemoryEmailBinding()
     const env: WorkerEnv = {

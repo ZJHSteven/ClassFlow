@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import markdownItCjkFriendly from 'markdown-it-cjk-friendly'
 
 /**
  * Worker 代理的核心逻辑。
@@ -162,7 +163,14 @@ const summaryMarkdownRenderer = new MarkdownIt({
   linkify: false,
   typographer: false,
   breaks: false,
-}).disable(['image'])
+})
+  // CommonMark 的原生 emphasis 边界规则以西文空格习惯为主。例如
+  // “**中文（English）**和**下一项**”中，右括号后的 ** 可能无法闭合，
+  // 最终会把中间的“和”错误配成粗体。CJK-friendly 插件只替换
+  // markdown-it 的 delimiter 扫描规则，让中日韩无空格文本按正常书写习惯
+  // 识别 emphasis/strong/strikethrough；源 Markdown 本身保持原样。
+  .use(markdownItCjkFriendly)
+  .disable(['image'])
 
 function renderSummaryMarkdown(value: string): string {
   return summaryMarkdownRenderer.render(value.trim())
