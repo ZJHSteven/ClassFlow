@@ -87,7 +87,7 @@ export function PushOnboarding() {
           ) : (
             <p>
               只推送<strong>流水线真正失败</strong>和<strong>整堂课堂笔记完成</strong>，
-              不再用每个内部阶段刷屏。
+              不再用每个内部阶段刷屏。开启后会立即收到一条测试通知，用来确认 iOS 链路已经接通。
             </p>
           )}
           {error ? <p className="pushOnboarding__error">{error}</p> : null}

@@ -148,6 +148,21 @@ export async function enablePush(config: PushPublicConfig): Promise<PushSubscrip
       },
     }),
   }))
+
+  // 首次启用后立即做一条端到端测试 Push。测试失败不能撤销已经成功建立的订阅：
+  // 后续真实课堂事件仍会继续使用同一 endpoint，且服务端 outbox 自己有独立重试。
+  // 这样用户不需要再回到设置页找“测试通知”按钮，也不用另开一轮人工验收。
+  try {
+    await readJson(await fetch('/api/push/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: serialized.endpoint }),
+    }))
+  }
+  catch (error) {
+    console.warn('ClassFlow Web Push 已订阅，但首次测试通知发送失败', error)
+  }
+
   return subscription
 }
 
