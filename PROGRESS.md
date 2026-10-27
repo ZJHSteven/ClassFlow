@@ -15,7 +15,14 @@
 
 ## 当前剩余
 
-- N1 尚需按安全顺序上线：备份 SQLite -> 把当前历史 pending stage_events 全部标为 suppressed -> 部署新 backend -> 配置并启用 stage-event webhook -> 做一条新事件生产 smoke。
+- N1 通知链已于 2026-10-27 14:28 完成生产切换：
+  - 切换前停服务并备份 SQLite / backend.env / 旧 binary 到 `/home/zjhsteven/ClassFlow/deploy-backups/notify-20261027-142825`；
+  - 6906 条历史 `pending` 全部一次性改为 `suppressed`，用户明确要求不补发；重启时新产生的低信号内部事件同样按新策略自动 suppressed，当前没有历史通知洪水风险；
+  - 新 ARM64 backend SHA256=`78435a76c285c99f52f0248e8a09571b79293c9e022bfc9c556825b446832a98`，N1 health=ok，service active+enabled；
+  - 生产 env 已启用 `CLASSFLOW_NOTIFICATIONS_ENABLED=true`，webhook=`https://classflow.zjhstudio.com/__classflow/stage-event`，SmartClass 扫描仍保持 600 秒。
+- N1 -> Cloudflare Worker 私有 stage-event webhook 真实 smoke 已通过：Bearer + Access 双鉴权返回 `accepted=true`；当前 `subscriptions=0`，因为 iPhone 尚未完成主屏幕 Web App 的一次性 PushSubscription 注册。
+- 生产 PWA 静态资源 smoke 通过：`/manifest.webmanifest`=200 application/manifest+json、`/sw.js`=200、`/apple-touch-icon.png`=200 image/png、`/api/push/config`=200 且 VAPID configured=true。
+- npm production audit 当前 0 vulnerabilities。
 - 当前 SmartClass 仍按用户决定保留 600 秒扫描；课表事件驱动/独立 heartbeat 暂不实施，转后续 To-do。
 - 10/19 与 9/8 源录像缺失不再阻塞主线，转为独立源数据恢复 To-do。
 
