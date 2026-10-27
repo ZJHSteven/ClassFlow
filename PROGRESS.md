@@ -1,3 +1,24 @@
+# 2026-10-27 iOS Web Push / PWA / Gateway 守护收口
+
+- ClassFlow 阶段通知架构已经从“预留 HTTP webhook、生产关闭”推进到实际 iOS Web Push：backend 仍以 SQLite stage_events 为 durable outbox，Cloudflare Worker 新增 `/__classflow/stage-event` 私有 webhook，再由 Worker 使用标准 Web Push 投递给 ClassFlow Home Screen Web App。
+- 手机通知策略已从“全阶段全部通知”收紧为高信号事件：任意 terminal `failed` 与整堂 `notes/succeeded` 才进入 pending；discovered/started/单段 succeeded 等仍完整写入 stage_events，但直接标记 `suppressed`，只用于审计，不再刷手机。
+- backend webhook 现在默认复用 `CLASSFLOW_BEARER_TOKEN`，并复用现有 Cloudflare Access Service Token 头；不要求 N1 额外维护第二枚等价 notification token。
+- Worker 使用现有 ARTIFACTS R2 的 `_system/web-push/subscriptions.v1.json` 保存少量浏览器订阅；VAPID private/public 已通过本地一次性脚本直接写入 Cloudflare Worker secret，不落盘、不进 Git。
+- 前端已补齐真正的 PWA 壳：`manifest.webmanifest`、root Service Worker、standalone metadata、apple-touch-icon，以及 ClassFlow 专属“课堂双页 + 流动曲线 + 落点”深青色图标。iOS Safari 普通标签页只做“添加到主屏幕”引导；standalone 且未订阅时才弹“开启通知”，系统权限请求严格发生在按钮点击里；成功订阅后不再常驻铃铛按钮。
+- iOS 平台边界已明确：页面只能可靠判断“当前是否以 standalone 运行”，不能读取系统里是否另有一个同站点主屏幕副本，因此 Safari 端无法完美实现“装过之后永远不提示、删除后自动恢复提示”。当前采用 session 级 dismiss；主屏幕 App 本身可可靠识别并进入通知流程。
+- 前端门禁通过：ESLint PASS、36/36 Vitest PASS、Vite/TypeScript production build PASS。新增 3 项 Web Push 测试覆盖 Notes 成功、task 失败回跳和 Worker 第二道低信号过滤。
+- Cloudflare Worker dry-run 最初暴露 `web-push` 对 Node built-ins 的依赖；已显式添加 `nodejs_compat`，随后 dry-run PASS。生产 Worker 已部署，Version ID=`36ebfb40-8d14-47fd-af25-851393d78419`。
+- 生产依赖审计顺带发现 markdown-it 14.3.2 有当前 DoS 公告，已升级到 14.3.3；生产依赖该项已消除，完整前端测试继续通过。
+- backend 门禁通过：cargo fmt --check PASS、75/75 unit PASS、11/11 API integration PASS、Clippy all-targets/all-features -D warnings PASS。
+- CapsWriterGateway 第二次掉线已拿到直接证据：2026-10-24 22:21:50 Scheduled Task action 返回十进制 3221225786（0xC000013A），属于控制台/会话终止类退出；同分钟前有 Winlogon Terminal Services 会话通知，DevSpace 审计与 PowerShell history 未发现针对 Gateway 的 Stop-ScheduledTask / Stop-Process / taskkill。现有任务使用 InteractiveToken，LogonTrigger 与旧实例退出存在竞态，RestartOnFailure 未覆盖该场景。
+- CapsWriterGateway 已新增独立 `CapsWriterGatewayWatchdog`，每 2 分钟以 6017 真正可连接为事实源；真实 smoke 已强杀无活跃连接的 6017 进程，端口确实消失后 watchdog 自动重新启动 Gateway，6017 恢复监听且 watchdog LastTaskResult=0。第一起 10/20 事故则属于 10/16 重启后当时尚无可靠 Gateway 自启任务，和本次会话终止不是同一根因。
+
+## 当前剩余
+
+- N1 尚需按安全顺序上线：备份 SQLite -> 把当前历史 pending stage_events 全部标为 suppressed -> 部署新 backend -> 配置并启用 stage-event webhook -> 做一条新事件生产 smoke。
+- 当前 SmartClass 仍按用户决定保留 600 秒扫描；课表事件驱动/独立 heartbeat 暂不实施，转后续 To-do。
+- 10/19 与 9/8 源录像缺失不再阻塞主线，转为独立源数据恢复 To-do。
+
 # 2026-10-16 CJK-friendly Markdown 解析修复
 - ClassFlow 邮件 renderer 已从原生 `markdown-it 14.3.2` 接入 `markdown-it-cjk-friendly 3.0.0`，不修改模型生成的 Markdown 源文、不插入中文可见空格；插件仅替换 inline delimiter 扫描规则，因此直接修复 CJK emphasis/strong，并同步修复 markdown-it 删除线在相同 CJK 边界下的识别。
 - 兼容性实测：使用 ClassFlow 当前依赖版本对 CommonMark 0.31.2 全部 652 个标准案例双跑，原版 markdown-it 与 CJK-friendly 输出差异为 0；今天真实故障“**利尿药（diuretics）**和**子宫平滑肌兴奋药（uterine stimulants）**”由错误的“裸 ** + 仅和加粗”恢复为两个正确 strong。中文句号/逗号/引号、日文、韩文均正常；英文 strong/emphasis、嵌套 emphasis、链接、代码保持一致。
