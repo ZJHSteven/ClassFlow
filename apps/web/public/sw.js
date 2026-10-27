@@ -29,8 +29,8 @@ self.addEventListener('push', (event) => {
       tag: notification && typeof notification.tag === 'string'
         ? notification.tag
         : undefined,
-      icon: '/app-icon-192.png',
-      badge: '/app-icon-192.png',
+      icon: '/app-icon-192.png?v=3',
+      badge: '/app-icon-192.png?v=3',
       data: { navigate },
     }),
   ]
