@@ -23,6 +23,7 @@
 - N1 -> Cloudflare Worker 私有 stage-event webhook 真实 smoke 已通过：Bearer + Access 双鉴权返回 `accepted=true`；当前 `subscriptions=0`，因为 iPhone 尚未完成主屏幕 Web App 的一次性 PushSubscription 注册。
 - 服务端完整 outbox E2E 也已通过：向生产 stage_events 写入唯一测试事件 `ops:e2e:20261027` 后，不做人工 HTTP 调用，等待 notification worker 自己消费；记录最终自动变为 `delivery_status=sent`、`attempt_count=0`、`last_error=NULL`，证明 SQLite outbox -> backend worker -> Access/Bearer -> Worker dispatcher 全链正常。
 - 生产 PWA 静态资源 smoke 通过：`/manifest.webmanifest`=200 application/manifest+json、`/sw.js`=200、`/apple-touch-icon.png`=200 image/png、`/api/push/config`=200 且 VAPID configured=true。
+- 2026-10-27 14:36 进一步收掉最后一个人工验收步骤：iOS standalone App 首次点击“开启通知”后，浏览器成功登记 PushSubscription 会立即自动调用 `/api/push/test` 发一条测试通知；测试失败不会撤销已建立订阅，只写 console warning，后续真实 outbox 仍可正常重试。这样用户不需要再回到控制台找测试按钮，也不需要另开一轮人工触发。前端 lint + 36/36 tests + production build 再次 PASS，Worker 已重新部署，Version ID=`0bcb225e-2777-4291-a273-ebf18b0b4d47`。
 - npm production audit 当前 0 vulnerabilities。
 - 当前 SmartClass 仍按用户决定保留 600 秒扫描；课表事件驱动/独立 heartbeat 暂不实施，转后续 To-do。
 - 10/19 与 9/8 源录像缺失不再阻塞主线，转为独立源数据恢复 To-do。
