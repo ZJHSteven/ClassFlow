@@ -1,3 +1,45 @@
+# 2026-10-27 ClassFlow iOS Web Push + PWA + Gateway 守护收口 ExecPlan
+
+## 用户决策
+
+- ClassFlow 阶段通知改为：N1 backend 持久化 stage_events -> HTTP webhook -> ClassFlow Cloudflare Worker -> iOS Home Screen Web App Web Push。
+- 不再把每个 started/succeeded 小阶段都推到手机；只保留高信号事件：
+  1. 整堂 Notes 成功；
+  2. task 进入真正 terminal failed；
+  3. Notes terminal failed。
+- 2026-10-27 之前已经积压的历史 stage_events 不补发；保留审计记录，但统一标记 suppressed/历史丢弃。
+- ClassFlow 控制台作为独立 Home Screen Web App：补 manifest、apple-touch-icon、Service Worker、ClassFlow 专属 logo。
+- iOS Safari 标签页自动显示“添加到主屏幕”引导；standalone Web App 若尚未订阅通知，则自动显示一次启用引导。系统通知权限仍由用户点击按钮触发。
+- 暂不做 Phase 2.5 课表事件驱动调度；维持当前 600 秒 SmartClass 扫描，后续单独 To-do。
+- 10/19 与 9/8 源录像缺失转为 To-do，不继续阻塞本轮。
+- 本轮结束后把 ClassFlow main 推送到 origin。
+
+## 实施
+
+1. Backend 通知：
+   - 增加通知事件筛选，只向 webhook 投递高信号事件；
+   - 低信号 stage_events 标记 suppressed，避免 pending 永久堆积；
+   - 提供一次性历史 pending 截止处理。
+2. Worker Web Push：
+   - 新增 push config / subscription / test / stage-event webhook 路由；
+   - 复用现有 R2 binding 保存单用户 Web Push subscriptions，不引入额外 D1；
+   - 用 VAPID 发送标准 Web Push，并在 404/410 时清理失效订阅；
+   - stage-event webhook 继续用 backend Bearer 鉴权。
+3. PWA：
+   - manifest + standalone + theme + apple-touch-icon；
+   - root Service Worker 接收 push、显示 ClassFlow 通知、点击回控制台；
+   - onboarding 不常驻占 UI：浏览器态提示安装；standalone 未订阅时提示开启通知。
+4. Gateway：
+   - 复核两次停止的 Windows 事件与 Task Scheduler 退出码；
+   - 将当前“仅登录触发 + RestartOnFailure”改成真正持续守护，避免用户会话变更杀死后永久 Ready。
+5. 验收：
+   - Rust fmt/test/clippy；
+   - web lint/test/build；
+   - Worker dry-run + 生产部署；
+   - 一条 Web Push 真机 subscription / test smoke（若当前 iOS subscription 尚未注册，则至少验证 API/Service Worker/生产路由）；
+   - N1 stage_events 历史 pending 清理后启用通知 worker；
+   - git push origin main。
+
 # 2026-10-16 CJK-friendly Markdown 解析器推广 ExecPlan
 
 ## 目标
