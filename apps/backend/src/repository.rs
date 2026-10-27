@@ -1021,12 +1021,28 @@ impl Repository {
     /// 一条通知。业务 worker 只负责落盘；真正的 HTTP 推送由 notifications worker 异步完成。
     pub async fn enqueue_stage_event(&self, event: NewStageEvent<'_>) -> AppResult<()> {
         let now = Utc::now().to_rfc3339();
+        // stage_events 同时承担“完整审计流水”和“可外发通知队列”两种职责。
+        //
+        // 过去所有 started/succeeded/discovered 都以 pending 入库，导致生产库在通知开关关闭
+        // 的两周内累计数千条待发送历史事件。一旦重新启用 webhook，就会把这些早已失去时效
+        // 的中间状态全部补发到手机。
+        //
+        // 现在只让真正需要打扰用户的高信号事件进入 pending：
+        // 1. 任意 terminal failed；
+        // 2. 整堂 Notes 最终 succeeded。
+        // 其它事件仍完整保留，但初始即标记 suppressed，只用于后台审计/UI 排障。
+        let delivery_status =
+            if should_notify_stage_event(event.source_kind, event.stage, event.outcome) {
+                "pending"
+            } else {
+                "suppressed"
+            };
         sqlx::query(
             r#"
             INSERT OR IGNORE INTO stage_events(
                 event_key, source_kind, source_id, stage, outcome, title, message,
                 payload_json, delivery_status, created_at, updated_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(event.event_key)
@@ -1037,6 +1053,7 @@ impl Repository {
         .bind(event.title)
         .bind(event.message)
         .bind(event.payload.to_string())
+        .bind(delivery_status)
         .bind(&now)
         .bind(&now)
         .execute(&self.pool)
@@ -1085,6 +1102,22 @@ impl Repository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// 把旧的 pending 通知历史整体静默掉，但不删除审计记录。
+    ///
+    /// 这个方法只用于通知策略上线/迁移这种运维边界。日常新事件是否需要通知由
+    /// should_notify_stage_event 在入库时决定。使用 suppressed 而不是 DELETE，可以保留
+    /// 完整历史，又能确保旧事件永远不会再次进入 webhook 队列。
+    pub async fn suppress_pending_stage_events_before(&self, cutoff: &str) -> AppResult<u64> {
+        let result = sqlx::query(
+            "UPDATE stage_events SET delivery_status='suppressed', last_error='historical notification suppressed', next_attempt_at=NULL, updated_at=? WHERE delivery_status='pending' AND created_at < ?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     /// 记录一次通知投递失败。前几次维持 pending 并指数退避；超过上限后转 failed。
@@ -2126,6 +2159,14 @@ impl Repository {
     }
 }
 
+/// ClassFlow 手机通知只保留高信号结果，避免“每个内部 stage 都 push 一次”造成通知轰炸。
+pub(crate) fn should_notify_stage_event(source_kind: &str, stage: &str, outcome: &str) -> bool {
+    if outcome == "failed" {
+        return true;
+    }
+    source_kind == "notes" && stage == "notes" && outcome == "succeeded"
+}
+
 fn validate_intake_item(item: &crate::models::IntakeItem) -> AppResult<()> {
     for (label, value) in [
         ("new_id", &item.new_id),
@@ -2889,8 +2930,15 @@ mod tests {
 
         let events = repo.list_stage_events(10).await.expect("应能读取 outbox");
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].delivery_status, "pending");
+        assert_eq!(events[0].delivery_status, "suppressed");
         let id = events[0].id;
+
+        // 下面专门验证重试退避，所以把这个测试事件切为 pending。
+        sqlx::query("UPDATE stage_events SET delivery_status='pending' WHERE id=?")
+            .bind(id)
+            .execute(&repo.pool)
+            .await
+            .expect("测试事件应能切回 pending");
 
         repo.mark_stage_event_delivery_failed(id, "第一次失败", 3)
             .await
@@ -2940,13 +2988,30 @@ mod tests {
                 && event.source_id == *task_id
                 && event.outcome == "discovered"
                 && event.stage == "queued"
+                && event.delivery_status == "suppressed"
         }));
         assert!(events.iter().any(|event| {
             event.source_kind == "task"
                 && event.source_id == *task_id
                 && event.outcome == "failed"
                 && event.stage == "downloading"
+                && event.delivery_status == "pending"
         }));
+    }
+
+    #[test]
+    fn stage_event_notification_policy_should_only_keep_high_signal_events() {
+        assert!(!should_notify_stage_event("task", "queued", "discovered"));
+        assert!(!should_notify_stage_event(
+            "task",
+            "transcribing",
+            "succeeded"
+        ));
+        assert!(!should_notify_stage_event("notes", "notes", "started"));
+
+        assert!(should_notify_stage_event("task", "downloading", "failed"));
+        assert!(should_notify_stage_event("notes", "notes", "failed"));
+        assert!(should_notify_stage_event("notes", "notes", "succeeded"));
     }
 
     #[tokio::test]

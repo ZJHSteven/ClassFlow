@@ -85,6 +85,14 @@ async fn deliver_event(
     state: &AppState,
     event: &StageEventRecord,
 ) -> AppResult<()> {
+    let access_client_id = state.config.artifact_proxy_access_client_id.trim();
+    let access_client_secret = state.config.artifact_proxy_access_client_secret.trim();
+    if access_client_id.is_empty() != access_client_secret.is_empty() {
+        return Err(AppError::Config(
+            "通知 webhook 的 Cloudflare Access Service Token 配置不完整".to_string(),
+        ));
+    }
+
     let mut request = client
         .post(state.config.notification_webhook_url.trim())
         .json(&json!({
@@ -99,8 +107,20 @@ async fn deliver_event(
             "created_at": event.created_at,
         }));
 
-    if !state.config.notification_webhook_token.trim().is_empty() {
-        request = request.bearer_auth(state.config.notification_webhook_token.trim());
+    // 默认复用 ClassFlow backend 自己的 Bearer Token，避免 N1 再维护第二枚等价凭据。
+    // 如果历史部署显式设置了 CLASSFLOW_NOTIFICATION_WEBHOOK_TOKEN，则继续尊重该值。
+    let webhook_token = if state.config.notification_webhook_token.trim().is_empty() {
+        state.config.bearer_token.trim()
+    } else {
+        state.config.notification_webhook_token.trim()
+    };
+    if !webhook_token.is_empty() {
+        request = request.bearer_auth(webhook_token);
+    }
+    if !access_client_id.is_empty() {
+        request = request
+            .header("CF-Access-Client-Id", access_client_id)
+            .header("CF-Access-Client-Secret", access_client_secret);
     }
 
     let response = request.send().await?;
