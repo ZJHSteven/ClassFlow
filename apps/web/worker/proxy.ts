@@ -786,7 +786,10 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
 
   if (url.pathname === '/share') {
     const rootUrl = new URL('/', request.url)
-    return env.ASSETS.fetch(new Request(rootUrl.toString(), { method: 'GET', headers: request.headers }))
+    return serveFreshMetadataAsset(
+      new Request(rootUrl.toString(), { method: 'GET', headers: request.headers }),
+      env,
+    )
   }
   if (url.pathname.startsWith('/__classflow/artifacts/')) {
     return handleArtifactRequest(request, env)
@@ -812,5 +815,31 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     return proxyApiRequest(request, env)
   }
 
-  return env.ASSETS.fetch(request)
+  return serveFreshMetadataAsset(request, env)
+}
+
+async function serveFreshMetadataAsset(request: Request, env: WorkerEnv): Promise<Response> {
+  const response = await env.ASSETS.fetch(request)
+  if (!response.ok) return response
+
+  const pathname = new URL(request.url).pathname
+  const mustRevalidate =
+    pathname === '/'
+    || pathname === '/index.html'
+    || pathname === '/manifest.webmanifest'
+    || pathname === '/sw.js'
+
+  if (!mustRevalidate) return response
+
+  const headers = new Headers(response.headers)
+  // Safari 对“添加到主屏幕”的标题/manifest 缓存非常积极。这里宁可让几个很小的
+  // 元数据文件每次重新验证，也不要让已经修正的 ClassFlow 名称被 Vite 模板缓存盖住。
+  headers.set('cache-control', 'no-store, no-cache, must-revalidate, max-age=0')
+  headers.set('pragma', 'no-cache')
+  headers.set('expires', '0')
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }
