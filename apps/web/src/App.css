@@ -1125,6 +1125,26 @@
   }
 }
 
+/*
+ * iOS Home Screen Web App：
+ * Safari 标签页需要正常的页面留白；standalone 没有浏览器顶部 chrome 后，原来的 18px
+ * shell padding 会直接露成一条浅色空白。让首屏 hero 背景铺到状态栏底下，再把 hero
+ * 内容本身按 safe-area 往下推，既消掉白缝也不会让刘海/状态栏压住文字。
+ */
+@media (max-width: 760px) {
+  html.is-standalone .shell {
+    padding-top: 0;
+  }
+
+  html.is-standalone .hero {
+    margin-inline: -14px;
+    padding-top: calc(18px + env(safe-area-inset-top, 0px));
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    border-top-width: 0;
+  }
+}
+
 
 .shareShell {
   max-width: 1180px;

@@ -61,7 +61,7 @@ export function PushOnboarding() {
   return (
     <div className="pushOnboardingBackdrop" role="presentation">
       <section className="pushOnboarding" role="dialog" aria-modal="true" aria-label="ClassFlow 设置">
-        <img className="pushOnboarding__logo" src="/app-icon.svg" alt="" />
+        <img className="pushOnboarding__logo" src="/app-icon-192.png?v=3" alt="" />
         <div className="pushOnboarding__copy">
           <p className="pushOnboarding__eyebrow">CLASSFLOW FOR IOS</p>
           <h2>
