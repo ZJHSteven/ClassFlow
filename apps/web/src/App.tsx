@@ -17,6 +17,7 @@ import { CoursePanel } from './components/CoursePanel'
 import { SmartClassSessionCard } from './components/SmartClassSessionCard'
 import { SharePage } from './components/SharePage'
 import { TaskPanel } from './components/TaskPanel'
+import { PushOnboarding } from './components/PushOnboarding'
 import './App.css'
 
 type ViewMode = 'tasks' | 'courses'
@@ -38,6 +39,7 @@ function App() {
 
   return (
     <div className="shell">
+      <PushOnboarding />
       <motion.header
         className="hero"
         initial={{ opacity: 0, y: 18, filter: 'blur(10px)' }}

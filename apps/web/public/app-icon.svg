@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    ClassFlow 的图形语义：
+    - 深青色圆角底：沿用控制台主视觉，和普通蓝色“校园 App”区分开。
+    - 象牙白双页：课堂 / Notes。
+    - 薄荷色流线：音频、ASR、Notes 之间连续流动的 pipeline。
+    - 琥珀色节点：一次课堂最终落成一个可读成果。
+    不使用文字、星星或通用铃铛，缩到 iOS 主屏幕尺寸仍能一眼识别。
+  -->
+  <rect width="512" height="512" rx="116" fill="#0b292d"/>
+  <path d="M112 148c0-18 15-30 33-27 52 9 88 29 111 59 23-30 59-50 111-59 18-3 33 9 33 27v204c0 16-13 28-29 27-49-5-86 7-115 37-29-30-66-42-115-37-16 1-29-11-29-27V148Z" fill="#f5f1e6"/>
+  <path d="M256 180v225" stroke="#c9d8d3" stroke-width="12" stroke-linecap="round"/>
+  <path d="M151 273c38-43 68-63 105-47 38 17 60 77 106 41 18-14 31-34 43-57" fill="none" stroke="#7ee0bb" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="405" cy="210" r="25" fill="#f0b86c"/>
+  <path d="M153 191c33 4 55 13 73 27M153 330c30-2 53 3 73 14M286 191c23-13 46-21 73-25M286 334c24-10 49-14 73-12" fill="none" stroke="#173f43" stroke-width="12" stroke-linecap="round" opacity=".72"/>
+</svg>
