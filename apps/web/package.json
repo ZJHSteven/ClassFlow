@@ -11,11 +11,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@types/web-push": "^3.6.4",
     "markdown-it": "^14.3.2",
     "markdown-it-cjk-friendly": "^3.0.0",
     "motion": "^12.38.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
