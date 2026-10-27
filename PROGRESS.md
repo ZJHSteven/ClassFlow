@@ -21,6 +21,7 @@
   - 新 ARM64 backend SHA256=`78435a76c285c99f52f0248e8a09571b79293c9e022bfc9c556825b446832a98`，N1 health=ok，service active+enabled；
   - 生产 env 已启用 `CLASSFLOW_NOTIFICATIONS_ENABLED=true`，webhook=`https://classflow.zjhstudio.com/__classflow/stage-event`，SmartClass 扫描仍保持 600 秒。
 - N1 -> Cloudflare Worker 私有 stage-event webhook 真实 smoke 已通过：Bearer + Access 双鉴权返回 `accepted=true`；当前 `subscriptions=0`，因为 iPhone 尚未完成主屏幕 Web App 的一次性 PushSubscription 注册。
+- 服务端完整 outbox E2E 也已通过：向生产 stage_events 写入唯一测试事件 `ops:e2e:20261027` 后，不做人工 HTTP 调用，等待 notification worker 自己消费；记录最终自动变为 `delivery_status=sent`、`attempt_count=0`、`last_error=NULL`，证明 SQLite outbox -> backend worker -> Access/Bearer -> Worker dispatcher 全链正常。
 - 生产 PWA 静态资源 smoke 通过：`/manifest.webmanifest`=200 application/manifest+json、`/sw.js`=200、`/apple-touch-icon.png`=200 image/png、`/api/push/config`=200 且 VAPID configured=true。
 - npm production audit 当前 0 vulnerabilities。
 - 当前 SmartClass 仍按用户决定保留 600 秒扫描；课表事件驱动/独立 heartbeat 暂不实施，转后续 To-do。
