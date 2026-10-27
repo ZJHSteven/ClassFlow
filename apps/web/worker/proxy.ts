@@ -1,5 +1,15 @@
 import MarkdownIt from 'markdown-it'
 import markdownItCjkFriendly from 'markdown-it-cjk-friendly'
+import {
+  deletePushSubscription,
+  dispatchStageEvent,
+  getPushPublicConfig,
+  sendTestPush,
+  upsertPushSubscription,
+  type BrowserPushSubscriptionInput,
+  type PushEnv,
+  type StageEventWebhookPayload,
+} from './push'
 
 /**
  * Worker 代理的核心逻辑。
@@ -52,7 +62,7 @@ export interface SendEmailBindingLike {
   }): Promise<{ messageId?: string }>
 }
 
-export interface WorkerEnv extends PublicNotesEnv {
+export interface WorkerEnv extends PublicNotesEnv, PushEnv {
   BACKEND_BASE_URL: string
   BACKEND_TOKEN: string
   CF_ACCESS_CLIENT_ID?: string
@@ -61,6 +71,10 @@ export interface WorkerEnv extends PublicNotesEnv {
   ARTIFACTS?: R2BucketLike
   SUMMARY_EMAIL?: SendEmailBindingLike
   SUMMARY_EMAIL_TO?: string
+  VAPID_PUBLIC_KEY?: string
+  VAPID_PRIVATE_KEY?: string
+  VAPID_SUBJECT?: string
+  CLASSFLOW_PUBLIC_ORIGIN?: string
   ASSETS: AssetBindingLike
 }
 
@@ -96,6 +110,109 @@ function textResponse(status: number, contentType: string, body: string) {
 
 function unauthorizedArtifactResponse() {
   return jsonResponse(401, '未通过 Worker 产物接口鉴权。')
+}
+
+function backendBearerAuthorized(request: Request, env: WorkerEnv): boolean {
+  const token = request.headers.get('Authorization')?.replace(/^Bearer\s+/i, '').trim() ?? ''
+  return Boolean(env.BACKEND_TOKEN && token === env.BACKEND_TOKEN)
+}
+
+async function readJsonBody<T>(request: Request, maxBytes = 64_000): Promise<T> {
+  const contentLength = Number(request.headers.get('content-length') ?? '0')
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error('请求体过大')
+  }
+  const raw = await request.text()
+  if (raw.length > maxBytes) throw new Error('请求体过大')
+  return JSON.parse(raw) as T
+}
+
+async function handlePushApiRequest(request: Request, env: WorkerEnv): Promise<Response | null> {
+  const url = new URL(request.url)
+
+  if (url.pathname === '/api/push/config' && request.method === 'GET') {
+    return new Response(JSON.stringify(getPushPublicConfig(env)), {
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    })
+  }
+
+  if (url.pathname === '/api/push/subscriptions' && request.method === 'POST') {
+    try {
+      const body = await readJsonBody<{ subscription?: BrowserPushSubscriptionInput }>(request)
+      if (!body.subscription) return jsonResponse(400, 'subscription 必填')
+      const result = await upsertPushSubscription(
+        env,
+        body.subscription,
+        request.headers.get('user-agent'),
+      )
+      return new Response(JSON.stringify({ ok: true, ...result }), {
+        status: 201,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
+    }
+    catch (error) {
+      return jsonResponse(400, error instanceof Error ? error.message : '无法登记 Web Push')
+    }
+  }
+
+  if (url.pathname === '/api/push/subscriptions' && request.method === 'DELETE') {
+    try {
+      const body = await readJsonBody<{ endpoint?: string }>(request)
+      if (!body.endpoint?.trim()) return jsonResponse(400, 'endpoint 必填')
+      return new Response(JSON.stringify({
+        ok: true,
+        ...(await deletePushSubscription(env, body.endpoint)),
+      }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
+    }
+    catch (error) {
+      return jsonResponse(400, error instanceof Error ? error.message : '无法删除 Web Push')
+    }
+  }
+
+  if (url.pathname === '/api/push/test' && request.method === 'POST') {
+    try {
+      const body = await readJsonBody<{ endpoint?: string }>(request)
+      if (!body.endpoint?.trim()) return jsonResponse(400, 'endpoint 必填')
+      return new Response(JSON.stringify(await sendTestPush(env, body.endpoint)), {
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
+    }
+    catch (error) {
+      return jsonResponse(502, error instanceof Error ? error.message : '测试推送失败')
+    }
+  }
+
+  return null
+}
+
+async function handleStageEventWebhook(request: Request, env: WorkerEnv): Promise<Response> {
+  if (request.method !== 'POST') return jsonResponse(405, '阶段通知 webhook 只接受 POST')
+  if (!backendBearerAuthorized(request, env)) return jsonResponse(401, 'backend 鉴权失败')
+
+  try {
+    const event = await readJsonBody<StageEventWebhookPayload>(request)
+    const required = [
+      event.event_key,
+      event.source_kind,
+      event.source_id,
+      event.stage,
+      event.outcome,
+      event.title,
+      event.message,
+      event.created_at,
+    ]
+    if (!required.every((value) => typeof value === 'string' && value.trim().length > 0)) {
+      return jsonResponse(400, '阶段通知字段不完整')
+    }
+    return new Response(JSON.stringify(await dispatchStageEvent(env, event)), {
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    })
+  }
+  catch (error) {
+    return jsonResponse(502, error instanceof Error ? error.message : '阶段通知推送失败')
+  }
 }
 
 interface SummaryEmailPayload {
@@ -676,6 +793,14 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
   }
   if (url.pathname === '/__classflow/email-summary') {
     return handleSummaryEmailRequest(request, env)
+  }
+  if (url.pathname === '/__classflow/stage-event') {
+    return handleStageEventWebhook(request, env)
+  }
+
+  const pushResponse = await handlePushApiRequest(request, env)
+  if (pushResponse) {
+    return pushResponse
   }
 
   const publicArtifactResponse = await tryHandlePublicArtifactRequest(request, env)
