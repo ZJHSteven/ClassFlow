@@ -971,12 +971,7 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
                 .get("reasoningRedacted")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
-            && (message
-                .get("endTurn")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                || message.get("finishType").and_then(Value::as_str).is_some()
-                || message.get("channel").and_then(Value::as_str) == Some("final"))
+            && assistant_final_is_complete(message)
     });
     let Some(final_message) = final_message else {
         return Ok(());
@@ -1436,12 +1431,7 @@ async fn process_title_stage(
                 .get("reasoningRedacted")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
-            && (message
-                .get("endTurn")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                || message.get("finishType").and_then(Value::as_str).is_some()
-                || message.get("channel").and_then(Value::as_str) == Some("final"))
+            && assistant_final_is_complete(message)
     });
     let Some(title_message) = title_message else {
         return Ok(());
@@ -1971,12 +1961,7 @@ async fn process_summary_stage(
                 .get("reasoningRedacted")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
-            && (message
-                .get("endTurn")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                || message.get("finishType").and_then(Value::as_str).is_some()
-                || message.get("channel").and_then(Value::as_str) == Some("final"))
+            && assistant_final_is_complete(message)
     });
     let Some(summary_message) = summary_message else {
         return Ok(());
@@ -2560,12 +2545,7 @@ fn recover_historical_title_final_ordinal(
             {
                 return None;
             }
-            let is_final = message
-                .get("endTurn")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-                || message.get("finishType").and_then(Value::as_str).is_some()
-                || message.get("channel").and_then(Value::as_str) == Some("final");
+            let is_final = assistant_final_is_complete(message);
             if !is_final {
                 return None;
             }
