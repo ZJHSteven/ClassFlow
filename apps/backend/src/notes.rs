@@ -246,7 +246,11 @@ async fn get_public_job_state(
     if job.get("tracked").and_then(Value::as_bool) == Some(false) {
         return Ok(PublicJobState::Legacy);
     }
-    match job.get("status").and_then(Value::as_str).unwrap_or_default() {
+    match job
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
         "completed" => {
             let text = job
                 .pointer("/result/text")
@@ -262,9 +266,7 @@ async fn get_public_job_state(
                 .to_string(),
         )),
         "queued" | "submitting" | "retry_waiting" | "accepted" => Ok(PublicJobState::Pending),
-        other => Err(AppError::Internal(format!(
-            "RQCI Job API 未知状态 {other}"
-        ))),
+        other => Err(AppError::Internal(format!("RQCI Job API 未知状态 {other}"))),
     }
 }
 
@@ -408,23 +410,37 @@ fn parse_archive_submission_outcome(body: &str) -> AppResult<ArchiveSubmissionOu
     })?;
 
     if let Some(job) = payload.get("job") {
-        let status = job.get("status").and_then(Value::as_str).unwrap_or_default();
+        let status = job
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         return match status {
             "accepted" | "completed" => {
                 let conversation_id = job
                     .get("conversationId")
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
-                    .ok_or_else(|| AppError::Internal("RQCI 已接收任务但未返回 conversationId".to_string()))?;
-                Ok(ArchiveSubmissionOutcome::Accepted { conversation_id: conversation_id.to_string() })
+                    .ok_or_else(|| {
+                        AppError::Internal("RQCI 已接收任务但未返回 conversationId".to_string())
+                    })?;
+                Ok(ArchiveSubmissionOutcome::Accepted {
+                    conversation_id: conversation_id.to_string(),
+                })
             }
             "failed" => Ok(ArchiveSubmissionOutcome::Failed {
-                error: job.get("error").and_then(Value::as_str).unwrap_or("RQCI job failed").to_string(),
+                error: job
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("RQCI job failed")
+                    .to_string(),
             }),
             "queued" | "submitting" | "retry_waiting" => Ok(ArchiveSubmissionOutcome::Queued {
                 status: status.to_string(),
                 next_attempt_at: job.get("nextAttemptAt").and_then(Value::as_i64),
-                last_error: job.get("error").and_then(Value::as_str).map(ToOwned::to_owned),
+                last_error: job
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
             }),
             other => Err(AppError::Internal(format!("RQCI Job API 未知状态 {other}"))),
         };
@@ -849,22 +865,31 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
             let normalized = normalize_notes_markdown(&text);
             let markdown = normalized.markdown.trim();
             if markdown.is_empty() {
-                state.repo.mark_lecture_notes_failed(&job.lecture_key, "RQCI 最终笔记正文为空").await?;
+                state
+                    .repo
+                    .mark_lecture_notes_failed(&job.lecture_key, "RQCI 最终笔记正文为空")
+                    .await?;
                 return Ok(());
             }
             // 0 是新式公共任务检查点的哨兵：此后 title/summary 用稳定 Job Key
             // 关联结果，而不需要将 Archive 的内部 ordinal 透传给 ClassFlow。
-            state.repo.mark_lecture_notes_notes_ready(
-                &job.lecture_key,
-                markdown,
-                &sha256_text(markdown),
-                0,
-            ).await?;
+            state
+                .repo
+                .mark_lecture_notes_notes_ready(
+                    &job.lecture_key,
+                    markdown,
+                    &sha256_text(markdown),
+                    0,
+                )
+                .await?;
             return Ok(());
         }
         PublicJobState::Pending => return Ok(()),
         PublicJobState::Failed(error) => {
-            state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+            state
+                .repo
+                .mark_lecture_notes_failed(&job.lecture_key, &error)
+                .await?;
             return Ok(());
         }
         PublicJobState::Legacy | PublicJobState::Missing => {}
@@ -1001,14 +1026,21 @@ async fn process_public_title_result(
     let text = match get_public_job_state(state, client, base, initial_key).await? {
         PublicJobState::Completed(text) => text,
         PublicJobState::Failed(error) => {
-            state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+            state
+                .repo
+                .mark_lecture_notes_failed(&job.lecture_key, &error)
+                .await?;
             return Ok(());
         }
         PublicJobState::Pending => return Ok(()),
         PublicJobState::Legacy | PublicJobState::Missing => {
-            state.repo.update_lecture_notes_error(
-                &job.lecture_key, "新的 RQCI Title Job 没有可追踪的完成状态",
-            ).await?;
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    "新的 RQCI Title Job 没有可追踪的完成状态",
+                )
+                .await?;
             return Ok(());
         }
     };
@@ -1018,35 +1050,56 @@ async fn process_public_title_result(
         match get_public_job_state(state, client, base, &retry_key).await? {
             PublicJobState::Completed(text) => normalize_title_response(&text),
             PublicJobState::Failed(error) => {
-                state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+                state
+                    .repo
+                    .mark_lecture_notes_failed(&job.lecture_key, &error)
+                    .await?;
                 return Ok(());
             }
             PublicJobState::Pending => return Ok(()),
             PublicJobState::Legacy => {
-                state.repo.mark_lecture_notes_failed(&job.lecture_key, "标题重试任务未启用完整结果跟踪").await?;
+                state
+                    .repo
+                    .mark_lecture_notes_failed(&job.lecture_key, "标题重试任务未启用完整结果跟踪")
+                    .await?;
                 return Ok(());
             }
             PublicJobState::Missing => {
                 let prompt = build_title_prompt(existing_titles, Some((&title, reason)));
                 match get_or_enqueue_archive_submission(
-                    state, client, base, &retry_key,
+                    state,
+                    client,
+                    base,
+                    &retry_key,
                     json!({
                         "mode": "continue",
                         "conversationId": conversation_id,
                         "idempotencyKey": retry_key,
                         "text": prompt,
                     }),
-                ).await {
+                )
+                .await
+                {
                     Ok(ArchiveSubmissionOutcome::Failed { error }) => {
-                        state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+                        state
+                            .repo
+                            .mark_lecture_notes_failed(&job.lecture_key, &error)
+                            .await?;
                     }
                     Ok(_) => {
-                        state.repo.update_lecture_notes_error(
-                            &job.lecture_key, "标题格式不合格，RQCI 已接管一次修正请求",
-                        ).await?;
+                        state
+                            .repo
+                            .update_lecture_notes_error(
+                                &job.lecture_key,
+                                "标题格式不合格，RQCI 已接管一次修正请求",
+                            )
+                            .await?;
                     }
                     Err((_, message)) => {
-                        state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                        state
+                            .repo
+                            .update_lecture_notes_error(&job.lecture_key, &message)
+                            .await?;
                     }
                 }
                 return Ok(());
@@ -1056,12 +1109,16 @@ async fn process_public_title_result(
         title
     };
     if let Some(reason) = title_rejection_reason(&final_title, existing_titles) {
-        state.repo.mark_lecture_notes_failed(
-            &job.lecture_key, &format!("标题一次重试仍不合格: {reason}"),
-        ).await?;
+        state
+            .repo
+            .mark_lecture_notes_failed(&job.lecture_key, &format!("标题一次重试仍不合格: {reason}"))
+            .await?;
         return Ok(());
     }
-    state.repo.mark_lecture_notes_title_ready(&job.lecture_key, &final_title, 0).await?;
+    state
+        .repo
+        .mark_lecture_notes_title_ready(&job.lecture_key, &final_title, 0)
+        .await?;
     Ok(())
 }
 
@@ -1089,30 +1146,50 @@ async fn process_title_stage(
     if notes_final_ordinal == 0 {
         if job.title_requested_at.is_none() {
             let outcome = get_or_enqueue_archive_submission(
-                state, client, base, &initial_submission_key,
+                state,
+                client,
+                base,
+                &initial_submission_key,
                 json!({
                     "mode": "continue",
                     "conversationId": conversation_id,
                     "idempotencyKey": initial_submission_key,
                     "text": build_title_prompt(&existing_titles, None),
                 }),
-            ).await;
+            )
+            .await;
             match outcome {
                 Ok(ArchiveSubmissionOutcome::Failed { error }) => {
-                    state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+                    state
+                        .repo
+                        .mark_lecture_notes_failed(&job.lecture_key, &error)
+                        .await?;
                 }
                 Ok(_) => {
-                    state.repo.mark_lecture_notes_title_requested(&job.lecture_key).await?;
+                    state
+                        .repo
+                        .mark_lecture_notes_title_requested(&job.lecture_key)
+                        .await?;
                 }
                 Err((_, message)) => {
-                    state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                    state
+                        .repo
+                        .update_lecture_notes_error(&job.lecture_key, &message)
+                        .await?;
                 }
             }
             return Ok(());
         }
         return process_public_title_result(
-            state, job, conversation_id, client, base, &initial_submission_key, &existing_titles,
-        ).await;
+            state,
+            job,
+            conversation_id,
+            client,
+            base,
+            &initial_submission_key,
+            &existing_titles,
+        )
+        .await;
     }
 
     if job.title_requested_at.is_none() {
@@ -1475,7 +1552,10 @@ fn public_summary_rejection(markdown: &str) -> Option<String> {
     if count < 120 {
         return Some(format!("摘要异常短：{count} 字符"));
     }
-    if !markdown.lines().any(|line| line.trim() == "## 本堂讲了什么") {
+    if !markdown
+        .lines()
+        .any(|line| line.trim() == "## 本堂讲了什么")
+    {
         return Some("摘要缺少必需章节 ## 本堂讲了什么".to_string());
     }
     None
@@ -1498,9 +1578,13 @@ async fn process_public_summary_result(
         }
         PublicJobState::Pending => return Ok(()),
         PublicJobState::Legacy | PublicJobState::Missing => {
-            state.repo.update_lecture_notes_error(
-                &job.lecture_key, "新的 RQCI Summary Job 没有可追踪的完成状态",
-            ).await?;
+            state
+                .repo
+                .update_lecture_notes_error(
+                    &job.lecture_key,
+                    "新的 RQCI Summary Job 没有可追踪的完成状态",
+                )
+                .await?;
             return Ok(());
         }
     };
@@ -1522,31 +1606,42 @@ async fn process_public_summary_result(
             }
             PublicJobState::Pending => return Ok(()),
             PublicJobState::Legacy => {
-                mark_summary_stage_failure(state, job, mode, "摘要重试任务没有完整结果跟踪").await?;
+                mark_summary_stage_failure(state, job, mode, "摘要重试任务没有完整结果跟踪")
+                    .await?;
                 return Ok(());
             }
             PublicJobState::Missing => {
                 let outcome = get_or_enqueue_archive_submission(
-                    state, client, base, &retry_key,
+                    state,
+                    client,
+                    base,
+                    &retry_key,
                     json!({
                         "mode": "continue",
                         "conversationId": conversation_id,
                         "idempotencyKey": retry_key,
                         "text": build_summary_prompt(Some(first.chars().count())),
                     }),
-                ).await;
+                )
+                .await;
                 match outcome {
                     Ok(ArchiveSubmissionOutcome::Failed { error }) => {
                         mark_summary_stage_failure(state, job, mode, &error).await?;
                     }
                     Ok(_) => {
-                        state.repo.update_lecture_notes_error(
-                            &job.lecture_key,
-                            &format!("摘要格式校验未通过（{reason}），RQCI 已接管修正请求"),
-                        ).await?;
+                        state
+                            .repo
+                            .update_lecture_notes_error(
+                                &job.lecture_key,
+                                &format!("摘要格式校验未通过（{reason}），RQCI 已接管修正请求"),
+                            )
+                            .await?;
                     }
                     Err((_, message)) => {
-                        state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                        state
+                            .repo
+                            .update_lecture_notes_error(&job.lecture_key, &message)
+                            .await?;
                     }
                 }
                 return Ok(());
@@ -1556,7 +1651,8 @@ async fn process_public_summary_result(
         first.to_string()
     };
     if let Some(reason) = public_summary_rejection(&summary) {
-        mark_summary_stage_failure(state, job, mode, &format!("摘要一次重试仍不合格：{reason}")).await?;
+        mark_summary_stage_failure(state, job, mode, &format!("摘要一次重试仍不合格：{reason}"))
+            .await?;
         return Ok(());
     }
     mark_summary_stage_ready(state, job, mode, &summary, 0).await?;
@@ -1594,32 +1690,50 @@ async fn process_summary_stage(
     if title_final_ordinal == 0 {
         if !summary_requested {
             let outcome = get_or_enqueue_archive_submission(
-                state, client, base, &initial_submission_key,
+                state,
+                client,
+                base,
+                &initial_submission_key,
                 json!({
                     "mode": "continue",
                     "conversationId": conversation_id,
                     "idempotencyKey": initial_submission_key,
                     "text": build_summary_prompt(None),
                 }),
-            ).await;
+            )
+            .await;
             match outcome {
                 Ok(ArchiveSubmissionOutcome::Failed { error }) => {
                     mark_summary_stage_failure(state, job, mode, &error).await?;
                 }
                 Ok(_) => {
-                    state.repo.mark_lecture_notes_summary_requested(
-                        &job.lecture_key, SUMMARY_PROMPT_VERSION,
-                    ).await?;
+                    state
+                        .repo
+                        .mark_lecture_notes_summary_requested(
+                            &job.lecture_key,
+                            SUMMARY_PROMPT_VERSION,
+                        )
+                        .await?;
                 }
                 Err((_, message)) => {
-                    state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                    state
+                        .repo
+                        .update_lecture_notes_error(&job.lecture_key, &message)
+                        .await?;
                 }
             }
             return Ok(());
         }
         return process_public_summary_result(
-            state, job, conversation_id, client, base, mode, &initial_submission_key,
-        ).await;
+            state,
+            job,
+            conversation_id,
+            client,
+            base,
+            mode,
+            &initial_submission_key,
+        )
+        .await;
     }
 
     if !summary_requested {
