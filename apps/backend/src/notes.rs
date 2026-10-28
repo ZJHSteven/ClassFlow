@@ -1007,6 +1007,36 @@ async fn process_title_stage(
         job.lecture_key, notes_final_ordinal
     );
 
+    // 新式任务从 Notes 阶段传来 ordinal=0 哨兵：不再主动翻 Archive 消息。
+    if notes_final_ordinal == 0 {
+        if job.title_requested_at.is_none() {
+            let outcome = get_or_enqueue_archive_submission(
+                state, client, base, &initial_submission_key,
+                json!({
+                    "mode": "continue",
+                    "conversationId": conversation_id,
+                    "idempotencyKey": initial_submission_key,
+                    "text": build_title_prompt(&existing_titles, None),
+                }),
+            ).await;
+            match outcome {
+                Ok(ArchiveSubmissionOutcome::Failed { error }) => {
+                    state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+                }
+                Ok(_) => {
+                    state.repo.mark_lecture_notes_title_requested(&job.lecture_key).await?;
+                }
+                Err((_, message)) => {
+                    state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                }
+            }
+            return Ok(());
+        }
+        return process_public_title_result(
+            state, job, conversation_id, client, base, &initial_submission_key, &existing_titles,
+        ).await;
+    }
+
     if job.title_requested_at.is_none() {
         // 历史兼容：升级 submission queue 之前，title turn 可能已经真正进入 canonical，
         // 但 ClassFlow 没来得及 checkpoint。先查 canonical 可以避免给旧 conversation 再发一遍。
