@@ -841,6 +841,35 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
         return Ok(());
     }
 
+    // 新任务只从 RQCI 对外 Job API 取最终正文，不再检查 Archive 内部 lifecycle/message。
+    // 旧队列的未追踪记录仍可临时沿用下方历史兼容分支，避免发布切换时丢失任务。
+    let job_key = format!("classflow:lecture:{}:notes", job.lecture_key);
+    match get_public_job_state(state, &client, base, &job_key).await? {
+        PublicJobState::Completed(text) => {
+            let normalized = normalize_notes_markdown(&text);
+            let markdown = normalized.markdown.trim();
+            if markdown.is_empty() {
+                state.repo.mark_lecture_notes_failed(&job.lecture_key, "RQCI 最终笔记正文为空").await?;
+                return Ok(());
+            }
+            // 0 是新式公共任务检查点的哨兵：此后 title/summary 用稳定 Job Key
+            // 关联结果，而不需要将 Archive 的内部 ordinal 透传给 ClassFlow。
+            state.repo.mark_lecture_notes_notes_ready(
+                &job.lecture_key,
+                markdown,
+                &sha256_text(markdown),
+                0,
+            ).await?;
+            return Ok(());
+        }
+        PublicJobState::Pending => return Ok(()),
+        PublicJobState::Failed(error) => {
+            state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+            return Ok(());
+        }
+        PublicJobState::Legacy | PublicJobState::Missing => {}
+    }
+
     let detail_url = format!("{base}/v1/conversations/{conversation_id}");
     let response = match apply_bridge_auth(client.get(detail_url), state)
         .send()
