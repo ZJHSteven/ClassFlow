@@ -1491,6 +1491,39 @@ async fn process_summary_stage(
         job.lecture_key, SUMMARY_PROMPT_VERSION, title_final_ordinal
     );
 
+    // 新式链路用稳定 Job Key 完成整个摘要生命周期，不查询 Archive 消息。
+    // title_final_ordinal=0 只是持久化检查点兼容标记，不是归档消息序号。
+    if title_final_ordinal == 0 {
+        if !summary_requested {
+            let outcome = get_or_enqueue_archive_submission(
+                state, client, base, &initial_submission_key,
+                json!({
+                    "mode": "continue",
+                    "conversationId": conversation_id,
+                    "idempotencyKey": initial_submission_key,
+                    "text": build_summary_prompt(None),
+                }),
+            ).await;
+            match outcome {
+                Ok(ArchiveSubmissionOutcome::Failed { error }) => {
+                    mark_summary_stage_failure(state, job, mode, &error).await?;
+                }
+                Ok(_) => {
+                    state.repo.mark_lecture_notes_summary_requested(
+                        &job.lecture_key, SUMMARY_PROMPT_VERSION,
+                    ).await?;
+                }
+                Err((_, message)) => {
+                    state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                }
+            }
+            return Ok(());
+        }
+        return process_public_summary_result(
+            state, job, conversation_id, client, base, mode, &initial_submission_key,
+        ).await;
+    }
+
     if !summary_requested {
         // 和标题阶段相同：先认领历史 canonical prompt，防止请求其实已经提交成功、
         // 但 ClassFlow 在写 checkpoint 前退出时再次发送同一摘要请求。
