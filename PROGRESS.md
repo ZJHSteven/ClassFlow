@@ -658,3 +658,12 @@
 
 
 
+
+## 2026-10-28 ClassFlow 摘要截断根因与双端架构改造（已部署）
+- [x] 根因已取证：RQCI Evidence 2026-10-28 20:02:44.967 CST 的 final 仍处 in_progress、end_turn=null，内容仅 `## 通知与`；ClassFlow 旧判定错误地把 channel=final 当完成；20:03:01.695 同消息完整为1263字符。
+- [x] ClassFlow 新 Notes/Title/Summary 分别消费 RQCI 公共 Job completed 结果，正常任务不再轮询 /conversations/.../messages；旧任务仅按严格 endTurn+status 恢复。
+- [x] 业务摘要需包含 ## 本堂讲了什么，正文合理长度，不合格只允许一次幂等修正；77 单元与11 API测试、fmt、Clippy通过。
+- [x] RQCI 340/340 测试、Windows daemon 新版运行；N1 (n1-campus-frp / n1-migrate) 已在 2026-10-28 23:49 CST 切换 ARM64 backend SHA256=602bb3316f1f3f1d75024b7caff357c0dab7b129386fae04a0f0dd5a5897da4b；service active、health=ok、远端 Job API 调用成功。
+- [x] 切换前备份位于 /home/zjhsteven/ClassFlow/deploy-backups/rqci-job-api-20261028/，SQLite quick_check=ok，旧 backend.previous 可回滚。
+- [x] 通过 scripts/repair-truncated-summary.py 对讲座 46624d4c731244940faebb7139550627be9410ffd2c20161e65e948580e82fc3 做幂等预检/精确事务修复：summary 6→1263字符，ordinal31→32，邮件重投递。N1 23:52:24投递成功，Gmail 15:52Z收到新邮件 id=1a183366ba854912，原始 MIME 含完整章节与核心结论。
+- [ ] 后续观察新课程的首次端到端 Job 实际提交/完成，不为了测试而额外消耗 ChatGPT 额度。
