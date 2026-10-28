@@ -987,6 +987,84 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
     Ok(())
 }
 
+/// 新版 Title：仅处理 RQCI 的持久化 Job 输出。需要重试时使用另一枚稳定 key，
+/// 不回溯 Archive 的 message ordinal，也不会重复触发已执行的 ChatGPT turn。
+async fn process_public_title_result(
+    state: &AppState,
+    job: &LectureNotesRecord,
+    conversation_id: &str,
+    client: &Client,
+    base: &str,
+    initial_key: &str,
+    existing_titles: &[String],
+) -> AppResult<()> {
+    let text = match get_public_job_state(state, client, base, initial_key).await? {
+        PublicJobState::Completed(text) => text,
+        PublicJobState::Failed(error) => {
+            state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+            return Ok(());
+        }
+        PublicJobState::Pending => return Ok(()),
+        PublicJobState::Legacy | PublicJobState::Missing => {
+            state.repo.update_lecture_notes_error(
+                &job.lecture_key, "新的 RQCI Title Job 没有可追踪的完成状态",
+            ).await?;
+            return Ok(());
+        }
+    };
+    let title = normalize_title_response(&text);
+    let final_title = if let Some(reason) = title_rejection_reason(&title, existing_titles) {
+        let retry_key = format!("classflow:lecture:{}:title:0:retry:0", job.lecture_key);
+        match get_public_job_state(state, client, base, &retry_key).await? {
+            PublicJobState::Completed(text) => normalize_title_response(&text),
+            PublicJobState::Failed(error) => {
+                state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+                return Ok(());
+            }
+            PublicJobState::Pending => return Ok(()),
+            PublicJobState::Legacy => {
+                state.repo.mark_lecture_notes_failed(&job.lecture_key, "标题重试任务未启用完整结果跟踪").await?;
+                return Ok(());
+            }
+            PublicJobState::Missing => {
+                let prompt = build_title_prompt(existing_titles, Some((&title, reason)));
+                match get_or_enqueue_archive_submission(
+                    state, client, base, &retry_key,
+                    json!({
+                        "mode": "continue",
+                        "conversationId": conversation_id,
+                        "idempotencyKey": retry_key,
+                        "text": prompt,
+                    }),
+                ).await {
+                    Ok(ArchiveSubmissionOutcome::Failed { error }) => {
+                        state.repo.mark_lecture_notes_failed(&job.lecture_key, &error).await?;
+                    }
+                    Ok(_) => {
+                        state.repo.update_lecture_notes_error(
+                            &job.lecture_key, "标题格式不合格，RQCI 已接管一次修正请求",
+                        ).await?;
+                    }
+                    Err((_, message)) => {
+                        state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                    }
+                }
+                return Ok(());
+            }
+        }
+    } else {
+        title
+    };
+    if let Some(reason) = title_rejection_reason(&final_title, existing_titles) {
+        state.repo.mark_lecture_notes_failed(
+            &job.lecture_key, &format!("标题一次重试仍不合格: {reason}"),
+        ).await?;
+        return Ok(());
+    }
+    state.repo.mark_lecture_notes_title_ready(&job.lecture_key, &final_title, 0).await?;
+    Ok(())
+}
+
 async fn process_title_stage(
     state: &AppState,
     job: &LectureNotesRecord,
