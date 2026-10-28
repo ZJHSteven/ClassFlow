@@ -47,10 +47,10 @@ fn assistant_final_is_complete(message: &Value) -> bool {
     {
         return false;
     }
-    if let Some(status) = message.get("status").and_then(Value::as_str) {
-        if status != "finished_successfully" {
-            return false;
-        }
+    if let Some(status) = message.get("status").and_then(Value::as_str)
+        && status != "finished_successfully"
+    {
+        return false;
     }
     matches!(
         message.get("finishType").and_then(Value::as_str),
@@ -1552,8 +1552,8 @@ async fn process_title_stage(
 /// - checkpoint 丢失时先查 canonical messages 自动认领已存在的 prompt；
 /// - 只接受标题 assistant final 之后的摘要 assistant final；
 /// - 超过 2000 字不会本地粗暴截断，而是继续同一 conversation 请求模型压缩重做。
-/// 最终完成与格式合规是两个独立条件：RQCI 保证消息完整，
-/// ClassFlow 仍然负责校验摘要业务契约，避免模型正常结束却省略核心章节。
+// 最终完成与格式合规是两个独立条件：RQCI 保证消息完整，
+// ClassFlow 仍然负责校验摘要业务契约，避免模型正常结束却省略核心章节。
 fn public_summary_rejection(markdown: &str) -> Option<String> {
     let count = markdown.chars().count();
     if count > SUMMARY_MAX_CHARS {
