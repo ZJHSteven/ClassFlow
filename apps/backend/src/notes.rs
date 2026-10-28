@@ -536,7 +536,9 @@ async fn get_archive_submission(
 ) -> Result<Option<ArchiveSubmissionOutcome>, (Option<StatusCode>, String)> {
     let lookup = apply_bridge_auth(
         client
-            .get(format!("{base}/v1/submissions"))
+            // 统一使用 RQCI 的公开 Job API；旧版 submission 也通过同一
+            // 兼容接口返回状态，不需要让 ClassFlow 继续探测内部消息。
+            .get(format!("{base}/v1/jobs"))
             .query(&[("key", idempotency_key)]),
         state,
     )
