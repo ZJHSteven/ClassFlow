@@ -2774,6 +2774,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn incomplete_final_channel_must_never_be_consumed() {
+        // 本次事故的真实首份 Archive Body：此时正文仅含六个字符，
+        // 但 channel 已经等于 final。旧代码会误判并把前缀发进 Gmail。
+        let pending = json!({
+            "role": "assistant",
+            "channel": "final",
+            "status": "in_progress",
+            "text": "## 通知与",
+            "endTurn": false,
+            "finishType": null
+        });
+        assert!(!assistant_final_is_complete(&pending));
+        // 只标注 final 不能判断结束，甚至观察到 stop 也不能越过 endTurn。
+        let with_finish_type = json!({
+            "role": "assistant", "channel": "final",
+            "status": "in_progress", "endTurn": false, "finishType": "stop"
+        });
+        assert!(!assistant_final_is_complete(&with_finish_type));
+        let completed = json!({
+            "role": "assistant", "channel": "final",
+            "status": "finished_successfully", "endTurn": true,
+            "finishType": "stop", "text": "## 本堂讲了什么\n完整笔记"
+        });
+        assert!(assistant_final_is_complete(&completed));
+        let errored = json!({
+            "role": "assistant", "channel": "final",
+            "status": "finished_successfully", "endTurn": true,
+            "finishType": "error", "text": "不完整"
+        });
+        assert!(!assistant_final_is_complete(&errored));
+    }
+
+    #[test]
+    fn public_summary_must_have_knowledge_section_before_sending_mail() {
+        assert!(public_summary_rejection("## 通知与").is_some());
+        assert!(public_summary_rejection(&"无章节内容".repeat(80)).is_some());
+        let valid = format!("## 本堂讲了什么\n{}", "人口再生产的知识点。".repeat(40));
+        assert!(public_summary_rejection(&valid).is_none());
+        assert!(public_summary_rejection(&valid.repeat(10)).is_some());
+    }
+
+    #[test]
     fn archive_submission_parser_should_cover_queue_terminal_and_legacy_shapes() {
         assert_eq!(
             parse_archive_submission_outcome(
