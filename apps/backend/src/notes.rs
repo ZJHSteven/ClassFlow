@@ -207,6 +207,67 @@ enum ArchiveSubmissionOutcome {
     },
 }
 
+/// RQCI 的正式公共任务结果。消费者不理解 Archive 的消息、SSE 和 ordinal。
+/// 未完成只意味着以后再次查询同一个任务 ID，不会产生新的 ChatGPT 请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PublicJobState {
+    Missing,
+    Legacy,
+    Pending,
+    Completed(String),
+    Failed(String),
+}
+
+async fn get_public_job_state(
+    state: &AppState,
+    client: &Client,
+    base: &str,
+    key: &str,
+) -> AppResult<PublicJobState> {
+    let response = apply_bridge_auth(
+        client.get(format!("{base}/v1/jobs")).query(&[("key", key)]),
+        state,
+    )
+    .send()
+    .await?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(PublicJobState::Missing);
+    }
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "RQCI Job API 查询失败 HTTP {}",
+            response.status()
+        )));
+    }
+    let body: Value = response.json().await?;
+    let job = body
+        .get("job")
+        .ok_or_else(|| AppError::Internal("RQCI Job API 缺少 job".to_string()))?;
+    if job.get("tracked").and_then(Value::as_bool) == Some(false) {
+        return Ok(PublicJobState::Legacy);
+    }
+    match job.get("status").and_then(Value::as_str).unwrap_or_default() {
+        "completed" => {
+            let text = job
+                .pointer("/result/text")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| AppError::Internal("RQCI completed job 缺少完整正文".to_string()))?;
+            Ok(PublicJobState::Completed(text.to_string()))
+        }
+        "failed" => Ok(PublicJobState::Failed(
+            job.get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("RQCI job failed")
+                .to_string(),
+        )),
+        "queued" | "submitting" | "retry_waiting" | "accepted" => Ok(PublicJobState::Pending),
+        other => Err(AppError::Internal(format!(
+            "RQCI Job API 未知状态 {other}"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SummaryStageMode {
     Live,
@@ -346,6 +407,28 @@ fn parse_archive_submission_outcome(body: &str) -> AppResult<ArchiveSubmissionOu
         AppError::Internal(format!("解析 Archive submission 响应失败: {error}"))
     })?;
 
+    if let Some(job) = payload.get("job") {
+        let status = job.get("status").and_then(Value::as_str).unwrap_or_default();
+        return match status {
+            "accepted" | "completed" => {
+                let conversation_id = job
+                    .get("conversationId")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| AppError::Internal("RQCI 已接收任务但未返回 conversationId".to_string()))?;
+                Ok(ArchiveSubmissionOutcome::Accepted { conversation_id: conversation_id.to_string() })
+            }
+            "failed" => Ok(ArchiveSubmissionOutcome::Failed {
+                error: job.get("error").and_then(Value::as_str).unwrap_or("RQCI job failed").to_string(),
+            }),
+            "queued" | "submitting" | "retry_waiting" => Ok(ArchiveSubmissionOutcome::Queued {
+                status: status.to_string(),
+                next_attempt_at: job.get("nextAttemptAt").and_then(Value::as_i64),
+                last_error: job.get("error").and_then(Value::as_str).map(ToOwned::to_owned),
+            }),
+            other => Err(AppError::Internal(format!("RQCI Job API 未知状态 {other}"))),
+        };
+    }
     if let Some(submission) = payload.get("submission") {
         let status = submission
             .get("status")
@@ -458,7 +541,7 @@ async fn get_or_enqueue_archive_submission(
     }
 
     let response = apply_bridge_auth(
-        client.post(format!("{base}/v1/turns")).json(&submit_body),
+        client.post(format!("{base}/v1/jobs")).json(&submit_body),
         state,
     )
     .send()
