@@ -38,6 +38,26 @@ const SUMMARY_MAX_CHARS: usize = 2_000;
 pub const SUMMARY_PROMPT_VERSION: i64 = 2;
 const SUMMARY_PROMPT_PREFIX: &str = "【ClassFlow 摘要模板 v2】请基于你刚刚生成的整堂课堂笔记，再给出一份用于课后邮件快速查看的中文摘要。";
 
+/// 仅供历史已提交任务的兼容恢复使用。final 表示输出通道，不代表已经生成完毕。
+/// 真实生成中快照可能同时有 channel=final 和 status=in_progress。
+/// 因此必须要求 endTurn=true，且存在 status 时必须确认生成成功。
+fn assistant_final_is_complete(message: &Value) -> bool {
+    if message.get("channel").and_then(Value::as_str) != Some("final")
+        || message.get("endTurn").and_then(Value::as_bool) != Some(true)
+    {
+        return false;
+    }
+    if let Some(status) = message.get("status").and_then(Value::as_str) {
+        if status != "finished_successfully" {
+            return false;
+        }
+    }
+    matches!(
+        message.get("finishType").and_then(Value::as_str),
+        None | Some("stop")
+    )
+}
+
 pub fn spawn_notes_worker(state: AppState) {
     if !state.config.notes_enabled {
         info!("Phase 3 Notes worker 未启用");
