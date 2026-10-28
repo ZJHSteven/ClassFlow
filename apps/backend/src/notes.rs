@@ -1465,6 +1465,104 @@ async fn process_title_stage(
 /// - checkpoint 丢失时先查 canonical messages 自动认领已存在的 prompt；
 /// - 只接受标题 assistant final 之后的摘要 assistant final；
 /// - 超过 2000 字不会本地粗暴截断，而是继续同一 conversation 请求模型压缩重做。
+/// 最终完成与格式合规是两个独立条件：RQCI 保证消息完整，
+/// ClassFlow 仍然负责校验摘要业务契约，避免模型正常结束却省略核心章节。
+fn public_summary_rejection(markdown: &str) -> Option<String> {
+    let count = markdown.chars().count();
+    if count > SUMMARY_MAX_CHARS {
+        return Some(format!("摘要超过 {SUMMARY_MAX_CHARS} 字符：{count}"));
+    }
+    if count < 120 {
+        return Some(format!("摘要异常短：{count} 字符"));
+    }
+    if !markdown.lines().any(|line| line.trim() == "## 本堂讲了什么") {
+        return Some("摘要缺少必需章节 ## 本堂讲了什么".to_string());
+    }
+    None
+}
+
+async fn process_public_summary_result(
+    state: &AppState,
+    job: &LectureNotesRecord,
+    conversation_id: &str,
+    client: &Client,
+    base: &str,
+    mode: SummaryStageMode,
+    initial_key: &str,
+) -> AppResult<()> {
+    let text = match get_public_job_state(state, client, base, initial_key).await? {
+        PublicJobState::Completed(text) => text,
+        PublicJobState::Failed(error) => {
+            mark_summary_stage_failure(state, job, mode, &error).await?;
+            return Ok(());
+        }
+        PublicJobState::Pending => return Ok(()),
+        PublicJobState::Legacy | PublicJobState::Missing => {
+            state.repo.update_lecture_notes_error(
+                &job.lecture_key, "新的 RQCI Summary Job 没有可追踪的完成状态",
+            ).await?;
+            return Ok(());
+        }
+    };
+    let normalized = normalize_notes_markdown(&text);
+    let first = normalized.markdown.trim();
+    let summary = if let Some(reason) = public_summary_rejection(first) {
+        let retry_key = format!(
+            "classflow:lecture:{}:summary:v{}:0:retry:0",
+            job.lecture_key, SUMMARY_PROMPT_VERSION,
+        );
+        match get_public_job_state(state, client, base, &retry_key).await? {
+            PublicJobState::Completed(text) => {
+                let retry = normalize_notes_markdown(&text);
+                retry.markdown.trim().to_string()
+            }
+            PublicJobState::Failed(error) => {
+                mark_summary_stage_failure(state, job, mode, &error).await?;
+                return Ok(());
+            }
+            PublicJobState::Pending => return Ok(()),
+            PublicJobState::Legacy => {
+                mark_summary_stage_failure(state, job, mode, "摘要重试任务没有完整结果跟踪").await?;
+                return Ok(());
+            }
+            PublicJobState::Missing => {
+                let outcome = get_or_enqueue_archive_submission(
+                    state, client, base, &retry_key,
+                    json!({
+                        "mode": "continue",
+                        "conversationId": conversation_id,
+                        "idempotencyKey": retry_key,
+                        "text": build_summary_prompt(Some(first.chars().count())),
+                    }),
+                ).await;
+                match outcome {
+                    Ok(ArchiveSubmissionOutcome::Failed { error }) => {
+                        mark_summary_stage_failure(state, job, mode, &error).await?;
+                    }
+                    Ok(_) => {
+                        state.repo.update_lecture_notes_error(
+                            &job.lecture_key,
+                            &format!("摘要格式校验未通过（{reason}），RQCI 已接管修正请求"),
+                        ).await?;
+                    }
+                    Err((_, message)) => {
+                        state.repo.update_lecture_notes_error(&job.lecture_key, &message).await?;
+                    }
+                }
+                return Ok(());
+            }
+        }
+    } else {
+        first.to_string()
+    };
+    if let Some(reason) = public_summary_rejection(&summary) {
+        mark_summary_stage_failure(state, job, mode, &format!("摘要一次重试仍不合格：{reason}")).await?;
+        return Ok(());
+    }
+    mark_summary_stage_ready(state, job, mode, &summary, 0).await?;
+    Ok(())
+}
+
 async fn process_summary_stage(
     state: &AppState,
     job: &LectureNotesRecord,
