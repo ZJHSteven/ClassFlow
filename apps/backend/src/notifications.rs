@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::time::sleep;
 use tracing::{info, warn};
 
@@ -125,7 +125,10 @@ async fn deliver_event(
 
     let response = request.send().await?;
     if response.status().is_success() {
-        return Ok(());
+        // HTTP 200 只代表 Worker 接收了请求。
+        // 如果手机订阅已失效/不存在，过去 sent=0 也会在 outbox 中被错误标记 sent。
+        let ack: Value = response.json().await?;
+        return confirm_web_push_ack(&ack);
     }
 
     let status = response.status();
@@ -137,9 +140,32 @@ async fn deliver_event(
     )))
 }
 
+/// 只有至少一个推送端点接受了消息才确认通知发出；
+/// 即使成功也不宣称 iPhone 已显示系统横幅（APNs/设备仍有最终决定权）。
+fn confirm_web_push_ack(ack: &Value) -> AppResult<()> {
+    if ack.get("accepted").and_then(Value::as_bool) != Some(true)
+        || ack.get("suppressed").and_then(Value::as_bool) != Some(false)
+    {
+        return Err(AppError::External("通知网关没有接受实际推送".into()));
+    }
+    let sent = ack.get("sent").and_then(Value::as_u64).unwrap_or(0);
+    if sent == 0 {
+        let subscribers = ack
+            .get("subscriptions")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        return Err(AppError::External(format!(
+            "通知网关返回 200，但没有向任何设备成功推送（订阅设备数={subscribers}）"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::confirm_web_push_ack;
     use crate::repository::notification_retry_delay_secs;
+    use serde_json::json;
 
     #[test]
     fn retry_backoff_should_grow_and_cap_at_one_hour() {
@@ -147,5 +173,28 @@ mod tests {
         assert_eq!(notification_retry_delay_secs(2), 60);
         assert_eq!(notification_retry_delay_secs(3), 120);
         assert_eq!(notification_retry_delay_secs(20), 3600);
+    }
+
+    #[test]
+    fn webhook_http_200_should_not_be_mistaken_for_device_delivery() {
+        assert!(
+            confirm_web_push_ack(&json!({
+                "accepted": true, "suppressed": false, "subscriptions": 1, "sent": 1
+            }))
+            .is_ok()
+        );
+        assert!(
+            confirm_web_push_ack(&json!({
+                "accepted": true, "suppressed": false, "subscriptions": 0, "sent": 0
+            }))
+            .is_err()
+        );
+        assert!(
+            confirm_web_push_ack(&json!({
+                "accepted": true, "suppressed": true, "subscriptions": 1, "sent": 0
+            }))
+            .is_err()
+        );
+        assert!(confirm_web_push_ack(&json!({"accepted": true})).is_err());
     }
 }

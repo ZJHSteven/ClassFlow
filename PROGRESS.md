@@ -1,3 +1,4 @@
+- 后端通知webhook现验证Worker实际sent>=1而非仅HTTP 200，0订阅或suppressed记录为投递失败并由outbox重试/告警，附单测。
 - 按本次用户要求，Notes succeeded留审计而不再直接发iOS成功Push；只有邮件服务确认sent才发整堂课最终成功推送，故障照常提醒。
 - SmartClass Collector新增认证失效立即告警或连续3次扫描失败报警；每天按故障类型去重，解决录播发现阶段无Task时的静默失败。
 - 课程详情API新增email_status/email_error，前端课程详情明确区分Notes完成与邮件待发/重试/已确认发送，避免局部成功伪装最终成功。
