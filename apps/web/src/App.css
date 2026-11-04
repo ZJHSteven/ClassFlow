@@ -1126,22 +1126,15 @@
 }
 
 /*
- * iOS Home Screen Web App：
- * Safari 标签页需要正常的页面留白；standalone 没有浏览器顶部 chrome 后，原来的 18px
- * shell padding 会直接露成一条浅色空白。让首屏 hero 背景铺到状态栏底下，再把 hero
- * 内容本身按 safe-area 往下推，既消掉白缝也不会让刘海/状态栏压住文字。
+ * iOS 主屏幕独立模式：把状态栏安全区留给页面，而不是塞入介绍卡片。
+ *
+ * 原实现让 hero 横向出血、取消上圆角、扩展到状态栏，导致其变成高大的深色顶栏。
+ * 这里只调整页面容器的上边距；hero 沿用与 Safari 一致的完整圆角和卡片内边距。
+ * 使用 safe-area-inset-top 兼容灵动岛与刘海，同时防止内容覆盖状态栏。
  */
 @media (max-width: 760px) {
   html.is-standalone .shell {
-    padding-top: 0;
-  }
-
-  html.is-standalone .hero {
-    margin-inline: -14px;
     padding-top: calc(18px + env(safe-area-inset-top, 0px));
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
-    border-top-width: 0;
   }
 }
 
