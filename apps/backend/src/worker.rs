@@ -594,7 +594,7 @@ async fn schedule_remote_asr_retry(state: &AppState, task_id: &str, error: &str)
     // 现在默认最多4次（含第一次），超限直接终止并通过任务failed事件通知用户。
     // 原始音频/已保存的远端job checkpoint仍保留，方便人工恢复而不重新下载。
     let max_attempts = state.config.remote_capswriter_max_task_attempts.max(1);
-    if task.attempt_count >= max_attempts {
+    if task.attempt_count >= i64::from(max_attempts) {
         let message = format!(
             "远程 ASR 已累计尝试 {} 次，达到上限 {}，停止自动重试、等待人工检查。最后错误: {}",
             task.attempt_count, max_attempts, error
