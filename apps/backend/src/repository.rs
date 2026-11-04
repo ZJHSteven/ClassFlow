@@ -60,6 +60,22 @@ pub struct NewStageEvent<'a> {
     pub payload: &'a serde_json::Value,
 }
 
+/// 一堂计划课程的四层真实状态（录播任务、Notes、摘要、邮件服务接受）。
+///
+/// 特别注意：emails_sent 只证明摘要邮件的发送接口确认成功，
+/// Gmail 收件箱/垃圾邮件的实际分类必须由 Gmail 侧进一步确认。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClassDeliverySnapshot {
+    pub task_count: i64,
+    pub task_failed: i64,
+    pub task_unfinished: i64,
+    pub notes_count: i64,
+    pub notes_failed: i64,
+    pub notes_unfinished: i64,
+    pub emails_sent: i64,
+    pub last_error: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct Repository {
     pool: SqlitePool,
@@ -1419,6 +1435,59 @@ impl Repository {
         .await?)
     }
 
+    /// 按课表同一课次聚合 SQLite 中的实际流水线状态。
+    ///
+    /// 无论 SmartClass 是否发现录播，本方法都返回快照；没有任务时各计数为零。
+    /// 避免只查询已有 tasks 而无法发现整堂课根本未入队的问题。
+    pub async fn class_delivery_snapshot(
+        &self,
+        semester: &str,
+        course_name: &str,
+        date: &str,
+    ) -> AppResult<ClassDeliverySnapshot> {
+        let task = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0) AS failed,
+                COALESCE(SUM(CASE WHEN status<>'succeeded' THEN 1 ELSE 0 END), 0) AS unfinished
+            FROM tasks WHERE semester=? AND course_name=? AND date=?
+            "#,
+        )
+        .bind(semester)
+        .bind(course_name)
+        .bind(date)
+        .fetch_one(&self.pool)
+        .await?;
+        let notes = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), 0) AS failed,
+                COALESCE(SUM(CASE WHEN status<>'succeeded' THEN 1 ELSE 0 END), 0) AS unfinished,
+                COALESCE(SUM(CASE WHEN status='succeeded' AND summary_email_sent_at IS NOT NULL
+                                   THEN 1 ELSE 0 END), 0) AS emails_sent,
+                MAX(COALESCE(summary_email_last_error, last_error)) AS last_error
+            FROM lecture_notes WHERE semester=? AND course_name=? AND date=?
+            "#,
+        )
+        .bind(semester)
+        .bind(course_name)
+        .bind(date)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(ClassDeliverySnapshot {
+            task_count: task.get("total"),
+            task_failed: task.get("failed"),
+            task_unfinished: task.get("unfinished"),
+            notes_count: notes.get("total"),
+            notes_failed: notes.get("failed"),
+            notes_unfinished: notes.get("unfinished"),
+            emails_sent: notes.get("emails_sent"),
+            last_error: notes.get("last_error"),
+        })
+    }
+
     pub async fn get_lecture_notes(
         &self,
         lecture_key: &str,
@@ -1944,6 +2013,33 @@ impl Repository {
         .bind(lecture_key)
         .execute(&self.pool)
         .await?;
+        // 只有邮件服务确认接受之后，才允许发出“邮件已发送”的最终通知；
+        // Notes 的 succeeded 是上游阶段成功，不等于 Gmail 已收到。
+        if let Ok(Some(notes)) = self.get_lecture_notes(lecture_key).await {
+            let event_key = format!("email:{}:accepted", notes.lecture_key);
+            let title = format!(
+                "{} · {} {}-{}",
+                notes.course_name, notes.date, notes.start_time, notes.end_time
+            );
+            let payload = serde_json::json!({
+                "lecture_key": notes.lecture_key,
+                "course_name": notes.course_name,
+                "date": notes.date,
+                "message_id": notes.summary_email_message_id,
+            });
+            if let Err(error) = self.enqueue_stage_event(NewStageEvent {
+                event_key: &event_key,
+                source_kind: "delivery",
+                source_id: lecture_key,
+                stage: "email",
+                outcome: "sent",
+                title: &title,
+                message: "课堂 Notes 已发布；摘要邮件已被邮件服务接受（收件箱/垃圾邮件分类仍由 Gmail 决定）",
+                payload: &payload,
+            }).await {
+                warn!("邮件已发送但最终通知写入失败: lecture_key={}, error={}", lecture_key, error);
+            }
+        }
         Ok(())
     }
 
@@ -2162,6 +2258,12 @@ impl Repository {
 /// ClassFlow 手机通知只保留高信号结果，避免“每个内部 stage 都 push 一次”造成通知轰炸。
 pub(crate) fn should_notify_stage_event(source_kind: &str, stage: &str, outcome: &str) -> bool {
     if outcome == "failed" {
+        return true;
+    }
+    if source_kind == "schedule" && stage == "coverage" && outcome == "warning" {
+        return true;
+    }
+    if source_kind == "delivery" && stage == "email" && outcome == "sent" {
         return true;
     }
     source_kind == "notes" && stage == "notes" && outcome == "succeeded"
@@ -3012,6 +3114,9 @@ mod tests {
         assert!(should_notify_stage_event("task", "downloading", "failed"));
         assert!(should_notify_stage_event("notes", "notes", "failed"));
         assert!(should_notify_stage_event("notes", "notes", "succeeded"));
+        assert!(should_notify_stage_event("schedule", "coverage", "warning"));
+        assert!(should_notify_stage_event("delivery", "email", "sent"));
+        assert!(!should_notify_stage_event("task", "download", "warning"));
     }
 
     #[tokio::test]
