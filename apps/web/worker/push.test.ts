@@ -51,4 +51,23 @@ describe('ClassFlow Web Push', () => {
       sent: 0,
     })
   })
+
+  it('邮件服务确认后才推送最终完成通知', () => {
+    const payload = buildStagePushPayload(event({
+      source_kind: 'delivery',
+      stage: 'email',
+      outcome: 'sent',
+    }), 'https://classflow.zjhstudio.com')
+    expect(payload.notification.title).toContain('摘要邮件已发送')
+  })
+
+  it('计划课程未完成时应发送告警，而非显示Notes成功', () => {
+    const payload = buildStagePushPayload(event({
+      source_kind: 'schedule',
+      source_id: '2026-11-03:医学统计学',
+      stage: 'coverage',
+      outcome: 'warning',
+    }), 'https://classflow.zjhstudio.com')
+    expect(payload.notification.title).toContain('课表课程逾期')
+  })
 })

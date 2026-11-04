@@ -1,3 +1,4 @@
+- Cloudflare Worker通知筛选已加入“课表逾期warning”与“邮件服务确认sent”，Notes通知标明只是阶段成功；已有Web Push单元测试。
 - 新增可开关的 schedule monitor：下课超过3小时后按课表核对录播、ASR、Notes、邮件接口确认，按稳定event_key对异常分类去重；默认关闭、生产以起始日期启用，避免历史通知风暴。
 - SQLite 课程快照现在可查空任务、失败片段、Notes及邮件确认数量；邮件确认时写唯一最终成功事件，供通知outbox消费。
 # 2026-11-04 iOS 主屏幕顶部介绍卡片视觉回归修复

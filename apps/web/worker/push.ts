@@ -197,6 +197,11 @@ export function buildStagePushPayload(
   const isNotesSuccess =
     event.source_kind === 'notes' && event.stage === 'notes' && event.outcome === 'succeeded'
   const isFailure = event.outcome === 'failed'
+  // Notes 完成只代表中间阶段，完整成功应等待邮件服务接受。
+  const isEmailAccepted =
+    event.source_kind === 'delivery' && event.stage === 'email' && event.outcome === 'sent'
+  const isScheduleWarning =
+    event.source_kind === 'schedule' && event.stage === 'coverage' && event.outcome === 'warning'
 
   const title = isNotesSuccess
     ? 'ClassFlow · 课堂笔记完成'
@@ -209,6 +214,14 @@ export function buildStagePushPayload(
     : `${event.title} · ${trimText(event.message, 150)}`
 
   const navigate = new URL(publicOrigin + '/')
+  const finalTitle = isEmailAccepted
+    ? 'ClassFlow｜课堂处理完成，摘要邮件已发送'
+    : isScheduleWarning
+      ? 'ClassFlow｜课表课程逾期未完成'
+      : title
+  const finalBody = isNotesSuccess
+    ? `${body}（Notes 已发布，摘要邮件仍待确认）`
+    : body
   navigate.searchParams.set('source', 'push')
   if (event.source_kind === 'task') navigate.searchParams.set('task', event.source_id)
 
@@ -216,8 +229,8 @@ export function buildStagePushPayload(
     web_push: 8030,
     app_badge: '1',
     notification: {
-      title,
-      body: trimText(body, 180),
+      title: finalTitle,
+      body: trimText(finalBody, 180),
       navigate: navigate.toString(),
       silent: false,
       tag: `classflow-${event.event_key}`,
@@ -227,6 +240,8 @@ export function buildStagePushPayload(
 
 function isHighSignalEvent(event: StageEventWebhookPayload): boolean {
   return event.outcome === 'failed'
+    || (event.source_kind === 'delivery' && event.stage === 'email' && event.outcome === 'sent')
+    || (event.source_kind === 'schedule' && event.stage === 'coverage' && event.outcome === 'warning')
     || (
       event.source_kind === 'notes'
       && event.stage === 'notes'
