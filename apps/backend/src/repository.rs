@@ -2247,6 +2247,20 @@ impl Repository {
                 "只有失败的 Notes 任务才能重试".to_string(),
             ));
         }
+        // Archive 旧 Job 已永久失败时，同幂等键无法重新创建 Actor 会话。
+        // 先阻止用户误点普通重试；必须由人工核实并采用新的安全输入方案。
+        if existing.conversation_id.is_none()
+            && existing.recovery_kind.as_deref() == Some("manual_review")
+            && existing.last_error.as_deref().is_some_and(|reason| {
+                reason.contains("HTTP 413")
+                    || reason.contains("input_too_large")
+                    || reason.contains("Archive submission 终止")
+            })
+        {
+            return Err(AppError::BadRequest(
+                "Archive 已有永久失败的旧提交，沿用幂等键无法创建新会话。必须先核查原Job，再以附件或其他受控输入方式恢复；禁止盲目重发。".to_string(),
+            ));
+        }
         sqlx::query(
             if existing.notes_markdown.as_deref().is_some_and(|value| !value.trim().is_empty())
                 && existing.conversation_id.as_deref().is_some_and(|value| !value.trim().is_empty())
