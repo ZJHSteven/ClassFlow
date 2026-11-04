@@ -506,7 +506,7 @@ impl AppConfig {
                 "CLASSFLOW_NOTIFICATION_POLL_INTERVAL_SECS",
                 15.0,
             )?,
-            notification_max_attempts: env_or_parse("CLASSFLOW_NOTIFICATION_MAX_ATTEMPTS", 8)?,
+            notification_max_attempts: env_or_parse("CLASSFLOW_NOTIFICATION_MAX_ATTEMPTS", 4)?,
             summary_email_enabled: env_or_parse("CLASSFLOW_SUMMARY_EMAIL_ENABLED", false)?,
             summary_email_webhook_url: env::var("CLASSFLOW_SUMMARY_EMAIL_WEBHOOK_URL")
                 .unwrap_or_default(),
@@ -514,7 +514,7 @@ impl AppConfig {
                 "CLASSFLOW_SUMMARY_EMAIL_POLL_INTERVAL_SECS",
                 30.0,
             )?,
-            summary_email_max_attempts: env_or_parse("CLASSFLOW_SUMMARY_EMAIL_MAX_ATTEMPTS", 8)?,
+            summary_email_max_attempts: env_or_parse("CLASSFLOW_SUMMARY_EMAIL_MAX_ATTEMPTS", 4)?,
             summary_backfill_enabled: env_or_parse("CLASSFLOW_SUMMARY_BACKFILL_ENABLED", false)?,
             summary_backfill_since_date: env_or(
                 "CLASSFLOW_SUMMARY_BACKFILL_SINCE_DATE",
