@@ -28,13 +28,19 @@ const MONITOR_LOOKBACK_DAYS: i64 = 14;
 /// 优先报告上游缺失/失败，避免将“根本没有录像”的课误报为邮件故障。
 fn overdue_kind(snapshot: &ClassDeliverySnapshot) -> Option<(&'static str, &'static str)> {
     if snapshot.task_count == 0 {
-        return Some(("recording_missing", "课表已结束，但 ClassFlow 尚未找到 SmartClass 录像；请确认本课是否提供录播"));
+        return Some((
+            "recording_missing",
+            "课表已结束，但 ClassFlow 尚未找到 SmartClass 录像；请确认本课是否提供录播",
+        ));
     }
     if snapshot.task_failed > 0 {
         return Some(("asr_failed", "已有录像片段处理失败，需要检查任务错误与重试"));
     }
     if snapshot.task_unfinished > 0 {
-        return Some(("asr_stalled", "录像任务尚未全部完成 ASR，处理明显晚于课表结束时间"));
+        return Some((
+            "asr_stalled",
+            "录像任务尚未全部完成 ASR，处理明显晚于课表结束时间",
+        ));
     }
     if snapshot.notes_count == 0 {
         return Some(("notes_missing", "录像已转录，但整堂 Notes 任务尚未创建"));
@@ -46,7 +52,10 @@ fn overdue_kind(snapshot: &ClassDeliverySnapshot) -> Option<(&'static str, &'sta
         return Some(("notes_stalled", "整堂 Notes 尚未生成完毕，正在等待或重试"));
     }
     if snapshot.emails_sent < snapshot.notes_count {
-        return Some(("email_missing", "Notes 已发布，但摘要邮件尚未获得发送接口确认"));
+        return Some((
+            "email_missing",
+            "Notes 已发布，但摘要邮件尚未获得发送接口确认",
+        ));
     }
     None
 }
@@ -76,7 +85,9 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
     let today = now.with_timezone(&shanghai).date_naive();
     let first_date = since.max(today - Duration::days(MONITOR_LOOKBACK_DAYS));
     let planned = state.course_schedule.planned_classes_between(
-        &state.config.default_semester, first_date, today,
+        &state.config.default_semester,
+        first_date,
+        today,
     );
     let mut audited = 0;
     for class in planned {
@@ -85,9 +96,10 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
             continue;
         }
         audited += 1;
-        let snapshot = state.repo.class_delivery_snapshot(
-            &class.semester, &class.course_name, &class.date,
-        ).await?;
+        let snapshot = state
+            .repo
+            .class_delivery_snapshot(&class.semester, &class.course_name, &class.date)
+            .await?;
         let Some((kind, explanation)) = overdue_kind(&snapshot) else {
             continue;
         };
@@ -100,29 +112,41 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
         let title = format!("{} · {}", class.date, class.course_name);
         let message = format!(
             "{}（录播片段 {}、Notes {}、邮件确认 {}）。{}",
-            explanation, snapshot.task_count, snapshot.notes_count, snapshot.emails_sent,
-            snapshot.last_error.as_deref().unwrap_or("").chars().take(120).collect::<String>(),
+            explanation,
+            snapshot.task_count,
+            snapshot.notes_count,
+            snapshot.emails_sent,
+            snapshot
+                .last_error
+                .as_deref()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect::<String>(),
         );
-        state.repo.enqueue_stage_event(NewStageEvent {
-            event_key: &event_key,
-            source_kind: "schedule",
-            source_id: &source_id,
-            stage: "coverage",
-            outcome: "warning",
-            title: &title,
-            message: &message,
-            payload: &json!({
-                "date": class.date,
-                "semester": class.semester,
-                "course_name": class.course_name,
-                "reason": kind,
-                "task_count": snapshot.task_count,
-                "task_failed": snapshot.task_failed,
-                "notes_count": snapshot.notes_count,
-                "notes_failed": snapshot.notes_failed,
-                "emails_sent": snapshot.emails_sent,
-            }),
-        }).await?;
+        state
+            .repo
+            .enqueue_stage_event(NewStageEvent {
+                event_key: &event_key,
+                source_kind: "schedule",
+                source_id: &source_id,
+                stage: "coverage",
+                outcome: "warning",
+                title: &title,
+                message: &message,
+                payload: &json!({
+                    "date": class.date,
+                    "semester": class.semester,
+                    "course_name": class.course_name,
+                    "reason": kind,
+                    "task_count": snapshot.task_count,
+                    "task_failed": snapshot.task_failed,
+                    "notes_count": snapshot.notes_count,
+                    "notes_failed": snapshot.notes_failed,
+                    "emails_sent": snapshot.emails_sent,
+                }),
+            })
+            .await?;
     }
     info!("课表完整性巡检完成: 已核对 {} 堂逾期课次", audited);
     Ok(())
@@ -141,7 +165,9 @@ mod tests {
     #[test]
     fn should_not_treat_asr_or_notes_success_as_email_success() {
         let mut snapshot = ClassDeliverySnapshot {
-            task_count: 2, notes_count: 1, ..Default::default()
+            task_count: 2,
+            notes_count: 1,
+            ..Default::default()
         };
         assert_eq!(overdue_kind(&snapshot).unwrap().0, "email_missing");
         snapshot.emails_sent = 1;
@@ -156,7 +182,9 @@ mod tests {
     #[test]
     fn pipeline_stages_have_distinct_overdue_reasons() {
         let mut snapshot = ClassDeliverySnapshot {
-            task_count: 3, task_unfinished: 1, ..Default::default()
+            task_count: 3,
+            task_unfinished: 1,
+            ..Default::default()
         };
         assert_eq!(overdue_kind(&snapshot).unwrap().0, "asr_stalled");
         snapshot.task_unfinished = 0;

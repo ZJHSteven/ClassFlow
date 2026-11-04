@@ -451,11 +451,10 @@ impl AppConfig {
             )),
             // 首次升级时默认关闭以防旧学期几十条通知同时补发；
             // 生产只从显式指定日期起审计，之后自动覆盖新的教学日。
-            schedule_monitor_enabled: env_or_parse(
-                "CLASSFLOW_SCHEDULE_MONITOR_ENABLED", false,
-            )?,
+            schedule_monitor_enabled: env_or_parse("CLASSFLOW_SCHEDULE_MONITOR_ENABLED", false)?,
             schedule_monitor_since_date: env_or(
-                "CLASSFLOW_SCHEDULE_MONITOR_SINCE_DATE", "9999-12-31",
+                "CLASSFLOW_SCHEDULE_MONITOR_SINCE_DATE",
+                "9999-12-31",
             ),
             notes_schedule_grace_minutes: env_or_parse(
                 "CLASSFLOW_NOTES_SCHEDULE_GRACE_MINUTES",

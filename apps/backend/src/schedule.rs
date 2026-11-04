@@ -82,7 +82,11 @@ impl CourseSchedule {
             return Vec::new();
         }
         for course in &self.courses {
-            if course.semester.as_deref().is_some_and(|value| value != semester) {
+            if course
+                .semester
+                .as_deref()
+                .is_some_and(|value| value != semester)
+            {
                 continue;
             }
             for event in &course.events {
@@ -257,12 +261,14 @@ mod tests {
         assert_eq!(classes.len(), 2);
         assert_eq!(classes[0].end_utc.to_rfc3339(), "2026-10-29T08:15:00+00:00");
         assert_eq!(classes[1].date, "2026-11-05");
-        assert!(schedule
-            .planned_classes_between(
-                "other-semester",
-                NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
-                NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()
-            )
-            .is_empty());
+        assert!(
+            schedule
+                .planned_classes_between(
+                    "other-semester",
+                    NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+                    NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()
+                )
+                .is_empty()
+        );
     }
 }
