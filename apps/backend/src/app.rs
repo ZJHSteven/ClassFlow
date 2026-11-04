@@ -21,6 +21,7 @@ use tracing::{info, warn};
 
 use crate::{
     artifacts::{ArtifactStore, build_artifact_store},
+    class_monitor::spawn_class_monitor,
     asr::{AsrProvider, DashScopeAsrProvider, LocalQwenAsrProvider, RemoteCapsWriterAsrProvider},
     config::AppConfig,
     error::AppResult,
@@ -114,6 +115,7 @@ pub async fn run_server(config: AppConfig) -> AppResult<()> {
     }
 
     spawn_smartclass_collector(state.clone());
+    spawn_class_monitor(state.clone());
     spawn_notes_worker(state.clone());
     spawn_summary_email_worker(state.clone());
     spawn_notification_worker(state.clone());

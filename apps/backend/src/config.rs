@@ -142,6 +142,8 @@ pub struct AppConfig {
     pub notes_auto_since_date: String,
     pub notes_poll_interval_secs: f64,
     pub course_schedule_path: PathBuf,
+    pub schedule_monitor_enabled: bool,
+    pub schedule_monitor_since_date: String,
     pub notes_schedule_grace_minutes: i64,
     pub notes_project_name: String,
     pub archive_bridge_base_url: String,
@@ -447,6 +449,14 @@ impl AppConfig {
                 "CLASSFLOW_COURSE_SCHEDULE_PATH",
                 "./config/class-schedule-lifeops.json",
             )),
+            // 首次升级时默认关闭以防旧学期几十条通知同时补发；
+            // 生产只从显式指定日期起审计，之后自动覆盖新的教学日。
+            schedule_monitor_enabled: env_or_parse(
+                "CLASSFLOW_SCHEDULE_MONITOR_ENABLED", false,
+            )?,
+            schedule_monitor_since_date: env_or(
+                "CLASSFLOW_SCHEDULE_MONITOR_SINCE_DATE", "9999-12-31",
+            ),
             notes_schedule_grace_minutes: env_or_parse(
                 "CLASSFLOW_NOTES_SCHEDULE_GRACE_MINUTES",
                 15,

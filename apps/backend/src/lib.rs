@@ -19,6 +19,7 @@
 */
 
 pub mod app;
+pub mod class_monitor;
 pub mod artifacts;
 pub mod asr;
 pub mod config;
