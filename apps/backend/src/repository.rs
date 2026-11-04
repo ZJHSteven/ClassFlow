@@ -2623,6 +2623,70 @@ mod tests {
             .expect("内存数据库应该创建成功")
     }
 
+    #[tokio::test]
+    async fn notes_remote_errors_stop_after_four_and_keep_original_conversation() {
+        let repo = repo().await;
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO lecture_notes (lecture_key,course_key,semester,course_name,teacher_name,date,start_time,end_time,sequence_no,status,transcript_sha256,conversation_id,notes_markdown,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'generating',?,?,?,?,?)",
+        )
+        .bind("unit-notes-retry")
+        .bind("unit-course")
+        .bind("2026-2027-1")
+        .bind("呼吸系统")
+        .bind("老师")
+        .bind("2026-10-28")
+        .bind("13:30")
+        .bind("16:15")
+        .bind(1_i64)
+        .bind("transcript-sha")
+        .bind("existing-chatgpt-conversation")
+        .bind("既有 Notes 正文不能丢失")
+        .bind(&now)
+        .bind(&now)
+        .execute(repo.pool())
+        .await
+        .expect("应能创建现有生成任务");
+        for attempt in 1..=3 {
+            assert!(
+                !repo
+                    .record_notes_transport_failure("unit-notes-retry", "模拟Archive 502", 4,)
+                    .await
+                    .unwrap()
+            );
+            assert!(
+                !repo
+                    .notes_transport_retry_due("unit-notes-retry")
+                    .await
+                    .unwrap()
+            );
+            let count: i64 = sqlx::query_scalar(
+                "SELECT notes_transport_error_count FROM lecture_notes WHERE lecture_key='unit-notes-retry'",
+            ).fetch_one(repo.pool()).await.unwrap();
+            assert_eq!(count, attempt);
+        }
+        assert!(
+            repo.record_notes_transport_failure("unit-notes-retry", "模拟Archive 502", 4,)
+                .await
+                .unwrap()
+        );
+        let saved = repo
+            .get_lecture_notes("unit-notes-retry")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.status, LectureNotesStatus::Failed);
+        assert_eq!(saved.recovery_kind.as_deref(), Some("manual_review"));
+        assert_eq!(
+            saved.conversation_id.as_deref(),
+            Some("existing-chatgpt-conversation")
+        );
+        assert_eq!(
+            saved.notes_markdown.as_deref(),
+            Some("既有 Notes 正文不能丢失")
+        );
+    }
+
     fn demo_request() -> IntakeBatchRequest {
         IntakeBatchRequest {
             semester: None,
