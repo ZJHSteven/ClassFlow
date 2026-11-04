@@ -1,3 +1,4 @@
+- SmartClass Collector新增认证失效立即告警或连续3次扫描失败报警；每天按故障类型去重，解决录播发现阶段无Task时的静默失败。
 - 课程详情API新增email_status/email_error，前端课程详情明确区分Notes完成与邮件待发/重试/已确认发送，避免局部成功伪装最终成功。
 - 修复API集成测试的AppConfig新字段缺失，避免cargo clippy --all-targets编译失败。
 - 新增监控配置后，已同步两个AppConfig测试构造器并执行rustfmt；等待后端全量测试。

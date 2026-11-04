@@ -18,6 +18,7 @@ use crate::{
     course::normalize_segment_time,
     error::{AppError, AppResult},
     models::{IntakeBatchRequest, IntakeItem},
+    repository::NewStageEvent,
     smartclass_session::SmartClassVideo,
 };
 
@@ -69,6 +70,9 @@ impl SmartClassCollector {
         // backfill 债务；任何鉴权失效都会重新置为 true。
         let mut needs_initial_backfill = true;
         let interval_secs = self.state.config.smartclass_poll_interval_secs.max(60);
+        // 录播发现阶段失败时尚无 Task，因此原先不会产生任务失败通知。
+        // 对持续扫描故障额外报警，避免静默失去整天课程。
+        let mut consecutive_scan_failures = 0u32;
 
         loop {
             let lookback_days = if needs_initial_backfill {
@@ -81,9 +85,50 @@ impl SmartClassCollector {
             };
 
             let scan_result = self.scan_recent_days(lookback_days).await;
+            if scan_result.is_ok() {
+                consecutive_scan_failures = 0;
+            }
             needs_initial_backfill =
                 next_backfill_requirement(needs_initial_backfill, &scan_result);
             if let Err(error) = scan_result {
+                consecutive_scan_failures = consecutive_scan_failures.saturating_add(1);
+                // 认证失效立即提示；其它偶发 HTTP/网络错误先容忍两轮重试。
+                if matches!(error, AppError::Unauthorized) || consecutive_scan_failures >= 3 {
+                    let reason = if matches!(error, AppError::Unauthorized) {
+                        "auth"
+                    } else {
+                        "scan"
+                    };
+                    let event_key = format!(
+                        "smartclass:collector:{}:{reason}",
+                        Local::now().date_naive()
+                    );
+                    let payload = serde_json::json!({
+                        "reason": reason,
+                        "consecutive_failures": consecutive_scan_failures,
+                    });
+                    let message = format!(
+                        "SmartClass 自动扫描持续失败，新的课程录像可能未入队：{}",
+                        error.to_string().chars().take(180).collect::<String>(),
+                    );
+                    if let Err(notify_error) = self
+                        .state
+                        .repo
+                        .enqueue_stage_event(NewStageEvent {
+                            event_key: &event_key,
+                            source_kind: "collector",
+                            source_id: "smartclass",
+                            stage: "scan",
+                            outcome: "failed",
+                            title: "SmartClass 录播发现异常",
+                            message: &message,
+                            payload: &payload,
+                        })
+                        .await
+                    {
+                        warn!("SmartClass 故障通知写入失败: {notify_error}");
+                    }
+                }
                 warn!("SmartClass Collector 本轮失败: {error}");
             }
             tokio::time::sleep(StdDuration::from_secs(interval_secs)).await;
