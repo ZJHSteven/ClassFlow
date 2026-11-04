@@ -1,3 +1,11 @@
+# 2026-11-05 Archive Actor 413：安全附件发送设计（尚未实施）
+- 现状：ClassFlow 的 /v1/jobs 只传 text；Archive ActorSendOptions 仅支持 prompt 字符串和CDP Input.insertText，并未实现把本地TXT/PDF作为附件送入ChatGPT对话。CLI 的 --prompt-file 是读取文件内容并输入编辑器，不是文件上传。
+- 建议把“413 已确认永久失败”作为终止条件，不自动重发、更不套同一 idempotencyKey。10/28呼吸的 32525 字符原ASR仍在N1 SQLite；原Archive Job已持久化 failed、无Conversation ID。
+- 真正支持附件需分三层：①ClassFlow导出UTF-8 Markdown/TXT并计算SHA256；②通过受鉴权的Archive Bridge上传文件流/校验摘要，Windows按唯一Job存储临时文件；③Actor在ChatGPT网页使用文件选择组件附上实际文件并等待上传完成，校验发送请求与最终Conversation绑定，再发送简短笔记生成指令。
+- 幂等：同一个业务 lecture_key 保留父记录，新增明确的人工 attempt=2 标识；禁止变更旧attempt内容导致幂等键冲突；先核查旧Job没有有效会话和残留turn，再允许新attempt。
+- 附件上传失败、413/429、会话创建未知等均停止自动重发并通知人工核验；不要暗中回退到分片多条POST（多条消息可能产出多次Notes或触发429）。
+- 验收：测试小TXT、较长ASR、附件上传延迟、权限失败、重复请求、浏览器重启、SSE未最终完成、上传失败回滚。没有完整E2E证据不得在生产对旧课次启用。
+- 产品说明：ChatGPT网页本身支持TXT/PDF/DOCX文件，不能据此推断当前Archive Actor已有附件上传能力。
 # 2026-11-04 ClassFlow 逐课完整性、Gmail 与推送闭环审计
 
 ## 生产取证与问题
