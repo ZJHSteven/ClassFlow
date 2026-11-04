@@ -1,3 +1,4 @@
+- [2026-11-05] 追加Notes外部服务故障持久化次数、指数退避时间和第四次终止人工核对，保留原CID/Job；待接入Notes worker并测试。
 - [2026-11-05] 修正remote ASR尝试次数i64/u32类型比较问题。
 - [2026-11-05] 修复远程CapsWriter ASR无界重试：新增max_task_attempts默认4（含初次），超限mark_task_failed并发高优先级告警；保留audio/job checkpoint供人工恢复。
 - [2026-11-05] 修正PowerShell日期自动转换，已按精确课次ID明确标记10/22实验诊断学及11/11呼吸系统综合实验的smartclass_expected=false。

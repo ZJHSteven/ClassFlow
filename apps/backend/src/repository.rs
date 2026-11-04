@@ -251,6 +251,8 @@ impl Repository {
                 last_error TEXT,
                 recovery_kind TEXT,
                 submit_attempt_count INTEGER NOT NULL DEFAULT 0,
+                notes_transport_error_count INTEGER NOT NULL DEFAULT 0,
+                notes_transport_retry_after TEXT,
                 submitted_at TEXT,
                 completed_at TEXT,
                 created_at TEXT NOT NULL,
@@ -314,6 +316,13 @@ impl Repository {
         self.ensure_optional_lecture_notes_column("summary_email_message_id", "TEXT")
             .await?;
         self.ensure_optional_lecture_notes_column("recovery_kind", "TEXT")
+            .await?;
+        self.ensure_optional_lecture_notes_column(
+            "notes_transport_error_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        .await?;
+        self.ensure_optional_lecture_notes_column("notes_transport_retry_after", "TEXT")
             .await?;
         // 兼容 Phase 3 早期留下的两类已知失败，让升级后前端和 worker 能立刻用新语义接管。
         sqlx::query(
@@ -1812,6 +1821,64 @@ impl Repository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// 持久化 Notes 外部服务查询失败次数；只对真正发起的查询计数，不把定时轮询当新 Actor 提交。
+    /// 各次间隔采用指数退避，最多 4 次后需人工查看，不自动清空 conversation/job。
+    pub async fn notes_transport_retry_due(&self, lecture_key: &str) -> AppResult<bool> {
+        let due: Option<String> = sqlx::query_scalar(
+            "SELECT notes_transport_retry_after FROM lecture_notes WHERE lecture_key=?",
+        )
+        .bind(lecture_key)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(due.is_none_or(|value| value <= Utc::now().to_rfc3339()))
+    }
+
+    pub async fn clear_notes_transport_failures(&self, lecture_key: &str) -> AppResult<()> {
+        sqlx::query(
+            "UPDATE lecture_notes SET notes_transport_error_count=0, notes_transport_retry_after=NULL WHERE lecture_key=? AND notes_transport_error_count>0",
+        )
+        .bind(lecture_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn record_notes_transport_failure(
+        &self,
+        lecture_key: &str,
+        reason: &str,
+        max_attempts: u32,
+    ) -> AppResult<bool> {
+        let count: i64 = sqlx::query_scalar(
+            "UPDATE lecture_notes SET notes_transport_error_count=notes_transport_error_count+1, last_error=?, updated_at=? WHERE lecture_key=? RETURNING notes_transport_error_count",
+        )
+        .bind(reason)
+        .bind(Utc::now().to_rfc3339())
+        .bind(lecture_key)
+        .fetch_one(&self.pool)
+        .await?;
+        if count >= i64::from(max_attempts.max(1)) {
+            self.mark_lecture_notes_failed_with_kind(
+                lecture_key,
+                &format!(
+                    "Archive 接口连续 {} 次查询失败，已停止自动轮询并等待人工核查。原Conversation/Job保留。最后错误：{}",
+                    count, reason
+                ),
+                "manual_review",
+            )
+            .await?;
+            return Ok(true);
+        }
+        let backoff_secs = 60_i64.saturating_mul(1_i64 << count.saturating_sub(1).min(6));
+        let retry_after = (Utc::now() + chrono::Duration::seconds(backoff_secs)).to_rfc3339();
+        sqlx::query("UPDATE lecture_notes SET notes_transport_retry_after=? WHERE lecture_key=?")
+            .bind(retry_after)
+            .bind(lecture_key)
+            .execute(&self.pool)
+            .await?;
+        Ok(false)
     }
 
     pub async fn mark_lecture_notes_notes_ready(
