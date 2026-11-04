@@ -25,6 +25,10 @@ pub struct ScheduledCourse {
     pub course_name: String,
     #[serde(default)]
     pub semester: Option<String>,
+    /// 单门课程缺省是否要求 SmartClass 录播；实验课程可设为 false。
+    /// 这里只影响课程覆盖告警，绝不删除课表或阻止以后导入手动录音。
+    #[serde(default)]
+    pub smartclass_disabled: bool,
     #[serde(default)]
     pub events: Vec<ScheduledEvent>,
 }
@@ -33,6 +37,10 @@ pub struct ScheduledCourse {
 pub struct ScheduledEvent {
     pub start: String,
     pub end: String,
+    /// 单次课的特殊覆盖（例如理论课课程里的实验时段）。
+    /// None 表示沿用课程级设置，Some(true) 可以恢复课次的录播预期。
+    #[serde(default)]
+    pub smartclass_expected: Option<bool>,
     #[serde(default)]
     pub repeat: Option<ScheduledRepeat>,
 }
@@ -53,6 +61,9 @@ pub struct PlannedClass {
     pub course_name: String,
     pub date: String,
     pub end_utc: DateTime<Utc>,
+    /// 按课表时间估算应有多少个 45 分钟录播分段。
+    /// 它是异常线索而非学校授课节数的权威字段。
+    pub expected_segments: usize,
 }
 
 impl CourseSchedule {
@@ -77,7 +88,7 @@ impl CourseSchedule {
         from: NaiveDate,
         to: NaiveDate,
     ) -> Vec<PlannedClass> {
-        let mut classes = BTreeMap::<(String, String, String), DateTime<Utc>>::new();
+        let mut classes = BTreeMap::<(String, String, String), (DateTime<Utc>, usize)>::new();
         if from > to {
             return Vec::new();
         }
@@ -90,6 +101,10 @@ impl CourseSchedule {
                 continue;
             }
             for event in &course.events {
+                if !event.smartclass_expected.unwrap_or(!course.smartclass_disabled) {
+                    // disabled 只从 SmartClass 覆盖巡检中排除，不改变 Notes closure。
+                    continue;
+                }
                 let mut date = from;
                 while date <= to {
                     if let Some(end) = event.end_for_date(date) {
@@ -99,10 +114,14 @@ impl CourseSchedule {
                             date.to_string(),
                         );
                         let end_utc = end.with_timezone(&Utc);
+                        let expected = event.estimated_segment_count();
                         classes
                             .entry(key)
-                            .and_modify(|current| *current = (*current).max(end_utc))
-                            .or_insert(end_utc);
+                            .and_modify(|(current_end, count)| {
+                                *current_end = (*current_end).max(end_utc);
+                                *count += expected;
+                            })
+                            .or_insert((end_utc, expected));
                     }
                     date += Duration::days(1);
                 }
@@ -110,11 +129,12 @@ impl CourseSchedule {
         }
         classes
             .into_iter()
-            .map(|((semester, course_name, date), end_utc)| PlannedClass {
+            .map(|((semester, course_name, date), (end_utc, expected_segments))| PlannedClass {
                 semester,
                 course_name,
                 date,
                 end_utc,
+                expected_segments,
             })
             .collect()
     }
@@ -143,6 +163,19 @@ impl CourseSchedule {
 }
 
 impl ScheduledEvent {
+    fn estimated_segment_count(&self) -> usize {
+        let (Ok(start), Ok(end)) = (
+            DateTime::parse_from_rfc3339(&self.start),
+            DateTime::parse_from_rfc3339(&self.end),
+        ) else {
+            return 1;
+        };
+        let minutes = (end - start).num_minutes().max(1);
+        // SmartClass 常见的一个片段约45分钟、片段之间休息约10分钟。
+        // 55分钟取最近整数，覆盖常见45/100/165/220分钟课时。
+        // 仅用于告警：录播与课表边界不同时必须留给人工确认。
+        ((minutes + 27) / 55).max(1) as usize
+    }
     fn end_for_date(&self, target_date: NaiveDate) -> Option<DateTime<chrono::FixedOffset>> {
         let start = DateTime::parse_from_rfc3339(&self.start).ok()?;
         let end = DateTime::parse_from_rfc3339(&self.end).ok()?;
