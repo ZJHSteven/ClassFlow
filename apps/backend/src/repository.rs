@@ -2278,7 +2278,10 @@ pub(crate) fn should_notify_stage_event(source_kind: &str, stage: &str, outcome:
     if source_kind == "delivery" && stage == "email" && outcome == "sent" {
         return true;
     }
-    source_kind == "notes" && stage == "notes" && outcome == "succeeded"
+    // Notes succeeded 是中间阶段，最终成功只能在后续 email/sent 才通知。
+    // 不再让用户把“笔记已发布”误当“Gmail 邮件已送达”。
+    let _ = (source_kind, stage);
+    false
 }
 
 fn validate_intake_item(item: &crate::models::IntakeItem) -> AppResult<()> {
@@ -3125,7 +3128,7 @@ mod tests {
 
         assert!(should_notify_stage_event("task", "downloading", "failed"));
         assert!(should_notify_stage_event("notes", "notes", "failed"));
-        assert!(should_notify_stage_event("notes", "notes", "succeeded"));
+        assert!(!should_notify_stage_event("notes", "notes", "succeeded"));
         assert!(should_notify_stage_event("schedule", "coverage", "warning"));
         assert!(should_notify_stage_event("delivery", "email", "sent"));
         assert!(!should_notify_stage_event("task", "download", "warning"));

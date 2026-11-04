@@ -61,6 +61,11 @@ describe('ClassFlow Web Push', () => {
     expect(payload.notification.title).toContain('摘要邮件已发送')
   })
 
+  it('Notes 阶段成功不能当作整堂课最终成功推送', async () => {
+    const result = await dispatchStageEvent({}, event())
+    expect(result).toMatchObject({ suppressed: true, sent: 0 })
+  })
+
   it('计划课程未完成时应发送告警，而非显示Notes成功', () => {
     const payload = buildStagePushPayload(event({
       source_kind: 'schedule',

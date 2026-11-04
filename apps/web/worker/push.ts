@@ -242,11 +242,7 @@ function isHighSignalEvent(event: StageEventWebhookPayload): boolean {
   return event.outcome === 'failed'
     || (event.source_kind === 'delivery' && event.stage === 'email' && event.outcome === 'sent')
     || (event.source_kind === 'schedule' && event.stage === 'coverage' && event.outcome === 'warning')
-    || (
-      event.source_kind === 'notes'
-      && event.stage === 'notes'
-      && event.outcome === 'succeeded'
-    )
+    // 不再对 Notes 中间阶段发“成功”；真正完成的是 email/sent。
 }
 
 async function sendPayload(
