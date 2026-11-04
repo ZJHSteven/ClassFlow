@@ -1,3 +1,4 @@
+- 修复API集成测试的AppConfig新字段缺失，避免cargo clippy --all-targets编译失败。
 - 新增监控配置后，已同步两个AppConfig测试构造器并执行rustfmt；等待后端全量测试。
 - Cloudflare Worker通知筛选已加入“课表逾期warning”与“邮件服务确认sent”，Notes通知标明只是阶段成功；已有Web Push单元测试。
 - 新增可开关的 schedule monitor：下课超过3小时后按课表核对录播、ASR、Notes、邮件接口确认，按稳定event_key对异常分类去重；默认关闭、生产以起始日期启用，避免历史通知风暴。
