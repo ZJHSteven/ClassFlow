@@ -79,7 +79,8 @@
             "until": "2027-01-07"
           }
         }
-      ]
+      ],
+      "smartclass_disabled": true
     },
     {
       "course_name": "基础医学探究实验",
@@ -142,7 +143,8 @@
           "start": "2026-10-23T13:30:00+08:00",
           "end": "2026-10-23T15:10:00+08:00"
         }
-      ]
+      ],
+      "smartclass_disabled": true
     },
     {
       "course_name": "流行病学",
@@ -503,4 +505,3 @@
     }
   ]
 }
-
