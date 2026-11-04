@@ -100,7 +100,16 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
             .repo
             .class_delivery_snapshot(&class.semester, &class.course_name, &class.date)
             .await?;
-        let Some((kind, explanation)) = overdue_kind(&snapshot) else {
+        // 录像已存在却少于课程时长估算的分段数时，也应留下独立告警。
+        // 这是人工核对线索，不自动重跑 ASR 或取消既有 Notes。
+        let incomplete_recording =
+            snapshot.task_count > 0 && (snapshot.task_count as usize) < class.expected_segments;
+        let kind_and_explanation = if incomplete_recording {
+            Some(("recording_partial", "部分录播片段可能缺失，请按课表节数核对 SmartClass 原始录像"))
+        } else {
+            overdue_kind(&snapshot)
+        };
+        let Some((kind, explanation)) = kind_and_explanation else {
             continue;
         };
         // 同一课次、同一异常类型只提醒一次；变化到另一个异常类型可再次说明。
@@ -110,6 +119,7 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
         );
         let source_id = format!("{}:{}:{}", class.semester, class.date, class.course_name);
         let title = format!("{} · {}", class.date, class.course_name);
+        let explanation = format!("{explanation}（课表估算录播片段 {} 段）", class.expected_segments);
         let message = format!(
             "{}（录播片段 {}、Notes {}、邮件确认 {}）。{}",
             explanation,
@@ -140,6 +150,7 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
                     "course_name": class.course_name,
                     "reason": kind,
                     "task_count": snapshot.task_count,
+                    "expected_segments_estimate": class.expected_segments,
                     "task_failed": snapshot.task_failed,
                     "notes_count": snapshot.notes_count,
                     "notes_failed": snapshot.notes_failed,
