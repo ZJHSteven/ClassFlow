@@ -1,3 +1,4 @@
+- [2026-11-05] 课表disabled单测：整门实验与个别实验课次不进入SmartClass巡检，但仍能读取计划结束时间，普通理论课按时长推断分段。
 - [2026-11-05] 课表模型已新增课程级smartclass_disabled/课次级smartclass_expected和基于授课时长的录播段数估算；只影响巡检，不影响ASR和Notes。待补测试和部署。
 - 增加SQLite真实仓库集成测试：无任务课程返回零统计、入队未完成任务正确统计，证明课表无录像不会被漏检。
 - 后端通知webhook现验证Worker实际sent>=1而非仅HTTP 200，0订阅或suppressed记录为投递失败并由outbox重试/告警，附单测。

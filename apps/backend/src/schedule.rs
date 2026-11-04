@@ -218,9 +218,11 @@ mod tests {
             courses: vec![ScheduledCourse {
                 course_name: "泌尿生殖系统".to_string(),
                 semester: Some("2026-2027-1".to_string()),
+                smartclass_disabled: false,
                 events: vec![ScheduledEvent {
                     start: "2026-10-10T08:00:00+08:00".to_string(),
                     end: "2026-10-10T08:45:00+08:00".to_string(),
+                    smartclass_expected: None,
                     repeat: None,
                 }],
             }],
@@ -239,9 +241,11 @@ mod tests {
             courses: vec![ScheduledCourse {
                 course_name: "流行病学".to_string(),
                 semester: Some("2026-2027-1".to_string()),
+                smartclass_disabled: false,
                 events: vec![ScheduledEvent {
                     start: "2026-10-13T15:30:00+08:00".to_string(),
                     end: "2026-10-13T17:10:00+08:00".to_string(),
+                    smartclass_expected: None,
                     repeat: Some(ScheduledRepeat {
                         frequency: "weekly".to_string(),
                         days_of_week: vec![2],
@@ -268,10 +272,12 @@ mod tests {
             courses: vec![ScheduledCourse {
                 course_name: "呼吸系统".to_string(),
                 semester: Some("2026-2027-1".to_string()),
+                smartclass_disabled: false,
                 events: vec![
                     ScheduledEvent {
                         start: "2026-10-29T13:30:00+08:00".into(),
                         end: "2026-10-29T15:10:00+08:00".into(),
+                        smartclass_expected: None,
                         repeat: Some(ScheduledRepeat {
                             frequency: "weekly".into(),
                             days_of_week: vec![4],
@@ -281,6 +287,7 @@ mod tests {
                     ScheduledEvent {
                         start: "2026-10-29T15:30:00+08:00".into(),
                         end: "2026-10-29T16:15:00+08:00".into(),
+                        smartclass_expected: None,
                         repeat: None,
                     },
                 ],
@@ -293,6 +300,7 @@ mod tests {
         );
         assert_eq!(classes.len(), 2);
         assert_eq!(classes[0].end_utc.to_rfc3339(), "2026-10-29T08:15:00+00:00");
+        assert_eq!(classes[0].expected_segments, 3);
         assert_eq!(classes[1].date, "2026-11-05");
         assert!(
             schedule
@@ -303,5 +311,26 @@ mod tests {
                 )
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn disabled_experiment_should_not_enter_smartclass_monitor_but_keeps_class_schedule() {
+        let raw = r#"{"courses":[
+            {"course_name":"机能实验学","semester":"2026-2027-1","smartclass_disabled":true,
+             "events":[{"start":"2026-11-18T08:00:00+08:00","end":"2026-11-18T11:40:00+08:00"}]},
+            {"course_name":"实验诊断学","semester":"2026-2027-1",
+             "events":[{"start":"2026-11-12T08:00:00+08:00","end":"2026-11-12T11:40:00+08:00","smartclass_expected":false},
+                       {"start":"2026-11-16T08:00:00+08:00","end":"2026-11-16T09:40:00+08:00"}]}
+        ]}"#;
+        let schedule: CourseSchedule = serde_json::from_str(raw).unwrap();
+        let from = NaiveDate::from_ymd_opt(2026, 11, 12).unwrap();
+        let to = NaiveDate::from_ymd_opt(2026, 11, 18).unwrap();
+        let monitored = schedule.planned_classes_between("2026-2027-1", from, to);
+        assert_eq!(monitored.len(), 1);
+        assert_eq!(monitored[0].course_name, "实验诊断学");
+        assert_eq!(monitored[0].date, "2026-11-16");
+        assert_eq!(monitored[0].expected_segments, 2);
+        // disabled 影响的是录播预期，不会清除原计划授课的结束时间。
+        assert!(schedule.planned_end_utc("2026-2027-1","机能实验学","2026-11-18").is_some());
     }
 }
