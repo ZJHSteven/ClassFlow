@@ -3026,6 +3026,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn schedule_coverage_should_detect_courses_with_zero_or_unfinished_tasks() {
+        let repo = repo().await;
+        // 一门在课表中存在、但录像从未被扫描到的课程，数据库聚合不能报查询失败，
+        // 更不能把没有 Task 的课程从监控列表中直接过滤掉。
+        let absent = repo
+            .class_delivery_snapshot("2025-2026-2", "不存在录播的课", "2026-03-22")
+            .await
+            .expect("空课程应能正常返回零计数");
+        assert_eq!(absent, ClassDeliverySnapshot::default());
+
+        let response = repo
+            .create_batch_with_tasks(&demo_request(), "2025-2026-2")
+            .await
+            .expect("测试录播入队应成功");
+        let task = repo
+            .get_task(&response.task_ids[0])
+            .await
+            .expect("能读到入队片段");
+        let snapshot = repo
+            .class_delivery_snapshot(&task.semester, &task.course_name, &task.date)
+            .await
+            .expect("已有录播的课程应能正确聚合");
+        assert_eq!(snapshot.task_count, 1);
+        assert_eq!(snapshot.task_unfinished, 1);
+        assert_eq!(snapshot.notes_count, 0);
+        assert_eq!(snapshot.emails_sent, 0);
+    }
+
+    #[tokio::test]
     async fn stage_event_outbox_should_deduplicate_and_stop_after_max_attempts() {
         let repo = repo().await;
         let payload = serde_json::json!({"course_name": "病理学"});
