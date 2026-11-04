@@ -1,3 +1,18 @@
+# 2026-11-04 ClassFlow 逐课完整性、Gmail 与推送闭环审计
+
+## 生产取证与问题
+
+- 课程计划截至 11/4 16:12 共 59 个日期课程组合；39 个 Notes succeeded + 邮件接口确认，另有 15 个无录像任务、1 个 Notes failed、2 个 generating 和 2 个 pending。
+- 10/29、10/30 两封呼吸系统摘要其实抵达 Gmail SPAM（已人工移到 INBOX）；10/28 呼吸系统 HTTP 413；11/2-11/3 Notes 受公共 Job API 502 / 排队重试影响。
+- 老有成功状态是“ASR 片段成功”或“Notes 已发布”，不是最终邮件/收件箱成功；课表此前只帮助 Notes closure，不检查缺录播。
+
+## 实施与验收
+
+1. 按学期/课程/日期展开课表；由 SQLite 查询录播、Notes、摘要邮件确认，允许下课后 3 小时缓冲。
+2. 可开关的 600 秒巡检：当日及过去两周、仅从设定的 since_date 统计逾期；不存在录播必须标注可能无录播而非直接声明采集失败；事件按课程和原因唯一去重。
+3. 邮件发送接口成功后额外生成“邮件已发送”最终事件，保留 Notes 成功作为中间阶段，Worker 推送告警和最终通知；不谎称已经进入 Gmail 收件箱。
+4. 确保已有课程 ASR / Notes 路径不改变；测试 Rust fmt、backend 单元/API、Clippy、Web lint/test/build、Wrangler dry-run。部署前备份生产数据库和 backend binary；生产启用监控从 2026-11-02 起，谨防历史邮件重发。
+5. 用生产数据与 Gmail 复核预警数量、stage_events 去重和健康状态；单独保留 HTTP 413 与外部 RQCI 502 故障记录。
 # 2026-10-27 ClassFlow iOS Web Push + PWA + Gateway 守护收口 ExecPlan
 
 ## 用户决策
