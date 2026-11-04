@@ -1,5 +1,11 @@
 - 新增可开关的 schedule monitor：下课超过3小时后按课表核对录播、ASR、Notes、邮件接口确认，按稳定event_key对异常分类去重；默认关闭、生产以起始日期启用，避免历史通知风暴。
 - SQLite 课程快照现在可查空任务、失败片段、Notes及邮件确认数量；邮件确认时写唯一最终成功事件，供通知outbox消费。
+# 2026-11-04 iOS 主屏幕顶部介绍卡片视觉回归修复
+- 根因：10/27 standalone 样式将 shell 顶部留白设为 0，同时让 hero 左右溢出、去掉上圆角，并把安全区填充在卡片内部，造成截图里的深绿色贴顶大帽子。
+- 修复：移除 hero 的 standalone 特殊拉伸，让状态栏安全区由 shell 承担；iOS 主屏幕不再强制旧式 black-translucent 状态栏；网页和 PWA manifest 统一浅色主题。
+- 验证：ESLint、36/36 Vitest、TypeScript/Vite build、Wrangler dry-run 通过；393px 手机视口与 1280px 桌面均无横向溢出，hero 保持 24px 圆角，任务台/课程库切换有效。
+- 线上：Cloudflare Worker 已发布版本 bca70542-737c-4cf9-9e18-826cae475283；通过已登录浏览器验证 https://classflow.zjhstudio.com/ 页面含浅色 theme-color、无旧状态栏 meta，卡片圆角生效。
+
 # 2026-11-04 课表驱动通知审计修复（进行中）
 - 生产核对59堂：39封邮件有后端发送确认；15堂无录播任务；5堂未完成Notes与邮件。10/29、10/30邮件落入Gmail SPAM并已移回INBOX。
 - 正在建立按学期/课名/日期聚合的课表事实，为缺课检查提供基础，不将课表未录到的视频直接定义为任务失败。
