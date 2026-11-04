@@ -8,8 +8,9 @@ ClassFlow 的录像发现与 ASR 可以尽快执行，但 Notes 不能仅根据�
 
 use std::path::Path;
 
-use chrono::{DateTime, Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 use crate::error::{AppError, AppResult};
 
@@ -45,6 +46,15 @@ pub struct ScheduledRepeat {
     pub until: Option<String>,
 }
 
+/// 课表中的“应到课”事实：与 SmartClass 是否实际有录播是两个独立概念。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedClass {
+    pub semester: String,
+    pub course_name: String,
+    pub date: String,
+    pub end_utc: DateTime<Utc>,
+}
+
 impl CourseSchedule {
     pub async fn load_optional(path: &Path) -> AppResult<Self> {
         match tokio::fs::read_to_string(path).await {
@@ -54,6 +64,55 @@ impl CourseSchedule {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// 展开一段日期的固定和每周重复课程。
+    ///
+    /// 一堂课在课表中可能分成多个时间事件（例如上午、下午同一实验）。
+    /// 按“学期+课程+日期”聚合，采用最晚结束时间判定整堂课是否超时。
+    /// 此方法不主动推断课表中不存在的课程，也不把无录像直接判为采集故障。
+    pub fn planned_classes_between(
+        &self,
+        semester: &str,
+        from: NaiveDate,
+        to: NaiveDate,
+    ) -> Vec<PlannedClass> {
+        let mut classes = BTreeMap::<(String, String, String), DateTime<Utc>>::new();
+        if from > to {
+            return Vec::new();
+        }
+        for course in &self.courses {
+            if course.semester.as_deref().is_some_and(|value| value != semester) {
+                continue;
+            }
+            for event in &course.events {
+                let mut date = from;
+                while date <= to {
+                    if let Some(end) = event.end_for_date(date) {
+                        let key = (
+                            semester.to_string(),
+                            course.course_name.clone(),
+                            date.to_string(),
+                        );
+                        let end_utc = end.with_timezone(&Utc);
+                        classes
+                            .entry(key)
+                            .and_modify(|current| *current = (*current).max(end_utc))
+                            .or_insert(end_utc);
+                    }
+                    date += Duration::days(1);
+                }
+            }
+        }
+        classes
+            .into_iter()
+            .map(|((semester, course_name, date), end_utc)| PlannedClass {
+                semester,
+                course_name,
+                date,
+                end_utc,
+            })
+            .collect()
     }
 
     pub fn planned_end_utc(
@@ -164,5 +223,46 @@ mod tests {
                 .planned_end_utc("2026-2027-1", "流行病学", "2027-01-12")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn planned_classes_should_merge_same_day_and_respect_repeat_dates() {
+        let schedule = CourseSchedule {
+            courses: vec![ScheduledCourse {
+                course_name: "呼吸系统".to_string(),
+                semester: Some("2026-2027-1".to_string()),
+                events: vec![
+                    ScheduledEvent {
+                        start: "2026-10-29T13:30:00+08:00".into(),
+                        end: "2026-10-29T15:10:00+08:00".into(),
+                        repeat: Some(ScheduledRepeat {
+                            frequency: "weekly".into(),
+                            days_of_week: vec![4],
+                            until: Some("2026-11-06".into()),
+                        }),
+                    },
+                    ScheduledEvent {
+                        start: "2026-10-29T15:30:00+08:00".into(),
+                        end: "2026-10-29T16:15:00+08:00".into(),
+                        repeat: None,
+                    },
+                ],
+            }],
+        };
+        let classes = schedule.planned_classes_between(
+            "2026-2027-1",
+            NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 11, 7).unwrap(),
+        );
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].end_utc.to_rfc3339(), "2026-10-29T08:15:00+00:00");
+        assert_eq!(classes[1].date, "2026-11-05");
+        assert!(schedule
+            .planned_classes_between(
+                "other-semester",
+                NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 11, 7).unwrap()
+            )
+            .is_empty());
     }
 }

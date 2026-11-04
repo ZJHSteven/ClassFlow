@@ -1,3 +1,7 @@
+# 2026-11-04 课表驱动通知审计修复（进行中）
+- 生产核对59堂：39封邮件有后端发送确认；15堂无录播任务；5堂未完成Notes与邮件。10/29、10/30邮件落入Gmail SPAM并已移回INBOX。
+- 正在建立按学期/课名/日期聚合的课表事实，为缺课检查提供基础，不将课表未录到的视频直接定义为任务失败。
+
 # 2026-10-27 iOS Web Push / PWA / Gateway 守护收口
 
 - ClassFlow 阶段通知架构已经从“预留 HTTP webhook、生产关闭”推进到实际 iOS Web Push：backend 仍以 SQLite stage_events 为 durable outbox，Cloudflare Worker 新增 `/__classflow/stage-event` 私有 webhook，再由 Worker 使用标准 Web Push 投递给 ClassFlow Home Screen Web App。
