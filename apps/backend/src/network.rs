@@ -280,6 +280,24 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn permanent_network_outage_should_timeout_instead_of_waiting_forever() {
+        let mut gate = NetworkHealthGate::enabled_for_tests(vec![
+            "http://127.0.0.1:1/unreachable".to_string(),
+        ]);
+        gate.max_recovery_wait = Duration::from_millis(80);
+        gate.check_interval = Duration::from_millis(10);
+        let start = Instant::now();
+        let result = gate
+            .pause_if_network_error(
+                "下载课件",
+                &AppError::External("connection refused".to_string()),
+            )
+            .await;
+        assert!(matches!(result, Err(AppError::RetryableExternal(_))));
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
     async fn network_error_should_wait_until_probe_recovers() {
         #[derive(Clone)]
         struct ProbeState {
