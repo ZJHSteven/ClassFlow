@@ -780,11 +780,35 @@ export function CoursePanel() {
                               : 'Notes 处理中'}
                       </span>
                     ) : null}
+                    {selectedLecture.notes_ready ? (
+                      <span
+                        className={
+                          selectedLecture.email_status === 'sent'
+                            ? 'artifactPill artifactPill--primary'
+                            : selectedLecture.email_status === 'retrying'
+                              ? 'artifactPill artifactPill--error'
+                              : 'artifactPill artifactPill--pending'
+                        }
+                        title="邮件服务确认发送不代表 Gmail 必然归入收件箱，仍需注意垃圾邮件。"
+                      >
+                        {selectedLecture.email_status === 'sent'
+                          ? '摘要邮件已发送'
+                          : selectedLecture.email_status === 'retrying'
+                            ? '摘要邮件投递重试中'
+                            : '摘要邮件待发送'}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               ) : (
                 <div className="detailNotice detailNotice--info">当前还没有可识别的完整课堂。</div>
               )}
+
+              {selectedLecture?.email_error ? (
+                <div className="detailNotice detailNotice--warning detailNotice--scrollable">
+                  摘要邮件异常：{selectedLecture.email_error}
+                </div>
+              ) : null}
 
               {selectedLecture?.notes_last_error ? (
                 <div className="detailNotice detailNotice--warning detailNotice--scrollable">

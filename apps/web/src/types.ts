@@ -108,6 +108,8 @@ export interface LectureSummary {
   notes_status: 'not_started' | 'pending' | 'generating' | 'publishing' | 'succeeded' | 'failed' | string
   notes_title: string | null
   notes_ready: boolean
+  email_status: 'awaiting_notes' | 'pending' | 'retrying' | 'sent' | string
+  email_error: string | null
   notes_last_error: string | null
   notes_recovery_kind: 'submission_unknown' | 'safe_resubmit' | 'manual_review' | string | null
   notes_conversation_id: string | null

@@ -137,6 +137,8 @@ const courseDetailPayload = {
       notes_status: 'succeeded',
       notes_title: '肾功能不全',
       notes_ready: true,
+      email_status: 'sent',
+      email_error: null,
       notes_last_error: null,
       notes_recovery_kind: null,
       notes_conversation_id: 'conversation-1',

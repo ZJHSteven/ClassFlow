@@ -292,6 +292,9 @@ pub struct LectureSummaryResponse {
     pub notes_status: String,
     pub notes_title: Option<String>,
     pub notes_ready: bool,
+    /// 摘要邮件是独立的后续阶段；不能因为 Notes 已发布就声称邮件已发送。
+    pub email_status: String,
+    pub email_error: Option<String>,
     pub notes_last_error: Option<String>,
     pub notes_recovery_kind: Option<String>,
     pub notes_conversation_id: Option<String>,

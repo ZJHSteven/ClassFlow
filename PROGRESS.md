@@ -1,3 +1,4 @@
+- 课程详情API新增email_status/email_error，前端课程详情明确区分Notes完成与邮件待发/重试/已确认发送，避免局部成功伪装最终成功。
 - 修复API集成测试的AppConfig新字段缺失，避免cargo clippy --all-targets编译失败。
 - 新增监控配置后，已同步两个AppConfig测试构造器并执行rustfmt；等待后端全量测试。
 - Cloudflare Worker通知筛选已加入“课表逾期warning”与“邮件服务确认sent”，Notes通知标明只是阶段成功；已有Web Push单元测试。

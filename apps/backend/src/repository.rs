@@ -1387,6 +1387,18 @@ impl Repository {
                 summary.notes_status = notes.status.as_str().to_string();
                 summary.notes_title = notes.notes_title.clone();
                 summary.notes_ready = notes.status == LectureNotesStatus::Succeeded;
+                // 邮件状态单独显示，让用户不再把 ASR/Notes succeeded 误认作 Gmail succeeded。
+                summary.email_status = if notes.summary_email_sent_at.is_some() {
+                    "sent"
+                } else if notes.summary_email_last_error.is_some() {
+                    "retrying"
+                } else if notes.status == LectureNotesStatus::Succeeded {
+                    "pending"
+                } else {
+                    "awaiting_notes"
+                }
+                .to_string();
+                summary.email_error = notes.summary_email_last_error.clone();
                 summary.notes_last_error = notes.last_error.clone();
                 summary.notes_recovery_kind = notes.recovery_kind.clone();
                 summary.notes_conversation_id = notes.conversation_id.clone();

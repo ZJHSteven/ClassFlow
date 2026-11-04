@@ -151,6 +151,8 @@ pub fn summarize_lecture(lecture: &LectureGroup) -> LectureSummaryResponse {
         notes_status: "not_started".to_string(),
         notes_title: None,
         notes_ready: false,
+        email_status: "awaiting_notes".to_string(),
+        email_error: None,
         notes_last_error: None,
         notes_recovery_kind: None,
         notes_conversation_id: None,
