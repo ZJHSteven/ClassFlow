@@ -1,3 +1,4 @@
+- [2026-11-05] Notes worker分课次处理外部请求错误，不再一堂502让后续课都跳过；单课外部查询1/2/4分钟退避，第四次转人工manual_review并保留CID/Job，成功即清空连续故障计数。
 - [2026-11-05] 追加Notes外部服务故障持久化次数、指数退避时间和第四次终止人工核对，保留原CID/Job；待接入Notes worker并测试。
 - [2026-11-05] 修正remote ASR尝试次数i64/u32类型比较问题。
 - [2026-11-05] 修复远程CapsWriter ASR无界重试：新增max_task_attempts默认4（含初次），超限mark_task_failed并发高优先级告警；保留audio/job checkpoint供人工恢复。

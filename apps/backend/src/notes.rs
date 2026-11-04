@@ -82,11 +82,42 @@ pub async fn run_notes_cycle(state: AppState) -> AppResult<()> {
     // 本轮就不再打开新的 pending conversation。这样既保护 Archive/ChatGPT 的限流，
     // 也让每堂课的 title-only 与 GitHub 发布先完整收口，再进入下一堂。
     for job in jobs {
-        match job.status {
-            LectureNotesStatus::Pending => process_pending(&state, &job).await?,
-            LectureNotesStatus::Generating => process_generating(&state, &job).await?,
-            LectureNotesStatus::Publishing => process_publishing(&state, &job).await?,
-            LectureNotesStatus::Succeeded | LectureNotesStatus::Failed => {}
+        if !state
+            .repo
+            .notes_transport_retry_due(&job.lecture_key)
+            .await?
+        {
+            continue;
+        }
+        let result = match job.status {
+            LectureNotesStatus::Pending => process_pending(&state, &job).await,
+            LectureNotesStatus::Generating => process_generating(&state, &job).await,
+            LectureNotesStatus::Publishing => process_publishing(&state, &job).await,
+            LectureNotesStatus::Succeeded | LectureNotesStatus::Failed => Ok(()),
+        };
+        match result {
+            Ok(()) => {
+                state
+                    .repo
+                    .clear_notes_transport_failures(&job.lecture_key)
+                    .await?;
+            }
+            Err(error) => {
+                // 独立课次各自退避。旧版一个课次查Archive返回502，会使本轮
+                // 后续所有课程都被跳过、15秒后再请求；新逻辑不能这样持续扫。
+                // 只限制ClassFlow外部调用失败，不重试已在Actor中生成的turn。
+                if matches!(error, AppError::Database(_)) {
+                    return Err(error);
+                }
+                let stopped = state
+                    .repo
+                    .record_notes_transport_failure(&job.lecture_key, &error.to_string(), 4)
+                    .await?;
+                warn!(
+                    "Notes 外部阶段查询失败: lecture_key={}, manual_review={}, error={}",
+                    job.lecture_key, stopped, error
+                );
+            }
         }
     }
     // 历史摘要永远让位于正常课堂流水线；只有当前没有 pending/generating/publishing
@@ -661,6 +692,9 @@ async fn process_pending(state: &AppState, job: &LectureNotesRecord) -> AppResul
                     .repo
                     .mark_lecture_notes_pending_error(&job.lecture_key, &message)
                     .await?;
+                // 暂时性 429/502/连接超时不能只是标记pending然后马上再次读取。
+                // 交由上层统一指数退避和最多4次限制，避免连锁轮询。
+                return Err(AppError::RetryableExternal(message));
             }
             return Ok(());
         }
