@@ -104,6 +104,8 @@ pub struct AppConfig {
     pub remote_capswriter_poll_timeout_secs: f64,
     pub remote_capswriter_retry_wait_secs: f64,
     pub remote_capswriter_retry_max_wait_secs: f64,
+    /// 包含第一次尝试在内的远程 ASR 总尝试次数上限，达到后等待人工处理。
+    pub remote_capswriter_max_task_attempts: u32,
     pub r2_bucket: String,
     pub r2_endpoint: String,
     pub r2_access_key_id: String,
@@ -342,6 +344,10 @@ impl AppConfig {
             remote_capswriter_retry_max_wait_secs: env_or_parse(
                 "CLASSFLOW_REMOTE_CAPSWRITER_RETRY_MAX_WAIT_SECS",
                 300.0,
+            )?,
+            remote_capswriter_max_task_attempts: env_or_parse(
+                "CLASSFLOW_REMOTE_CAPSWRITER_MAX_TASK_ATTEMPTS",
+                4,
             )?,
             r2_bucket: env::var("CLASSFLOW_R2_BUCKET").unwrap_or_default(),
             r2_endpoint: env::var("CLASSFLOW_R2_ENDPOINT").unwrap_or_default(),

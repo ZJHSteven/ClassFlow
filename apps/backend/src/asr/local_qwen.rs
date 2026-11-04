@@ -588,6 +588,7 @@ mod tests {
             remote_capswriter_poll_timeout_secs: 60.0,
             remote_capswriter_retry_wait_secs: 0.1,
             remote_capswriter_retry_max_wait_secs: 1.0,
+            remote_capswriter_max_task_attempts: 4,
             r2_bucket: String::new(),
             r2_endpoint: String::new(),
             r2_access_key_id: String::new(),

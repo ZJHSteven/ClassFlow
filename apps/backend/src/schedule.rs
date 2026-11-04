@@ -101,7 +101,10 @@ impl CourseSchedule {
                 continue;
             }
             for event in &course.events {
-                if !event.smartclass_expected.unwrap_or(!course.smartclass_disabled) {
+                if !event
+                    .smartclass_expected
+                    .unwrap_or(!course.smartclass_disabled)
+                {
                     // disabled 只从 SmartClass 覆盖巡检中排除，不改变 Notes closure。
                     continue;
                 }
@@ -129,13 +132,15 @@ impl CourseSchedule {
         }
         classes
             .into_iter()
-            .map(|((semester, course_name, date), (end_utc, expected_segments))| PlannedClass {
-                semester,
-                course_name,
-                date,
-                end_utc,
-                expected_segments,
-            })
+            .map(
+                |((semester, course_name, date), (end_utc, expected_segments))| PlannedClass {
+                    semester,
+                    course_name,
+                    date,
+                    end_utc,
+                    expected_segments,
+                },
+            )
             .collect()
     }
 
@@ -331,6 +336,10 @@ mod tests {
         assert_eq!(monitored[0].date, "2026-11-16");
         assert_eq!(monitored[0].expected_segments, 2);
         // disabled 影响的是录播预期，不会清除原计划授课的结束时间。
-        assert!(schedule.planned_end_utc("2026-2027-1","机能实验学","2026-11-18").is_some());
+        assert!(
+            schedule
+                .planned_end_utc("2026-2027-1", "机能实验学", "2026-11-18")
+                .is_some()
+        );
     }
 }

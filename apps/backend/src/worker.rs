@@ -590,6 +590,22 @@ async fn handle_remote_asr_progress(
 
 async fn schedule_remote_asr_retry(state: &AppState, task_id: &str, error: &str) -> AppResult<()> {
     let task = state.repo.get_task(task_id).await?;
+    // 旧版只限制退避时长，不限制总次数。若 PC 休眠数日会无止境轮询并重新入队。
+    // 现在默认最多4次（含第一次），超限直接终止并通过任务failed事件通知用户。
+    // 原始音频/已保存的远端job checkpoint仍保留，方便人工恢复而不重新下载。
+    let max_attempts = state.config.remote_capswriter_max_task_attempts.max(1);
+    if task.attempt_count >= max_attempts {
+        let message = format!(
+            "远程 ASR 已累计尝试 {} 次，达到上限 {}，停止自动重试、等待人工检查。最后错误: {}",
+            task.attempt_count, max_attempts, error
+        );
+        state
+            .repo
+            .mark_task_failed(task_id, task.stage, &message)
+            .await?;
+        state.notify_task_list_changed();
+        return Ok(());
+    }
     let base = state.config.remote_capswriter_retry_wait_secs.max(0.05);
     let max_wait = state.config.remote_capswriter_retry_max_wait_secs.max(base);
     let exponent = task.attempt_count.saturating_sub(1).clamp(0, 8) as i32;

@@ -105,7 +105,10 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
         let incomplete_recording =
             snapshot.task_count > 0 && (snapshot.task_count as usize) < class.expected_segments;
         let kind_and_explanation = if incomplete_recording {
-            Some(("recording_partial", "部分录播片段可能缺失，请按课表节数核对 SmartClass 原始录像"))
+            Some((
+                "recording_partial",
+                "部分录播片段可能缺失，请按课表节数核对 SmartClass 原始录像",
+            ))
         } else {
             overdue_kind(&snapshot)
         };
@@ -119,7 +122,10 @@ async fn audit_classes(state: &AppState) -> AppResult<()> {
         );
         let source_id = format!("{}:{}:{}", class.semester, class.date, class.course_name);
         let title = format!("{} · {}", class.date, class.course_name);
-        let explanation = format!("{explanation}（课表估算录播片段 {} 段）", class.expected_segments);
+        let explanation = format!(
+            "{explanation}（课表估算录播片段 {} 段）",
+            class.expected_segments
+        );
         let message = format!(
             "{}（录播片段 {}、Notes {}、邮件确认 {}）。{}",
             explanation,

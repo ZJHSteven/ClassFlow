@@ -1,3 +1,4 @@
+- [2026-11-05] 修复远程CapsWriter ASR无界重试：新增max_task_attempts默认4（含初次），超限mark_task_failed并发高优先级告警；保留audio/job checkpoint供人工恢复。
 - [2026-11-05] 修正PowerShell日期自动转换，已按精确课次ID明确标记10/22实验诊断学及11/11呼吸系统综合实验的smartclass_expected=false。
 - [2026-11-05] 已禁用基础医学探究实验/机能实验学整门录播预期，以及10/22实验诊断学与11/11呼吸系统实验时段，全部课表保留。
 - [2026-11-05] 新增非阻断性录播缺片段告警：实际task数少于按课表时长估算的段数就产生recording_partial事件，附估算节数；不自动重试或重做Notes。
