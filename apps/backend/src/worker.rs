@@ -82,6 +82,38 @@ pub fn spawn_workers(state: AppState, worker_count: usize) -> TaskQueue {
 
                 if let Err(error) = process_task(state.clone(), &task_id).await {
                     error!("任务处理失败: task_id={}, error={}", task_id, error);
+                    // 下载/ASR/产物存储存在多条调用链，其中部分异常只通过 ? 上抛。
+                    // 若异常来自长时间断网（健康闸门超时）等情况，不能让任务一直
+                    // 停留在 running 而没有终止告警。已进入 failed 或 retry_waiting
+                    // 的任务保持原判定，不重复发送失败事件。
+                    match state.repo.get_task(&task_id).await {
+                        Ok(current)
+                            if matches!(
+                                current.status,
+                                TaskStatus::Pending | TaskStatus::Running
+                            ) && current.stage != TaskStage::RetryWaiting =>
+                        {
+                            if let Err(mark_error) = state
+                                .repo
+                                .mark_task_failed(&task_id, current.stage, &error.to_string())
+                                .await
+                            {
+                                error!(
+                                    "任务异常终止状态写入失败: task_id={}, error={}",
+                                    task_id, mark_error
+                                );
+                            } else {
+                                state.notify_task_list_changed();
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(fetch_error) => {
+                            error!(
+                                "任务失败后无法读取最新状态: task_id={}, error={}",
+                                task_id, fetch_error
+                            );
+                        }
+                    }
                 }
             }
         });
