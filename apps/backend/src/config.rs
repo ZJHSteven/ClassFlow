@@ -123,6 +123,7 @@ pub struct AppConfig {
     pub network_health_probe_urls: Vec<String>,
     pub network_health_probe_timeout_secs: f64,
     pub network_health_check_interval_secs: f64,
+    pub network_recovery_max_wait_secs: u64,
     pub network_health_stable_successes: usize,
     pub task_event_retention_days: u64,
     pub task_event_retention_rows_per_task: u64,
@@ -399,6 +400,10 @@ impl AppConfig {
             network_health_check_interval_secs: env_or_parse(
                 "CLASSFLOW_NETWORK_HEALTH_CHECK_INTERVAL_SECS",
                 5.0,
+            )?,
+            network_recovery_max_wait_secs: env_or_parse(
+                "CLASSFLOW_NETWORK_RECOVERY_MAX_WAIT_SECS",
+                7200,
             )?,
             network_health_stable_successes: env_or_parse(
                 "CLASSFLOW_NETWORK_HEALTH_STABLE_SUCCESSES",

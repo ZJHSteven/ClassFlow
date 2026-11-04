@@ -261,6 +261,7 @@ async fn build_test_state(
         network_health_probe_urls: Vec::new(),
         network_health_probe_timeout_secs: 1.0,
         network_health_check_interval_secs: 0.1,
+        network_recovery_max_wait_secs: 7200,
         network_health_stable_successes: 1,
         task_event_retention_days: 30,
         task_event_retention_rows_per_task: 200,

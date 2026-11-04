@@ -49,6 +49,7 @@ pub struct NetworkHealthGate {
     probe_urls: Arc<Vec<String>>,
     probe_timeout: Duration,
     check_interval: Duration,
+    max_recovery_wait: Duration,
     stable_successes: usize,
     client: Client,
     snapshot: Arc<Mutex<NetworkHealthSnapshot>>,
@@ -82,6 +83,7 @@ impl NetworkHealthGate {
             check_interval: Duration::from_secs_f64(
                 config.network_health_check_interval_secs.max(0.1),
             ),
+            max_recovery_wait: Duration::from_secs(config.network_recovery_max_wait_secs.max(1)),
             stable_successes: config.network_health_stable_successes.max(1),
             client,
             snapshot: Arc::new(Mutex::new(NetworkHealthSnapshot {
@@ -98,6 +100,7 @@ impl NetworkHealthGate {
             probe_urls: Arc::new(Vec::new()),
             probe_timeout: Duration::from_secs(1),
             check_interval: Duration::from_millis(10),
+            max_recovery_wait: Duration::from_secs(1),
             stable_successes: 1,
             client: Client::new(),
             snapshot: Arc::new(Mutex::new(NetworkHealthSnapshot {
@@ -115,6 +118,7 @@ impl NetworkHealthGate {
             probe_urls: Arc::new(probe_urls),
             probe_timeout: Duration::from_secs(1),
             check_interval: Duration::from_millis(10),
+            max_recovery_wait: Duration::from_secs(1),
             stable_successes: 1,
             client: Client::new(),
             snapshot: Arc::new(Mutex::new(NetworkHealthSnapshot {
@@ -186,20 +190,27 @@ impl NetworkHealthGate {
 
     async fn wait_for_recovery(&self, operation: &str) -> AppResult<()> {
         let mut success_count = 0usize;
-        loop {
-            self.mark_recovering().await;
-            if self.probe_once().await {
-                success_count += 1;
-                if success_count >= self.stable_successes {
-                    self.mark_healthy(operation).await;
-                    return Ok(());
+        let recovery = async {
+            loop {
+                self.mark_recovering().await;
+                if self.probe_once().await {
+                    success_count += 1;
+                    if success_count >= self.stable_successes {
+                        self.mark_healthy(operation).await;
+                        return;
+                    }
+                } else {
+                    success_count = 0;
                 }
-            } else {
-                success_count = 0;
+                tokio::time::sleep(self.check_interval).await;
             }
-
-            tokio::time::sleep(self.check_interval).await;
-        }
+        };
+        tokio::time::timeout(self.max_recovery_wait, recovery)
+            .await
+            .map_err(|_| AppError::RetryableExternal(format!(
+                "网络或外部服务持续不可用，{operation} 等待超过 {} 秒；停止自动等待并要求人工检查",
+                self.max_recovery_wait.as_secs()
+            )))
     }
 
     async fn probe_once(&self) -> bool {
