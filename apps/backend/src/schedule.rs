@@ -41,6 +41,11 @@ pub struct ScheduledEvent {
     /// None 表示沿用课程级设置，Some(true) 可以恢复课次的录播预期。
     #[serde(default)]
     pub smartclass_expected: Option<bool>,
+    /// A date-specific exception within a recurring theoretical class.
+    /// This must NOT disable the entire weekly recurrence.
+    /// It only excludes the date from SmartClass coverage monitoring.
+    #[serde(default)]
+    pub smartclass_disabled_dates: Vec<String>,
     #[serde(default)]
     pub repeat: Option<ScheduledRepeat>,
 }
@@ -111,6 +116,14 @@ impl CourseSchedule {
                 let mut date = from;
                 while date <= to {
                     if let Some(end) = event.end_for_date(date) {
+                        if event
+                            .smartclass_disabled_dates
+                            .iter()
+                            .any(|excluded| excluded == &date.to_string())
+                        {
+                            date += Duration::days(1);
+                            continue;
+                        }
                         let key = (
                             semester.to_string(),
                             course.course_name.clone(),
@@ -228,6 +241,7 @@ mod tests {
                     start: "2026-10-10T08:00:00+08:00".to_string(),
                     end: "2026-10-10T08:45:00+08:00".to_string(),
                     smartclass_expected: None,
+                    smartclass_disabled_dates: Vec::new(),
                     repeat: None,
                 }],
             }],
@@ -251,6 +265,7 @@ mod tests {
                     start: "2026-10-13T15:30:00+08:00".to_string(),
                     end: "2026-10-13T17:10:00+08:00".to_string(),
                     smartclass_expected: None,
+                    smartclass_disabled_dates: Vec::new(),
                     repeat: Some(ScheduledRepeat {
                         frequency: "weekly".to_string(),
                         days_of_week: vec![2],
@@ -283,6 +298,7 @@ mod tests {
                         start: "2026-10-29T13:30:00+08:00".into(),
                         end: "2026-10-29T15:10:00+08:00".into(),
                         smartclass_expected: None,
+                        smartclass_disabled_dates: Vec::new(),
                         repeat: Some(ScheduledRepeat {
                             frequency: "weekly".into(),
                             days_of_week: vec![4],
@@ -293,6 +309,7 @@ mod tests {
                         start: "2026-10-29T15:30:00+08:00".into(),
                         end: "2026-10-29T16:15:00+08:00".into(),
                         smartclass_expected: None,
+                        smartclass_disabled_dates: Vec::new(),
                         repeat: None,
                     },
                 ],
@@ -339,6 +356,37 @@ mod tests {
         assert!(
             schedule
                 .planned_end_utc("2026-2027-1", "机能实验学", "2026-11-18")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn weekly_theory_should_only_exclude_confirmed_experiment_date() {
+        let raw = r#"{"courses":[
+            {"course_name":"实验诊断学","semester":"2026-2027-1","events":[{
+                "start":"2026-10-12T08:00:00+08:00",
+                "end":"2026-10-12T09:40:00+08:00",
+                "smartclass_disabled_dates":["2026-10-19"],
+                "repeat":{"frequency":"weekly","daysOfWeek":[1],"until":"2026-10-27"}
+            }]}
+        ]}"#;
+        let schedule: CourseSchedule = serde_json::from_str(raw).unwrap();
+        let planned = schedule.planned_classes_between(
+            "2026-2027-1",
+            NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 10, 26).unwrap(),
+        );
+        assert_eq!(
+            planned
+                .iter()
+                .map(|class| class.date.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2026-10-12", "2026-10-26"]
+        );
+        // 录像预期禁用≠删除真实课表，Notes封堂时间仍可依原课表确定。
+        assert!(
+            schedule
+                .planned_end_utc("2026-2027-1", "实验诊断学", "2026-10-19")
                 .is_some()
         );
     }
