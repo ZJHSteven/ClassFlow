@@ -2699,6 +2699,24 @@ mod tests {
             saved.notes_markdown.as_deref(),
             Some("既有 Notes 正文不能丢失")
         );
+        // 同一个已失败的Archive幂等key不能因用户误按重试而无限返回413。
+        sqlx::query(
+            "UPDATE lecture_notes SET conversation_id=NULL, status='failed', last_error='Archive submission 终止: HTTP 413', recovery_kind='manual_review' WHERE lecture_key='unit-notes-retry'"
+        )
+        .execute(repo.pool())
+        .await.unwrap();
+        let rejected = repo.retry_lecture_notes("unit-notes-retry").await;
+        assert!(matches!(rejected, Err(AppError::BadRequest(_))));
+        let record = repo
+            .get_lecture_notes("unit-notes-retry")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.status, LectureNotesStatus::Failed);
+        assert_eq!(
+            record.last_error.as_deref(),
+            Some("Archive submission 终止: HTTP 413")
+        );
     }
 
     fn demo_request() -> IntakeBatchRequest {
