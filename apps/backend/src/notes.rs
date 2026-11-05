@@ -6,7 +6,7 @@ conversation/messages；Notes 完成后再独立发布到 GitHub。任一阶段�
 因此 backend / Windows / Archive 重启都不会重复创建同一堂课的 conversation。
 */
 
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chrono::{Datelike, FixedOffset, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
@@ -2388,6 +2388,23 @@ struct GithubPublisher {
     token: String,
 }
 
+// Notes 发布由周期性 Worker 驱动：若每一次检查都重新创建 reqwest::Client，
+// 相同课程的 GET/PUT 会重复建立 TCP/TLS 连接。发布失败又立即等待下次循环，
+// 多门课并存时很容易产生握手风暴和服务器提前关闭 TLS (UnexpectedEof)。
+//
+// 进程级共享客户端维护连接池，Client::clone 只复用池的句柄；每次请求依旧
+// 单独注入 Authorization，永远不会把 Token 放到共享客户端的默认 Header。
+static GITHUB_HTTP_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .pool_idle_timeout(Duration::from_secs(120))
+        .pool_max_idle_per_host(8)
+        .tcp_keepalive(Duration::from_secs(60))
+        .build()
+        .expect("GitHub HTTP 客户端基础配置固定，创建失败应在启动时暴露")
+});
+
 impl GithubPublisher {
     fn new(state: &AppState) -> AppResult<Self> {
         if state.config.notes_github_token.trim().is_empty() {
@@ -2395,12 +2412,8 @@ impl GithubPublisher {
                 "CLASSFLOW_NOTES_GITHUB_TOKEN 未配置，无法发布 Notes".to_string(),
             ));
         }
-        let client = Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .build()?;
         Ok(Self {
-            client,
+            client: GITHUB_HTTP_CLIENT.clone(),
             repo: state.config.notes_github_repo.clone(),
             token: state.config.notes_github_token.clone(),
         })

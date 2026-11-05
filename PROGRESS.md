@@ -1,3 +1,4 @@
+- [2026-11-05] GitHub 失败已定位真实源：reqwest GET的Connect错误里有UnexpectedEof tls handshake eof，不是HTTP4xx/429；Curl与独立Rust探针均可成功握手，而Notes Worker每轮对每堂新建GithubPublisher/reqwest Client造成大量握手。改成LazyLock进程级共享GitHub客户端连接池（Token仍逐次注入、无全局默认auth），池空闲120s/TCP keepalive60s。
 - [2026-11-05] 只读Rustls探针复现同一中文GitHub URL GET 404（正常），带Token向不存在分支发512与120000字节JSON PUT均成功收到HTTP404，不污染仓库。ClassFlow实际PUT仍持续报统一error sending request，因此新增GitHub GET/PUT区分、reqwest timeout/connect及底层Debug诊断，供生产锁定。
 - [2026-11-05] N1 Rust reqwest对完全相同的中文GitHub Contents URL带Token GET已可返回404（正常不存在），证实TLS和Unicode路径传输正常。下一步用不存在的分支做不可写PUT探针，测试512/120000字节payload以区分上传和读取故障。
 - [2026-11-05] GitHub rustls只读探针初验N1默认/HTTP1均可访问API根目录（200），下一步检查发布实际的中文Unicode完整Contents路径与授权GET；先加入可选URL参数及环境中的Token鉴权，不输出密钥。
