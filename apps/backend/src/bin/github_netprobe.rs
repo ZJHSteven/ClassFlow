@@ -10,7 +10,12 @@ use std::{error::Error as _, time::Duration};
 
 #[tokio::main]
 async fn main() {
-    let url = "https://api.github.com/repos/ZJHSteven/med-notes-2026-fall-y3/contents";
+    // 可选传入准确的 Contents URL，以排除非 ASCII 路径/URL 转义差异。
+    // Token 只从进程环境获取，避免出现在命令行参数和日志里。
+    let url = std::env::args().nth(1).unwrap_or_else(|| {
+        "https://api.github.com/repos/ZJHSteven/med-notes-2026-fall-y3/contents".to_string()
+    });
+    let token = std::env::var("CLASSFLOW_NOTES_GITHUB_TOKEN").ok();
     for force_http1 in [false, true] {
         let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(8))
@@ -19,11 +24,13 @@ async fn main() {
             builder = builder.http1_only();
         }
         let client = builder.build().expect("构造只读HTTP客户端");
-        let result = client
-            .get(url)
-            .header(reqwest::header::USER_AGENT, "ClassFlow-NetworkProbe/1.0")
-            .send()
-            .await;
+        let mut request = client
+            .get(&url)
+            .header(reqwest::header::USER_AGENT, "ClassFlow-NetworkProbe/1.0");
+        if let Some(token) = token.as_deref().filter(|s| !s.is_empty()) {
+            request = request.bearer_auth(token);
+        }
+        let result = request.send().await;
         match result {
             Ok(response) => println!(
                 "PROBE http1_only={force_http1}, transport=ok, status={}, version={:?}",
