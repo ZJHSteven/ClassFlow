@@ -2420,7 +2420,16 @@ impl GithubPublisher {
             .header(header::ACCEPT, "application/vnd.github+json")
             .bearer_auth(&self.token)
             .send()
-            .await?;
+            .await
+            .map_err(|error| {
+                // 发布失败时必须区分 GET 与 PUT，并记录 reqwest 内部原因；
+                // Debug 不包含 Authorization 头或 Token，仅含 URL/底层网络错误。
+                AppError::External(format!(
+                    "GitHub GET {path}: timeout={}, connect={}, detail={error:?}",
+                    error.is_timeout(),
+                    error.is_connect()
+                ))
+            })?;
         let sha = if get.status() == StatusCode::NOT_FOUND {
             None
         } else if get.status().is_success() {
@@ -2452,7 +2461,15 @@ impl GithubPublisher {
             .bearer_auth(&self.token)
             .json(&payload)
             .send()
-            .await?;
+            .await
+            .map_err(|error| {
+                AppError::External(format!(
+                    "GitHub PUT {path}: timeout={}, connect={}, encoded_bytes={}, detail={error:?}",
+                    error.is_timeout(),
+                    error.is_connect(),
+                    markdown.len()
+                ))
+            })?;
         let status = put.status();
         let body: Value = put.json().await.unwrap_or(Value::Null);
         if !status.is_success() {

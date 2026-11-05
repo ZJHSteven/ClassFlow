@@ -1,3 +1,4 @@
+- [2026-11-05] 只读Rustls探针复现同一中文GitHub URL GET 404（正常），带Token向不存在分支发512与120000字节JSON PUT均成功收到HTTP404，不污染仓库。ClassFlow实际PUT仍持续报统一error sending request，因此新增GitHub GET/PUT区分、reqwest timeout/connect及底层Debug诊断，供生产锁定。
 - [2026-11-05] N1 Rust reqwest对完全相同的中文GitHub Contents URL带Token GET已可返回404（正常不存在），证实TLS和Unicode路径传输正常。下一步用不存在的分支做不可写PUT探针，测试512/120000字节payload以区分上传和读取故障。
 - [2026-11-05] GitHub rustls只读探针初验N1默认/HTTP1均可访问API根目录（200），下一步检查发布实际的中文Unicode完整Contents路径与授权GET；先加入可选URL参数及环境中的Token鉴权，不输出密钥。
 - [2026-11-05] 5堂Summary已恢复到Archive真实完成并在ClassFlow转入publishing，GitHub发布Rust reqwest持续报error sending request，而N1 curl带Token GET GitHub HTTP/1.1和HTTP/2均200，确认不是基础网络或Token断连。新增只读github_netprobe交叉验证reqwest/rustls协商并揭示底层错误。
