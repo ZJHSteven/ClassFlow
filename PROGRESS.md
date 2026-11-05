@@ -1,3 +1,4 @@
+- [2026-11-05] 医学人口学11/04的摘要原会话已验证：原始ClassFlow 513字完全相同prompt，assistant final 1417字完成，却被新的 <WritingBlock ...> UI容器包裹，旧Rust归一化只认:::writing导致章节检验失败。已新增完整WritingBlock剥离兼容与防误裁剪测试；须先部署后再把Archive历史failed映射至canonical completed，防重复发送。
 - [2026-11-05] 用户确认课次性质：9/29泌尿生殖确无录播(保留缺失)，10/14泌尿、10/19实验诊断及思想概论、10/22实验诊断、11/4呼吸均为实验课(禁用SmartClass录像预期)。周一固定理论课仅排除10/19这一天，后续周一不受影响。LifeOps仅存课程级候选地点，转换脚本原有practicalBlocks包含课次地点，但eventBlocks压缩丢失地点。
 - [2026-11-05] 已在PLANS单独设计413安全文件上传协议与原失败Job幂等迁移；明确尚未实现，禁止对历史10/28自动重试。
 - [2026-11-05] 为下载/ASR/产物意外抛错新增Worker兜底：若仍为running/pending则落failed并告警；已终止与retry_waiting不重复处理，避免网络闸门超时后静默挂起。

@@ -2182,6 +2182,25 @@ struct NormalizedNotes {
 /// 因而这里一旦识别到完整 writing block，就只保留 block 内正文，并把 metadata 中的 title
 /// 作为标题兜底；如果没有 writing block，则保持原始 Markdown 不变。
 fn normalize_notes_markdown(raw: &str) -> NormalizedNotes {
+    // 新版 ChatGPT 可能以 <WritingBlock ...>正文</WritingBlock> 包裹最终回复，
+    // 且开标签和 Markdown 标题常常位于同一行。它是交互层的展示容器，而不是
+    // 实际课程摘要的一部分；如果不剥离，必需章节的精确匹配会误判失败。
+    //
+    // 仅识别整个回复都被一对完整 WritingBlock 标签包住的情形：
+    // 不处理正文内部出现的同名字符串，也不裁剪不完整输出。
+    let trimmed = raw.trim();
+    if trimmed.starts_with("<WritingBlock ")
+        && trimmed.ends_with("</WritingBlock>")
+        && let Some(open_end) = trimmed.find('>')
+    {
+        let inner = trimmed[open_end + 1..trimmed.len() - "</WritingBlock>".len()].trim();
+        if !inner.is_empty() {
+            return NormalizedNotes {
+                markdown: inner.to_string(),
+                writing_title: None,
+            };
+        }
+    }
     let lines = raw.lines().collect::<Vec<_>>();
     let Some((start, opening)) = lines
         .iter()
@@ -2849,6 +2868,26 @@ mod tests {
         let valid = format!("## 本堂讲了什么\n{}", "人口再生产的知识点。".repeat(40));
         assert!(public_summary_rejection(&valid).is_none());
         assert!(public_summary_rejection(&valid.repeat(10)).is_some());
+    }
+
+    #[test]
+    fn classflow_summary_inside_writing_block_is_normalized_without_losing_heading() {
+        let wrapped = "<WritingBlock id=\"62741\" variant=\"document\">## 本堂讲了什么\n\n人口素质包括身体素质、文化素质。\n</WritingBlock>";
+        let normalized = normalize_notes_markdown(wrapped);
+        assert_eq!(
+            normalized.markdown,
+            "## 本堂讲了什么\n\n人口素质包括身体素质、文化素质。"
+        );
+        let full = format!(
+            "<WritingBlock id=\"62741\" variant=\"document\">## 本堂讲了什么\n{}\n</WritingBlock>",
+            "人口素质综合评价。".repeat(50)
+        );
+        assert!(public_summary_rejection(&normalize_notes_markdown(&full).markdown).is_none());
+        // 未闭合的容器不得裁剪掉正文：保留原样以便继续定位异常。
+        assert_eq!(
+            normalize_notes_markdown("<WritingBlock id=\"1\">正文").markdown,
+            "<WritingBlock id=\"1\">正文"
+        );
     }
 
     #[test]
