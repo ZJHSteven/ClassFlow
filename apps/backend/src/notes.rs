@@ -6,14 +6,16 @@ conversation/messages；Notes 完成后再独立发布到 GitHub。任一阶段�
 因此 backend / Windows / Archive 重启都不会重复创建同一堂课的 conversation。
 */
 
-use std::{sync::LazyLock, time::Duration};
+use std::{
+    fs::OpenOptions, io::Write, path::PathBuf, process::Stdio, sync::LazyLock, time::Duration,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chrono::{Datelike, FixedOffset, NaiveDate, NaiveTime, TimeZone, Timelike, Utc};
-use reqwest::{Client, StatusCode, Url, header};
+use reqwest::{Client, Method, StatusCode, Url, header};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::time::sleep;
+use tokio::{io::AsyncWriteExt, process::Command, time::sleep};
 use tracing::{info, warn};
 
 use crate::{
@@ -2419,6 +2421,133 @@ impl GithubPublisher {
         })
     }
 
+    /// 首选长期复用的 reqwest HTTP 客户端。N1 的网络对 GitHub 偶发返回
+    /// TLS handshake EOF（服务端尚未返回 HTTP 状态），此时可安全使用
+    /// 系统 curl 的另一套 TLS 实现继续**同一请求**。
+    ///
+    /// 注意：正常 HTTP 4xx/5xx 不能用 curl 再发一次；只有纯连接异常
+    /// 才启动替代传输。PUT 失败若结果不明仍须借目标文件 SHA 核实，
+    /// 后续周期性工作会先 GET 当前状态，避免把第一次响应未知当作未写入。
+    async fn request_with_fallback(
+        &self,
+        method: Method,
+        url: Url,
+        payload: Option<&Value>,
+        path: &str,
+    ) -> AppResult<(StatusCode, Value)> {
+        let mut request = self
+            .client
+            .request(method.clone(), url.clone())
+            .header(header::USER_AGENT, "ClassFlow/1.0")
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .bearer_auth(&self.token);
+        if let Some(payload) = payload {
+            request = request.json(payload);
+        }
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status();
+                let body = response.json::<Value>().await.unwrap_or(Value::Null);
+                Ok((status, body))
+            }
+            Err(error) if error.is_connect() || error.is_timeout() => {
+                warn!(
+                    "GitHub reqwest 连接失败，回退系统 curl: method={}, path={}, error={:?}",
+                    method, path, error
+                );
+                self.curl_request(method, &url, payload).await
+            }
+            Err(error) => Err(AppError::External(format!(
+                "GitHub {} {} 传输失败: timeout={}, connect={}, detail={error:?}",
+                method,
+                path,
+                error.is_timeout(),
+                error.is_connect()
+            ))),
+        }
+    }
+
+    /// 避免通过命令行参数传递 Token（会泄露到进程列表）。
+    /// curl 从 stdin 读取仅内存存在的配置，PUT/DELETE 的 JSON 主体临时
+    /// 写入仅本机用户可读的文件，调用结束立即清理。
+    async fn curl_request(
+        &self,
+        method: Method,
+        url: &Url,
+        payload: Option<&Value>,
+    ) -> AppResult<(StatusCode, Value)> {
+        if self
+            .token
+            .chars()
+            .any(|ch| ch == '\n' || ch == '\r' || ch == '"')
+        {
+            return Err(AppError::Config("GitHub Token 包含不允许的控制字符".into()));
+        }
+        let mut body_file: Option<PathBuf> = None;
+        if let Some(payload) = payload {
+            let path = std::env::temp_dir()
+                .join(format!("classflow-github-{}.json", uuid::Uuid::new_v4()));
+            let mut builder = OpenOptions::new();
+            builder.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                builder.mode(0o600);
+            }
+            let mut file = builder.open(&path)?;
+            file.write_all(&serde_json::to_vec(payload).map_err(|error| {
+                AppError::Internal(format!("GitHub JSON 序列化失败: {error}"))
+            })?)?;
+            file.sync_all()?;
+            body_file = Some(path);
+        }
+
+        let mut config = format!(
+            "silent\nshow-error\nconnect-timeout = 10\nmax-time = 45\nurl = \"{}\"\nrequest = \"{}\"\nheader = \"User-Agent: ClassFlow/1.0\"\nheader = \"Accept: application/vnd.github+json\"\nheader = \"Authorization: Bearer {}\"\n",
+            curl_config_escape(url.as_str()),
+            method.as_str(),
+            self.token,
+        );
+        if let Some(path) = body_file.as_deref() {
+            config.push_str("header = \"Content-Type: application/json\"\n");
+            config.push_str(&format!(
+                "data-binary = \"@{}\"\n",
+                curl_config_escape(&path.to_string_lossy())
+            ));
+        }
+        config.push_str("write-out = \"CLASSFLOW_CURL_STATUS:%{http_code}\"\n");
+
+        let result = async {
+            let mut child = Command::new("curl")
+                .args(["--config", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()?;
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| AppError::Internal("curl 标准输入未建立".into()))?;
+            stdin.write_all(config.as_bytes()).await?;
+            drop(stdin);
+            let output = child.wait_with_output().await?;
+            if !output.status.success() {
+                return Err(AppError::External(format!(
+                    "GitHub curl 传输失败: exit={:?}, stderr={}",
+                    output.status.code(),
+                    truncate(&String::from_utf8_lossy(&output.stderr), 300)
+                )));
+            }
+            parse_curl_github_response(&output.stdout)
+        }
+        .await;
+        if let Some(path) = body_file {
+            let _ = std::fs::remove_file(path);
+        }
+        result
+    }
+
     async fn put_markdown(
         &self,
         path: &str,
@@ -2426,38 +2555,23 @@ impl GithubPublisher {
         message: &str,
     ) -> AppResult<Option<String>> {
         let url = github_contents_url(&self.repo, path)?;
-        let get = self
-            .client
-            .get(url.clone())
-            .header(header::USER_AGENT, "ClassFlow/1.0")
-            .header(header::ACCEPT, "application/vnd.github+json")
-            .bearer_auth(&self.token)
-            .send()
-            .await
-            .map_err(|error| {
-                // 发布失败时必须区分 GET 与 PUT，并记录 reqwest 内部原因；
-                // Debug 不包含 Authorization 头或 Token，仅含 URL/底层网络错误。
-                AppError::External(format!(
-                    "GitHub GET {path}: timeout={}, connect={}, detail={error:?}",
-                    error.is_timeout(),
-                    error.is_connect()
-                ))
-            })?;
-        let sha = if get.status() == StatusCode::NOT_FOUND {
+        let (get_status, get_body) = self
+            .request_with_fallback(Method::GET, url.clone(), None, path)
+            .await?;
+        let sha = if get_status == StatusCode::NOT_FOUND {
             None
-        } else if get.status().is_success() {
-            get.json::<Value>()
-                .await?
+        } else if get_status.is_success() {
+            get_body
                 .get("sha")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         } else {
             return Err(AppError::Internal(format!(
-                "GitHub 读取 {} 失败: HTTP {}",
-                path,
-                get.status()
+                "GitHub 获取 {} 失败: HTTP {}",
+                path, get_status
             )));
         };
+
         let mut payload = json!({
             "message": message,
             "content": BASE64_STANDARD.encode(markdown.as_bytes()),
@@ -2466,25 +2580,9 @@ impl GithubPublisher {
         if let Some(sha) = sha {
             payload["sha"] = Value::String(sha);
         }
-        let put = self
-            .client
-            .put(url)
-            .header(header::USER_AGENT, "ClassFlow/1.0")
-            .header(header::ACCEPT, "application/vnd.github+json")
-            .bearer_auth(&self.token)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::External(format!(
-                    "GitHub PUT {path}: timeout={}, connect={}, encoded_bytes={}, detail={error:?}",
-                    error.is_timeout(),
-                    error.is_connect(),
-                    markdown.len()
-                ))
-            })?;
-        let status = put.status();
-        let body: Value = put.json().await.unwrap_or(Value::Null);
+        let (status, body) = self
+            .request_with_fallback(Method::PUT, url, Some(&payload), path)
+            .await?;
         if !status.is_success() {
             return Err(AppError::Internal(format!(
                 "GitHub 写入 {} 失败: HTTP {} {}",
@@ -2501,55 +2599,60 @@ impl GithubPublisher {
 
     async fn delete_if_exists(&self, path: &str, message: &str) -> AppResult<()> {
         let url = github_contents_url(&self.repo, path)?;
-        let get = self
-            .client
-            .get(url.clone())
-            .header(header::USER_AGENT, "ClassFlow/1.0")
-            .header(header::ACCEPT, "application/vnd.github+json")
-            .bearer_auth(&self.token)
-            .send()
+        let (get_status, get_body) = self
+            .request_with_fallback(Method::GET, url.clone(), None, path)
             .await?;
-        if get.status() == StatusCode::NOT_FOUND {
+        if get_status == StatusCode::NOT_FOUND {
             return Ok(());
         }
-        if !get.status().is_success() {
+        if !get_status.is_success() {
             return Err(AppError::Internal(format!(
-                "GitHub 读取旧路径 {} 失败: HTTP {}",
-                path,
-                get.status()
+                "GitHub 获取旧路径 {} 失败: HTTP {}",
+                path, get_status
             )));
         }
-        let sha = get
-            .json::<Value>()
-            .await?
+        let sha = get_body
             .get("sha")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
             .ok_or_else(|| AppError::Internal(format!("GitHub 旧路径 {} 缺少 sha", path)))?;
-        let response = self
-            .client
-            .delete(url)
-            .header(header::USER_AGENT, "ClassFlow/1.0")
-            .header(header::ACCEPT, "application/vnd.github+json")
-            .bearer_auth(&self.token)
-            .json(&json!({
-                "message": message,
-                "sha": sha,
-                "branch": "main",
-            }))
-            .send()
+        let payload = json!({"message": message, "sha": sha, "branch": "main"});
+        let (status, _) = self
+            .request_with_fallback(Method::DELETE, url, Some(&payload), path)
             .await?;
-        if !response.status().is_success() {
+        if !status.is_success() {
             return Err(AppError::Internal(format!(
                 "GitHub 删除旧路径 {} 失败: HTTP {}",
-                path,
-                response.status()
+                path, status
             )));
         }
         Ok(())
     }
 }
 
+/// curl 配置文件中 URL/路径的双引号、反斜杠需要转义。
+/// 此函数不会接收命令片段，临时文件名由 UUID 随机生成。
+fn curl_config_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// 系统 curl 输出：GitHub JSON 响应后附加内部标记及三位 HTTP 状态码。
+/// 保留 404/422 等 HTTP 响应与网络异常之间的区别。
+fn parse_curl_github_response(bytes: &[u8]) -> AppResult<(StatusCode, Value)> {
+    const MARKER: &str = "CLASSFLOW_CURL_STATUS:";
+    let output = String::from_utf8(bytes.to_vec())
+        .map_err(|err| AppError::External(format!("GitHub curl 响应 UTF-8 错误: {err}")))?;
+    let index = output
+        .rfind(MARKER)
+        .ok_or_else(|| AppError::External("GitHub curl 响应缺少状态标记".into()))?;
+    let status = output[index + MARKER.len()..]
+        .trim()
+        .parse::<u16>()
+        .map_err(|err| AppError::External(format!("GitHub curl 状态解析失败: {err}")))?;
+    let status = StatusCode::from_u16(status)
+        .map_err(|err| AppError::External(format!("GitHub curl HTTP 状态无效: {err}")))?;
+    let body = serde_json::from_str::<Value>(&output[..index]).unwrap_or(Value::Null);
+    Ok((status, body))
+}
 fn build_legacy_audio_filename(date: &str, course_name: &str, teacher_name: &str) -> String {
     let month_day = NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .map(|date| format!("{}.{}", date.month(), date.day()))
