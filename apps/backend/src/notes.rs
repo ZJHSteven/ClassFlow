@@ -2450,7 +2450,10 @@ impl GithubPublisher {
                 let body = response.json::<Value>().await.unwrap_or(Value::Null);
                 Ok((status, body))
             }
-            Err(error) if error.is_connect() || error.is_timeout() => {
+            // GET 超时只会读取，不存在重复写入风险；
+            // PUT/DELETE 超时则可能是 GitHub 已经接收请求、但响应尚未返回。
+            // 此时禁止自动换传输协议再写一次，避免未知成功后的重复提交。
+            Err(error) if error.is_connect() || (method == Method::GET && error.is_timeout()) => {
                 warn!(
                     "GitHub reqwest 连接失败，回退系统 curl: method={}, path={}, error={:?}",
                     method, path, error
@@ -3001,6 +3004,28 @@ mod tests {
         let valid = format!("## 本堂讲了什么\n{}", "人口再生产的知识点。".repeat(40));
         assert!(public_summary_rejection(&valid).is_none());
         assert!(public_summary_rejection(&valid.repeat(10)).is_some());
+    }
+
+    #[test]
+    fn github_curl_status_marker_preserves_http_failures_and_json_body() {
+        let (status, body) =
+            parse_curl_github_response(b"{\"sha\":\"abc\"}CLASSFLOW_CURL_STATUS:200")
+                .expect("带合法状态标记的JSON应可解析");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.get("sha").and_then(Value::as_str), Some("abc"));
+        let (missing, _) =
+            parse_curl_github_response(b"{\"message\":\"not found\"}CLASSFLOW_CURL_STATUS:404")
+                .unwrap();
+        assert_eq!(missing, StatusCode::NOT_FOUND);
+        assert!(parse_curl_github_response(b"{\"sha\":\"abc\"}").is_err());
+    }
+
+    #[test]
+    fn github_curl_config_escapes_quotes_and_backslashes() {
+        assert_eq!(
+            curl_config_escape("path\\name\"quoted\""),
+            "path\\\\name\\\"quoted\\\""
+        );
     }
 
     #[test]

@@ -1,3 +1,4 @@
+- [2026-11-05] curl后备传输增加严格安全边界：仅connect阶段错误可回退PUT/DELETE；超时只允许GET回退，避免已发送的GitHub写请求在结果未知时被重复执行。增加curl状态解析和配置转义回归测试。
 - [2026-11-05] GitHub Contents的reqwest错误限定在GET TLS握手EOF，N1系统curl和独立Rust探针GET/无效分支PUT均正常。发布模块已增加只在reqwest连接/超时错误时启用系统curl后备传输，Token通过stdin配置传递、payload临时0600文件，HTTP4xx不重发，失败时保留原状态。
 - [2026-11-05] GitHub 失败已定位真实源：reqwest GET的Connect错误里有UnexpectedEof tls handshake eof，不是HTTP4xx/429；Curl与独立Rust探针均可成功握手，而Notes Worker每轮对每堂新建GithubPublisher/reqwest Client造成大量握手。改成LazyLock进程级共享GitHub客户端连接池（Token仍逐次注入、无全局默认auth），池空闲120s/TCP keepalive60s。
 - [2026-11-05] 只读Rustls探针复现同一中文GitHub URL GET 404（正常），带Token向不存在分支发512与120000字节JSON PUT均成功收到HTTP404，不污染仓库。ClassFlow实际PUT仍持续报统一error sending request，因此新增GitHub GET/PUT区分、reqwest timeout/connect及底层Debug诊断，供生产锁定。
