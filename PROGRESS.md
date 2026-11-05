@@ -1,3 +1,4 @@
+- [2026-11-05] N1 Rust reqwest对完全相同的中文GitHub Contents URL带Token GET已可返回404（正常不存在），证实TLS和Unicode路径传输正常。下一步用不存在的分支做不可写PUT探针，测试512/120000字节payload以区分上传和读取故障。
 - [2026-11-05] GitHub rustls只读探针初验N1默认/HTTP1均可访问API根目录（200），下一步检查发布实际的中文Unicode完整Contents路径与授权GET；先加入可选URL参数及环境中的Token鉴权，不输出密钥。
 - [2026-11-05] 5堂Summary已恢复到Archive真实完成并在ClassFlow转入publishing，GitHub发布Rust reqwest持续报error sending request，而N1 curl带Token GET GitHub HTTP/1.1和HTTP/2均200，确认不是基础网络或Token断连。新增只读github_netprobe交叉验证reqwest/rustls协商并揭示底层错误。
 - [2026-11-05] 医学人口学11/04的摘要原会话已验证：原始ClassFlow 513字完全相同prompt，assistant final 1417字完成，却被新的 <WritingBlock ...> UI容器包裹，旧Rust归一化只认:::writing导致章节检验失败。已新增完整WritingBlock剥离兼容与防误裁剪测试；须先部署后再把Archive历史failed映射至canonical completed，防重复发送。
