@@ -68,10 +68,21 @@ pub(crate) struct SmartClassVideo {
     pub cover: String,
     #[serde(rename = "CourseName", default)]
     pub course_name: String,
-    #[serde(rename = "Teachers", default)]
+    // SmartClass 2026-11-18 新增录播的教师字段为 JSON null。
+    // 教师名不是视频标识：只将 null 变为空串，由下游显示“未知教师”。
+    #[serde(rename = "Teachers", default, deserialize_with = "deserialize_nullable_text")]
     pub teachers: String,
     #[serde(rename = "CloudVod", default)]
     pub cloud_vod: bool,
+}
+
+/// serde default 只处理字段缺失，不处理显式 JSON null。
+/// 保留严格字符串类型检查，仅将合法的可空教师名规范成空字符串。
+fn deserialize_nullable_text<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone)]
@@ -243,7 +254,8 @@ impl SmartClassSessionManager {
         // 这和 Collector 使用完全相同的鉴权路径，却只返回极小响应；前端也只会在首次加载
         // 或用户手动刷新时调用，不会形成 HTTP 轮询。
         let today = chrono::Local::now().date_naive().to_string();
-        match self.fetch_video_page(&today, &today, 1, 1).await {
+        // 认证状态只依赖原始 API 的授权结果，不依赖录播元数据反序列化。
+        match self.fetch_video_value(&today, &today, 1, 1).await {
             Ok(_) => SmartClassAuthStatus {
                 authenticated: true,
                 session_present: true,
@@ -349,6 +361,27 @@ impl SmartClassSessionManager {
         page_number: usize,
         page_size: usize,
     ) -> AppResult<SmartClassVideoPage> {
+        let value = self
+            .fetch_video_value(start_date, end_date, page_number, page_size)
+            .await?;
+        let page: VideoListValue = serde_json::from_value(value).map_err(|error| {
+            AppError::External(format!("解析 SmartClass GetMyVideoList 失败: {error}"))
+        })?;
+        Ok(SmartClassVideoPage {
+            total_count: page.total_count,
+            data: page.data,
+        })
+    }
+
+    /// 使用与 Collector 完全相同的鉴权链路取得原始 JSON，
+    /// 避免将非鉴权性质的字段错误误报成“用户需要重新登录”。
+    async fn fetch_video_value(
+        &self,
+        start_date: &str,
+        end_date: &str,
+        page_number: usize,
+        page_size: usize,
+    ) -> AppResult<Value> {
         if page_number == 1 {
             self.heartbeat().await?;
         }
@@ -374,21 +407,13 @@ impl SmartClassSessionManager {
             .append_pair("attribute", "")
             .append_pair("IncludePublic", "");
 
-        let value = self
-            .send_api(
-                self.base_request(self.client.get(url))
-                    .header(PLATFORM_TOKEN_HEADER.clone(), platform_token),
-                Some("GetMyVideoList"),
-                false,
-            )
-            .await?;
-        let page: VideoListValue = serde_json::from_value(value).map_err(|error| {
-            AppError::External(format!("解析 SmartClass GetMyVideoList 失败: {error}"))
-        })?;
-        Ok(SmartClassVideoPage {
-            total_count: page.total_count,
-            data: page.data,
-        })
+        self.send_api(
+            self.base_request(self.client.get(url))
+                .header(PLATFORM_TOKEN_HEADER.clone(), platform_token),
+            Some("GetMyVideoList"),
+            false,
+        )
+        .await
     }
 
     async fn heartbeat(&self) -> AppResult<()> {
@@ -809,6 +834,8 @@ mod tests {
         platform_saw_skip: Arc<AtomicBool>,
         video_saw_platform: Arc<AtomicBool>,
         video_saw_skip: Arc<AtomicBool>,
+        // 即使元数据是错误类型，也不能把成功认证误判为未登录。
+        invalid_video_metadata: Arc<AtomicBool>,
         encrypted_domain_config: Arc<String>,
     }
 
@@ -900,7 +927,11 @@ mod tests {
                     "StopTime": "2026-10-08 08:45:00",
                     "Cover": "https://example.test/1/000.jpg",
                     "CourseName": "协议测试",
-                    "Teachers": "测试老师",
+                    "Teachers": if state.invalid_video_metadata.load(Ordering::SeqCst) {
+                        json!({"unexpected": "object"})
+                    } else {
+                        Value::Null
+                    },
                     "CloudVod": false
                 }]
             }
@@ -974,6 +1005,11 @@ mod tests {
         assert_eq!(page.total_count, 1);
         assert_eq!(page.data.len(), 1);
         assert_eq!(page.data[0].new_id, "mock-new-id");
+        assert_eq!(page.data[0].teachers, "");
+        assert!(manager.auth_status().await.authenticated);
+        mock_state.invalid_video_metadata.store(true, Ordering::SeqCst);
+        assert!(manager.fetch_video_page("2026-10-08", "2026-10-08", 1, 1).await.is_err());
+        assert!(manager.auth_status().await.authenticated);
         assert!(mock_state.cookie_seen.load(Ordering::SeqCst));
         assert!(mock_state.timediff_saw_skip.load(Ordering::SeqCst));
         assert!(mock_state.platform_saw_skip.load(Ordering::SeqCst));
