@@ -1,3 +1,11 @@
+# 2026-11-18 SmartClass 人工登录误判修复
+- 生产确认：N1 14:09 自动扫描正常6条；14:19/29/39 连续出现 GetMyVideoList 反序列化 null 错误；14:40 告警。
+- 已登录的电脑 Chrome 同接口返回 HTTP200、Success=true、7条记录；其中最新记录 Teachers=null。N1 后端存有 Session（0600），14:41 Cookie 文件更新，但登录卡被解析异常错误标成 authenticated=false。
+- 代码：Teachers null→空字符串，下游 fallback 为“未知教师”；将 auth_status 与结构化视频字段解析解耦，避免新字段问题导致误报会话失效。
+- 测试添加：mock API null 教师成功反序列化；人为破坏教师元数据仅使 Collector 报错但 auth_status 仍保留已认证。
+- 建立基于 origin/main 的 hotfix/smartclass-null-teachers-20261118，避免未推送Notes网络改动随生产部署。
+- 待完成：构建和回归测试、交叉编译、N1备份部署、真实 API 与下一次10分钟扫描验收。
+
 - [2026-11-05] curl后备传输增加严格安全边界：仅connect阶段错误可回退PUT/DELETE；超时只允许GET回退，避免已发送的GitHub写请求在结果未知时被重复执行。增加curl状态解析和配置转义回归测试。
 - [2026-11-05] GitHub Contents的reqwest错误限定在GET TLS握手EOF，N1系统curl和独立Rust探针GET/无效分支PUT均正常。发布模块已增加只在reqwest连接/超时错误时启用系统curl后备传输，Token通过stdin配置传递、payload临时0600文件，HTTP4xx不重发，失败时保留原状态。
 - [2026-11-05] GitHub 失败已定位真实源：reqwest GET的Connect错误里有UnexpectedEof tls handshake eof，不是HTTP4xx/429；Curl与独立Rust探针均可成功握手，而Notes Worker每轮对每堂新建GithubPublisher/reqwest Client造成大量握手。改成LazyLock进程级共享GitHub客户端连接池（Token仍逐次注入、无全局默认auth），池空闲120s/TCP keepalive60s。

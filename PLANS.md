@@ -1,3 +1,10 @@
+# 2026-11-18 SmartClass 可空教师与登录误判修复计划
+- 事实：N1 14:19 起真实视频接口出现 null 教师字段，原版强类型 String 解析失败；14:41 N1 Session 更新，浏览器同接口返回 HTTP200 和 Success=true。
+- 修复：只为可选 Teachers 字段处理 null，保留其他非法类型报错。登录探针仍走真实视频接口鉴权，但改为验证服务端原始 API 响应，不受具体课程元数据序列化错误影响。
+- 单测：教师名 null 不阻塞采集；非法类型仍拒绝采集；认证状态独立于视频字段类型；已有错误登录跳转测试不变。
+- 部署：使用基于 origin/main 的独立热修复工作树，避免混入本地主分支另外8条未发布的改动；ARM64 构建；N1 原子替换前备份当前 binary 和 Session；恢复后测试认证与扫描。
+- 防倒退：不修改验证码或账户凭据，不手动发布任何 Notes，不重复下载已有录像。保留原 binary 可回滚。
+
 # 2026-11-05 Archive Actor 413：安全附件发送设计（尚未实施）
 - 现状：ClassFlow 的 /v1/jobs 只传 text；Archive ActorSendOptions 仅支持 prompt 字符串和CDP Input.insertText，并未实现把本地TXT/PDF作为附件送入ChatGPT对话。CLI 的 --prompt-file 是读取文件内容并输入编辑器，不是文件上传。
 - 建议把“413 已确认永久失败”作为终止条件，不自动重发、更不套同一 idempotencyKey。10/28呼吸的 32525 字符原ASR仍在N1 SQLite；原Archive Job已持久化 failed、无Conversation ID。
