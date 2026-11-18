@@ -1,3 +1,11 @@
+# 2026-11-18 SmartClass 登录误判修复：生产验收完成
+- 15:04 已在 N1 实际上线独立热修复 ARM64 backend，SHA256=705b39864b13a190c8e624e4ad7659885718817d84530bb2e614a7770a5762f5；旧binary/session只保存在N1私有目录 deploy-backups/smartclass-login-20261118-145924。
+- 线上登录状态返回 authenticated=true、session_present=true、transport=direct_http；/api/v1/health 返回 ok；服务 systemd active。
+- 15:04:05 启动自动补录扫描 2026-10-29..11-18，45 条、1 个新任务、invalid跳过0、cloud_vod跳过0，说明 nullable Teachers 不再中断采集。
+- 所有本地验证通过：91后端单测、11API集成测试、fmt、Clippy -D warnings、aarch64-unknown-linux-gnu release。
+- 发布细节：SSH脚本由PowerShell管道输送时末行混入CR，导致已成功部署和验收后的补充sha256sum误报文件名不存在并进入rollback handler；旧版cp覆盖正在运行的ELF遭Text file busy拒绝，实际运行的新版未被覆盖。随后使用独立SSH调用验证线上文件SHA、active PID、health、auth和Collector日志全部正确；这个报错是部署脚本换行问题，不是业务回退。今后SSH Bash脚本注意终端CRLF和rollback需要原子mv而不是cp覆盖运行文件。
+- 主分支已有8条与本次无关的未推送改动，本次生产仅部署从origin/main单独cherry-pick的hotfix，避免隐式混入Notes/GitHub传输更新。
+
 # 2026-11-18 SmartClass 人工登录误判修复
 - 生产确认：N1 14:09 自动扫描正常6条；14:19/29/39 连续出现 GetMyVideoList 反序列化 null 错误；14:40 告警。
 - 已登录的电脑 Chrome 同接口返回 HTTP200、Success=true、7条记录；其中最新记录 Teachers=null。N1 后端存有 Session（0600），14:41 Cookie 文件更新，但登录卡被解析异常错误标成 authenticated=false。
