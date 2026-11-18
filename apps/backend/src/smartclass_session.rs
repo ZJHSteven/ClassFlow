@@ -70,7 +70,11 @@ pub(crate) struct SmartClassVideo {
     pub course_name: String,
     // SmartClass 2026-11-18 新增录播的教师字段为 JSON null。
     // 教师名不是视频标识：只将 null 变为空串，由下游显示“未知教师”。
-    #[serde(rename = "Teachers", default, deserialize_with = "deserialize_nullable_text")]
+    #[serde(
+        rename = "Teachers",
+        default,
+        deserialize_with = "deserialize_nullable_text"
+    )]
     pub teachers: String,
     #[serde(rename = "CloudVod", default)]
     pub cloud_vod: bool,
@@ -1007,8 +1011,15 @@ mod tests {
         assert_eq!(page.data[0].new_id, "mock-new-id");
         assert_eq!(page.data[0].teachers, "");
         assert!(manager.auth_status().await.authenticated);
-        mock_state.invalid_video_metadata.store(true, Ordering::SeqCst);
-        assert!(manager.fetch_video_page("2026-10-08", "2026-10-08", 1, 1).await.is_err());
+        mock_state
+            .invalid_video_metadata
+            .store(true, Ordering::SeqCst);
+        assert!(
+            manager
+                .fetch_video_page("2026-10-08", "2026-10-08", 1, 1)
+                .await
+                .is_err()
+        );
         assert!(manager.auth_status().await.authenticated);
         assert!(mock_state.cookie_seen.load(Ordering::SeqCst));
         assert!(mock_state.timediff_saw_skip.load(Ordering::SeqCst));
