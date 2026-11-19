@@ -1,3 +1,9 @@
+# 2026-11-19｜11月18日两堂课堂 Notes 断点恢复
+- 医学人口学：11月18日18:00–19:40两段ASR已成功，原整堂Notes Job已completed且正文已经写入N1（29082字符）。原标题任务因API cooldown在尚未发出正式标题回复时失败；经精确核对原Actor的4次记录和canonical，利用新幂等Key只补一次标题，完成《人口老龄化与健康挑战》并在N1备份数据库后安全回填。ClassFlow自动完成v2摘要（1226字符）、GitHub Notes发布与邮件投递，11:31:33记录最终状态succeeded。
+- 神经系统：11月18日13:30–16:15三段ASR全部已完成；旧Notes原Job accepted但final只保存7394字符、status=in_progress且endTurn=0，完整性不足。用户授权从Notes重做，保留原会话与Actor记录，不重做ASR；从原队列保留的完整课堂ASR（30656字符）重新提交新幂等键 notes:recovery:1，得到独立新Conversation。新Job已completed，canonical Assistant final 63221字符且finished_successfully/endTurn=1、finishType=stop。
+- 后端增加精确受控恢复标记 recovery_kind=notes_recovery_v1 时才从新Job读取Notes；默认仍旧查原幂等Key。标记只施加于经人工核验的单堂生产数据库记录，旧会话/Job及备份保留，确保不会重复触发模型调用或误收截断结果。增加Job键回归测试。
+- 通知时序解释：医学人口学11:30:52巡检检查到尚未完成→11:31:01发送notes_stalled；11:31:15 Github Notes发布→11:31:33邮件被服务接受→11:31:47成功通知投递。逾期告警是任务即将成功前的真实瞬间状态，旧消息不可撤回，不是成功后再次失败；将来可优化快速恢复期间的告警抑制。
+
 # 2026-11-18 SmartClass 登录误判修复：生产验收完成
 - 15:04 已在 N1 实际上线独立热修复 ARM64 backend，SHA256=705b39864b13a190c8e624e4ad7659885718817d84530bb2e614a7770a5762f5；旧binary/session只保存在N1私有目录 deploy-backups/smartclass-login-20261118-145924。
 - 线上登录状态返回 authenticated=true、session_present=true、transport=direct_http；/api/v1/health 返回 ok；服务 systemd active。

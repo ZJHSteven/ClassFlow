@@ -271,6 +271,17 @@ enum PublicJobState {
     Failed(String),
 }
 
+/// 仅在人工核实原任务正文截断并显式登记恢复标记后，才追踪一次新的 Notes Job。
+/// 不覆盖旧幂等键：旧 ChatGPT 会话和提交记录仍可审计，也不会误把 pending 当完成。
+fn notes_public_job_key(lecture_key: &str, recovery_kind: Option<&str>) -> String {
+    let suffix = if recovery_kind == Some("notes_recovery_v1") {
+        "notes:recovery:1"
+    } else {
+        "notes"
+    };
+    format!("classflow:lecture:{lecture_key}:{suffix}")
+}
+
 async fn get_public_job_state(
     state: &AppState,
     client: &Client,
@@ -917,7 +928,7 @@ async fn process_generating(state: &AppState, job: &LectureNotesRecord) -> AppRe
 
     // 新任务只从 RQCI 对外 Job API 取最终正文，不再检查 Archive 内部 lifecycle/message。
     // 旧队列的未追踪记录仍可临时沿用下方历史兼容分支，避免发布切换时丢失任务。
-    let job_key = format!("classflow:lecture:{}:notes", job.lecture_key);
+    let job_key = notes_public_job_key(&job.lecture_key, job.recovery_kind.as_deref());
     match get_public_job_state(state, &client, base, &job_key).await? {
         PublicJobState::Completed(text) => {
             let normalized = normalize_notes_markdown(&text);
@@ -2963,6 +2974,23 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_notes_recovery_uses_separate_stable_job_key() {
+        let lecture = "lecture-20261118";
+        assert_eq!(
+            notes_public_job_key(lecture, None),
+            "classflow:lecture:lecture-20261118:notes"
+        );
+        assert_eq!(
+            notes_public_job_key(lecture, Some("notes_recovery_v1")),
+            "classflow:lecture:lecture-20261118:notes:recovery:1"
+        );
+        assert_eq!(
+            notes_public_job_key(lecture, Some("manual_review")),
+            "classflow:lecture:lecture-20261118:notes"
+        );
+    }
 
     #[test]
     fn incomplete_final_channel_must_never_be_consumed() {
